@@ -1,10 +1,5 @@
 package com.gamerin.backend.domain.user.entity;
 
-<<<<<<< HEAD
-=======
-import java.time.Instant;
-import java.util.UUID;
->>>>>>> main
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -12,23 +7,17 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-<<<<<<< HEAD
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
 import java.time.OffsetDateTime;
 
-=======
-import jakarta.persistence.Table;
-
->>>>>>> main
 @Entity
 @Table(name = "users")
 public class User {
 
     @Id
-<<<<<<< HEAD
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
@@ -37,10 +26,6 @@ public class User {
 
     @Column(name = "password_hash", length = 255)
     private String passwordHash;
-=======
-    @GeneratedValue(strategy = GenerationType.UUID)
-    private UUID id;
->>>>>>> main
 
     @Column(nullable = false, unique = true, length = 50)
     private String handle;
@@ -48,12 +33,6 @@ public class User {
     @Column(nullable = false, length = 50)
     private String nickname;
 
-<<<<<<< HEAD
-=======
-    @Column(name = "password_hash")
-    private String passwordHash;
-
->>>>>>> main
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private UserRole role;
@@ -62,7 +41,6 @@ public class User {
     @Column(nullable = false, length = 20)
     private UserStatus status;
 
-<<<<<<< HEAD
     @Column(name = "last_login_at")
     private OffsetDateTime lastLoginAt;
 
@@ -77,18 +55,10 @@ public class User {
 
     @Column(name = "provider_id", length = 255) // 부여받은 고유 번호
     private String providerId;
-=======
-    @Column(name = "created_at", nullable = false)
-    private Instant createdAt;
-
-    @Column(name = "updated_at", nullable = false)
-    private Instant updatedAt;
->>>>>>> main
 
     protected User() {
     }
 
-<<<<<<< HEAD
     public static User createLocal(String handle, String nickname, String passwordHash) {
         User user = new User();
         user.handle = handle;
@@ -115,20 +85,10 @@ public class User {
     @PrePersist
     protected void onCreate() {
         OffsetDateTime now = OffsetDateTime.now();
-=======
-    public User(String handle, String nickname, String passwordHash) {
-        this.handle = handle;
-        this.nickname = nickname;
-        this.passwordHash = passwordHash;
-        this.role = UserRole.USER;
-        this.status = UserStatus.ACTIVE;
-        Instant now = Instant.now();
->>>>>>> main
         this.createdAt = now;
         this.updatedAt = now;
     }
 
-<<<<<<< HEAD
     @PreUpdate
     protected void onUpdate() {
         this.updatedAt = OffsetDateTime.now();
@@ -146,12 +106,6 @@ public class User {
         return passwordHash;
     }
 
-=======
-    public UUID getId() {
-        return id;
-    }
-
->>>>>>> main
     public String getHandle() {
         return handle;
     }
@@ -160,7 +114,6 @@ public class User {
         return nickname;
     }
 
-<<<<<<< HEAD
     public UserRole getRole() {
         return role;
     }
@@ -179,9 +132,5 @@ public class User {
 
     public boolean isActive() {
         return this.status == UserStatus.ACTIVE;
-=======
-    public String getPasswordHash() {
-        return passwordHash;
->>>>>>> main
     }
 }

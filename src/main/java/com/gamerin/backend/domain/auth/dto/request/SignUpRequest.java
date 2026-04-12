@@ -1,6 +1,5 @@
 package com.gamerin.backend.domain.auth.dto.request;
 
-<<<<<<< HEAD
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -29,15 +28,5 @@ public record SignUpRequest(
 
         @AssertTrue(message = "개인정보 처리방침 동의가 필요합니다.")
         Boolean agreedToPrivacy
-=======
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
-
-public record SignUpRequest(
-    @NotBlank @Size(min = 4, max = 20) String handle,
-    @NotBlank @Size(min = 2, max = 20) String nickname,
-    @NotBlank @Size(min = 8, max = 50) String password,
-    @NotBlank String passwordConfirm
->>>>>>> main
 ) {
 }

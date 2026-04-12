@@ -31,6 +31,11 @@ spring:
       password: your-password
 
 app:
+  cors:
+    allowed-origins:
+      - http://localhost:3000
+  frontend:
+    base-url: http://localhost:3000
   auth:
     jwt:
       secret: "여기에_충분히_긴_랜덤_문자열_또는_base64_secret"

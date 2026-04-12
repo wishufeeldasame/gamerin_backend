@@ -1,6 +1,5 @@
 package com.gamerin.backend.domain.auth.service;
 
-<<<<<<< HEAD
 import com.gamerin.backend.domain.auth.dto.request.LoginRequest;
 import com.gamerin.backend.domain.auth.dto.request.SignUpRequest;
 import com.gamerin.backend.domain.auth.dto.request.SocialSignUpRequest;
@@ -218,64 +217,5 @@ public class LocalAuthService {
             String refreshToken,
             long refreshTokenExpiresIn
     ) {
-=======
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
-import com.gamerin.backend.domain.auth.dto.request.SignUpRequest;
-import com.gamerin.backend.domain.auth.dto.request.LoginRequest;
-import com.gamerin.backend.domain.auth.dto.response.LoginResponse;
-import com.gamerin.backend.domain.auth.dto.response.SignUpResponse;
-import com.gamerin.backend.domain.user.entity.User;
-import com.gamerin.backend.domain.user.repository.UserRepository;
-
-@Service
-public class LocalAuthService {
-
-    private final UserRepository userRepository;
-    private final PasswordEncoder passwordEncoder;
-
-    public LocalAuthService(UserRepository userRepository, PasswordEncoder passwordEncoder) {
-        this.userRepository = userRepository;
-        this.passwordEncoder = passwordEncoder;
-    }
-
-    @Transactional
-    public SignUpResponse signUp(SignUpRequest request) {
-        if (userRepository.existsByHandle(request.handle())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 사용 중인 ID입니다.");
-        }
-        if (!request.password().equals(request.passwordConfirm())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "비밀번호 확인이 일치하지 않습니다.");
-        }
-        User user = new User(
-            request.handle().trim(),
-            request.nickname().trim(),
-            passwordEncoder.encode(request.password())
-        );
-        userRepository.save(user);
-        return new SignUpResponse(user.getId(), user.getHandle(), user.getNickname());
-    }
-
-    @Transactional(readOnly = true)
-    public LoginResponse login(LoginRequest request) {
-        User user = userRepository.findByHandle(request.handle().trim())
-            .orElseThrow(() -> new ResponseStatusException(
-                HttpStatus.UNAUTHORIZED,
-                "아이디 또는 비밀번호가 올바르지 않습니다."
-            ));
-
-        if (user.getPasswordHash() == null
-            || !passwordEncoder.matches(request.password(), user.getPasswordHash())) {
-            throw new ResponseStatusException(
-                HttpStatus.UNAUTHORIZED,
-                "아이디 또는 비밀번호가 올바르지 않습니다."
-            );
-        }
-
-        return new LoginResponse(user.getId(), user.getHandle(), user.getNickname());
->>>>>>> main
     }
 }

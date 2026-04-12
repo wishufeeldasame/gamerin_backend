@@ -1,6 +1,5 @@
 package com.gamerin.backend.domain.auth.controller;
 
-<<<<<<< HEAD
 import com.gamerin.backend.domain.auth.dto.request.LoginRequest;
 import com.gamerin.backend.domain.auth.dto.request.SignUpRequest;
 import com.gamerin.backend.domain.auth.dto.request.SocialSignUpRequest;
@@ -24,27 +23,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-=======
-import jakarta.validation.Valid;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-import com.gamerin.backend.domain.auth.dto.request.LoginRequest;
-import com.gamerin.backend.domain.auth.dto.request.SignUpRequest;
-import com.gamerin.backend.domain.auth.dto.response.LoginResponse;
-import com.gamerin.backend.domain.auth.dto.response.SignUpResponse;
-import com.gamerin.backend.domain.auth.service.LocalAuthService;
->>>>>>> main
 
 @RestController
 @RequestMapping("/api/v1/auth")
 public class AuthController {
 
     private final LocalAuthService localAuthService;
-<<<<<<< HEAD
     private final String refreshCookieName;
 
     public AuthController(
@@ -151,22 +135,5 @@ public class AuthController {
                 .maxAge(0)
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
-=======
-
-    public AuthController(LocalAuthService localAuthService) {
-        this.localAuthService = localAuthService;
-    }
-
-    @PostMapping("/signup")
-    public ResponseEntity<SignUpResponse> signUp(@Valid @RequestBody SignUpRequest request) {
-        SignUpResponse response = localAuthService.signUp(request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
-    }
-
-    @PostMapping("/login")
-    public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest request) {
-        LoginResponse response = localAuthService.login(request);
-        return ResponseEntity.ok(response);
->>>>>>> main
     }
 }
