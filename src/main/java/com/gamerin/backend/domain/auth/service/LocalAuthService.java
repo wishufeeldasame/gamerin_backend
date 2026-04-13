@@ -90,7 +90,7 @@ public class LocalAuthService {
 
     @Transactional(readOnly = true)
     public FindIdResponse findId(FindIdRequest request) {
-        String email = request.email().trim().toLowerCase();
+        String email = request.email().trim();
 
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResponseStatusException(
