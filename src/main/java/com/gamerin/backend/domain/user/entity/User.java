@@ -59,8 +59,9 @@ public class User {
     protected User() {
     }
 
-    public static User createLocal(String handle, String nickname, String passwordHash) {
+    public static User createLocal(String email, String handle, String nickname, String passwordHash) {
         User user = new User();
+        user.email = email;
         user.handle = handle;
         user.nickname = nickname;
         user.passwordHash = passwordHash;

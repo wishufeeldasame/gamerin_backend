@@ -61,14 +61,24 @@ public class LocalAuthService {
 
     public AuthResult signUp(SignUpRequest request) {
         validatePasswordConfirmation(request.password(), request.passwordConfirm());
+
         String handle = normalizeHandle(request.handle());
+        String email = request.email().trim();
 
         if (userRepository.existsByHandle(handle)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 사용 중인 아이디입니다.");
         }
+        if (userRepository.existsByEmail(email)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 사용 중인 이메일입니다.");
+        }
 
         String encodedPassword = passwordEncoder.encode(request.password());
-        User user = User.createLocal(handle, request.nickname().trim(), encodedPassword);
+        User user = User.createLocal(
+            email,
+            handle,
+            request.nickname().trim(),
+            encodedPassword
+        );
         User savedUser = userRepository.save(user);
 
         return issueTokens(savedUser);
