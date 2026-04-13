@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.auth.service;
 
+import com.gamerin.backend.domain.auth.dto.request.FindIdRequest;
+import com.gamerin.backend.domain.auth.dto.response.FindIdResponse;
 import com.gamerin.backend.domain.auth.dto.request.LoginRequest;
 import com.gamerin.backend.domain.auth.dto.request.SignUpRequest;
 import com.gamerin.backend.domain.auth.dto.request.SocialSignUpRequest;
@@ -82,6 +84,27 @@ public class LocalAuthService {
         User savedUser = userRepository.save(user);
 
         return issueTokens(savedUser);
+    }
+
+    @Transactional(readOnly = true)
+    public FindIdResponse findId(FindIdRequest request) {
+        String email = request.email().trim().toLowerCase();
+
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "일치하는 계정을 찾을 수 없습니다."
+                ));
+
+        return new FindIdResponse(maskHandle(user.getHandle()));
+    }
+
+    private String maskHandle(String handle) {
+        if (handle == null || handle.length() <= 3) {
+            return handle;
+        }
+
+        return handle.substring(0, 3) + "*".repeat(handle.length() - 3);
     }
 
     @Transactional

@@ -23,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import com.gamerin.backend.domain.auth.dto.request.FindIdRequest;
+import com.gamerin.backend.domain.auth.dto.response.FindIdResponse;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -62,6 +64,11 @@ public class AuthController {
         LocalAuthService.AuthResult result = localAuthService.socialSignUp(request);
         setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn()); 
         return ApiResponse.ok(result.authTokenResponse());
+    }
+
+    @PostMapping("/find-id")
+    public ApiResponse<FindIdResponse> findId(@Valid @RequestBody FindIdRequest request) {
+        return ApiResponse.ok(localAuthService.findId(request));
     }
 
     @PostMapping("/login")
