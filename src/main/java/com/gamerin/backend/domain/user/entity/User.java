@@ -123,6 +123,10 @@ public class User {
         return lastLoginAt;
     }
 
+    public OffsetDateTime getCreatedAt() {
+        return createdAt;
+    }
+
     public OffsetDateTime getDeletedAt() { 
         return deletedAt; 
     }

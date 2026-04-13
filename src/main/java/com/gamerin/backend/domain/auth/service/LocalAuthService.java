@@ -149,7 +149,7 @@ public class LocalAuthService {
         String email = request.email().trim().toLowerCase();
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "일치하는 계정을 찾을 수 없습니다."));
-        return new FindIdResponse(maskHandle(user.getHandle()));
+        return new FindIdResponse(maskHandle(user.getHandle()), user.getCreatedAt());
     }
 
     @Transactional(readOnly = true)
