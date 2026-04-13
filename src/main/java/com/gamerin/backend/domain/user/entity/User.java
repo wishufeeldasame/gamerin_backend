@@ -134,4 +134,7 @@ public class User {
     public boolean isActive() {
         return this.status == UserStatus.ACTIVE;
     }
+    public void changePassword(String passwordHash) {
+        this.passwordHash = passwordHash;
+    }
 }

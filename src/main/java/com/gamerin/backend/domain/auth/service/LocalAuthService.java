@@ -21,6 +21,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import com.gamerin.backend.domain.auth.dto.request.FindPasswordRequest;
+import com.gamerin.backend.domain.auth.dto.request.ResetPasswordRequest;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -99,6 +101,17 @@ public class LocalAuthService {
         return new FindIdResponse(maskHandle(user.getHandle()));
     }
 
+    @Transactional(readOnly = true)
+    public void findPassword(FindPasswordRequest request) {
+        String handle = normalizeHandle(request.handle());
+
+        userRepository.findByHandle(handle)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "일치하는 계정을 찾을 수 없습니다."
+                ));
+    }
+
     private String maskHandle(String handle) {
         if (handle == null || handle.length() <= 3) {
             return handle;
@@ -146,6 +159,26 @@ public class LocalAuthService {
 
         user.updateLastLoginAt();
         return issueTokens(user);
+    }
+    
+    public void resetPassword(ResetPasswordRequest request) {
+        String handle = normalizeHandle(request.handle());
+
+        User user = userRepository.findByHandle(handle)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "일치하는 계정을 찾을 수 없습니다."
+                ));
+
+        if (!request.newPassword().equals(request.newPasswordConfirm())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "비밀번호 확인이 일치하지 않습니다."
+            );
+        }
+
+        String encodedPassword = passwordEncoder.encode(request.newPassword());
+        user.changePassword(encodedPassword);
     }
 
     public AuthResult refresh(String rawRefreshToken) {

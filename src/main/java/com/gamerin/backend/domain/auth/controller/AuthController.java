@@ -25,6 +25,8 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import com.gamerin.backend.domain.auth.dto.request.FindIdRequest;
 import com.gamerin.backend.domain.auth.dto.response.FindIdResponse;
+import com.gamerin.backend.domain.auth.dto.request.FindPasswordRequest;
+import com.gamerin.backend.domain.auth.dto.request.ResetPasswordRequest;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -69,6 +71,18 @@ public class AuthController {
     @PostMapping("/find-id")
     public ApiResponse<FindIdResponse> findId(@Valid @RequestBody FindIdRequest request) {
         return ApiResponse.ok(localAuthService.findId(request));
+    }
+
+    @PostMapping("/find-password")
+    public ApiResponse<Void> findPassword(@Valid @RequestBody FindPasswordRequest request) {
+        localAuthService.findPassword(request);
+        return ApiResponse.ok(null);
+    }
+
+    @PostMapping("/reset-password")
+    public ApiResponse<Void> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        localAuthService.resetPassword(request);
+        return ApiResponse.ok(null);
     }
 
     @PostMapping("/login")
