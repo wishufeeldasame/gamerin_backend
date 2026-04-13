@@ -64,8 +64,20 @@ public class SecurityConfig {
                 )
                 .exceptionHandling(exception -> exception
                         .defaultAuthenticationEntryPointFor(
-                                (request, response, authException) ->
-                                        response.sendError(HttpServletResponse.SC_UNAUTHORIZED),
+                                (request, response, authException) ->{
+                                        // 1. 상태 코드를 401로 설정
+                                        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                                        // 2. 응답 타입을 JSON 및 UTF-8 한글 깨짐 방지 설정
+                                        response.setContentType("application/json;charset=UTF-8");
+                                        // 3. 클라이언트에게 보낼 JSON 에러 메시지 작성
+                                        String jsonResponse = "{" +
+                                            "\"code\": \"AUTH_UNAUTHORIZED\", " +
+                                            "\"message\": \"로그인이 필요하거나 인증이 만료되었습니다.\", " +
+                                            "\"data\": null" +
+                                            "}";
+                                        // 4. 응답 본문에 쓰기
+                                        response.getWriter().write(jsonResponse);
+                                },
                                 new AntPathRequestMatcher("/api/**")
                         )
                 )

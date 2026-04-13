@@ -12,14 +12,15 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
 import java.time.OffsetDateTime;
+import java.util.UUID;
 
 @Entity
 @Table(name = "users")
 public class User {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @GeneratedValue(strategy = GenerationType.UUID)
+    private UUID id;
 
     @Column(nullable = true, unique = true, length = 255)
     private String email;
@@ -50,11 +51,8 @@ public class User {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
-    @Column(name = "provider", length = 50)  // 소셜 제공자 : 어떤 소셜인지 ex "google"
-    private String provider;
-
-    @Column(name = "provider_id", length = 255) // 부여받은 고유 번호
-    private String providerId;
+    @Column(name = "deleted_at") 
+    private OffsetDateTime deletedAt;
 
     protected User() {
     }
@@ -70,13 +68,11 @@ public class User {
         return user;
     }
 
-    public static User createSocial(String email, String handle, String nickname, String provider, String providerId) {
+    public static User createSocialOnly(String email, String handle, String nickname) {
         User user = new User();
         user.email = email;
         user.handle = handle;
         user.nickname = nickname;
-        user.provider = provider;
-        user.providerId = providerId;
         user.passwordHash = null; // 소셜 가입자는 비밀번호를 설정하지 않음
         user.role = UserRole.USER;
         user.status = UserStatus.ACTIVE;
@@ -95,7 +91,7 @@ public class User {
         this.updatedAt = OffsetDateTime.now();
     }
 
-    public Long getId() {
+    public UUID getId() {
         return id;
     }
 
@@ -125,6 +121,10 @@ public class User {
 
     public OffsetDateTime getLastLoginAt() {
         return lastLoginAt;
+    }
+
+    public OffsetDateTime getDeletedAt() { 
+        return deletedAt; 
     }
 
     public void updateLastLoginAt() {

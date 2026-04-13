@@ -7,17 +7,18 @@ import org.springframework.security.core.userdetails.UserDetails;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 
 public class CustomUserPrincipal implements UserDetails {
 
-    private final Long userId;
+    private final UUID userId;
     private final String handle;
     private final String passwordHash;
     private final String nickname;
     private final String role;
     private final boolean active;
 
-    private CustomUserPrincipal(Long userId, String handle, String passwordHash, String nickname, String role, boolean active) {
+    private CustomUserPrincipal(UUID userId, String handle, String passwordHash, String nickname, String role, boolean active) {
         this.userId = userId;
         this.handle = handle;
         this.passwordHash = passwordHash;
@@ -37,7 +38,7 @@ public class CustomUserPrincipal implements UserDetails {
         );
     }
 
-    public Long getUserId() {
+    public UUID getUserId() {
         return userId;
     }
 

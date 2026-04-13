@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.Date;
 import java.util.List;
+import java.util.UUID;
 
 @Component
 public class JwtTokenProvider {
@@ -41,7 +42,7 @@ public class JwtTokenProvider {
         this.secretKey = Keys.hmacShaKeyFor(keyBytes);
     }
 
-    public String createAccessToken(Long userId, String handle, Collection<String> roles) {
+    public String createAccessToken(UUID userId, String handle, Collection<String> roles) {
         Instant now = Instant.now();
         Instant expiry = now.plusSeconds(accessTokenExpirationSeconds);
 
@@ -86,13 +87,13 @@ public class JwtTokenProvider {
         }
     }
 
-    public Long getUserId(String token) {
+    public UUID getUserId(String token) {
         Claims claims = Jwts.parser()
                 .verifyWith(secretKey)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
-        return Long.parseLong(claims.getSubject());
+        return UUID.fromString(claims.getSubject());
     }
 
     public long getAccessTokenExpirationSeconds() {
