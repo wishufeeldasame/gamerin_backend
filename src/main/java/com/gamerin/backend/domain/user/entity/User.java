@@ -1,12 +1,15 @@
 package com.gamerin.backend.domain.user.entity;
 
+import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.OneToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
@@ -140,5 +143,16 @@ public class User {
     }
     public void changePassword(String passwordHash) {
         this.passwordHash = passwordHash;
+    }
+
+    public UserProfile getProfile() {
+        return profile;
+    }
+
+    @OneToOne(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.LAZY, optional = false)
+    private UserProfile profile;
+
+    public void setProfile(UserProfile profile) {
+        this.profile = profile;
     }
 }
