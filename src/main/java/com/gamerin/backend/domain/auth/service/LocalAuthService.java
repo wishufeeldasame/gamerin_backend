@@ -89,6 +89,7 @@ public class LocalAuthService {
         }
 
         User user = User.createSocialOnly(session.getProviderEmail(), handle, request.nickname().trim());
+        user.setProfile(UserProfile.createDefault(user));
         User savedUser = userRepository.save(user);
 
         SocialAccount socialAccount = SocialAccount.create(

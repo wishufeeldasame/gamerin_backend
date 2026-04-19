@@ -3,6 +3,7 @@ package com.gamerin.backend.domain.user.entity;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 import org.hibernate.annotations.JdbcTypeCode;
@@ -22,6 +23,15 @@ import jakarta.persistence.Table;
 @Entity
 @Table(name = "user_profiles")
 public class UserProfile {
+
+    private static final String PUBG_KEY = "PUBG";
+    private static final String ACCOUNT_ID_KEY = "accountId";
+    private static final String PLAYER_NAME_KEY = "playerName";
+    private static final String CONNECTED_KEY = "connected";
+    private static final String TIER_LABEL_KEY = "tierLabel";
+    private static final String KDA_KEY = "kda";
+    private static final String WIN_RATE_KEY = "winRate";
+    private static final String GAMES_KEY = "games";
 
     @Id
     @Column
@@ -119,5 +129,63 @@ public class UserProfile {
 
     public void updateGameStats(Map<String, Object> gameStats) {
         this.gameStats = gameStats;
+    }
+
+    public boolean hasConnectedPubg() {
+        Object connected = getPubgStats().get(CONNECTED_KEY);
+        return connected instanceof Boolean value && value;
+    }
+
+    public String getPubgAccountId() {
+        Object accountId = getPubgStats().get(ACCOUNT_ID_KEY);
+        return accountId instanceof String value && !value.isBlank() ? value : null;
+    }
+
+    public void connectPubg(String playerName, String accountId) {
+        Map<String, Object> pubgStats = new HashMap<>(getPubgStats());
+        pubgStats.put(ACCOUNT_ID_KEY, accountId);
+        pubgStats.put(PLAYER_NAME_KEY, playerName);
+        pubgStats.put(CONNECTED_KEY, true);
+
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.put(PUBG_KEY, pubgStats);
+        this.gameStats = nextGameStats;
+    }
+
+    public void updatePubgSummary(String tierLabel, double kda, int winRate, int games) {
+        Map<String, Object> pubgStats = new HashMap<>(getPubgStats());
+        pubgStats.put(CONNECTED_KEY, true);
+        pubgStats.put(TIER_LABEL_KEY, tierLabel);
+        pubgStats.put(KDA_KEY, kda);
+        pubgStats.put(WIN_RATE_KEY, winRate);
+        pubgStats.put(GAMES_KEY, games);
+
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.put(PUBG_KEY, pubgStats);
+        this.gameStats = nextGameStats;
+    }
+
+    public void disconnectPubg() {
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.remove(PUBG_KEY);
+        this.gameStats = nextGameStats;
+    }
+
+    private Map<String, Object> getPubgStats() {
+        Object pubgStats = getSafeGameStats().get(PUBG_KEY);
+        if (pubgStats instanceof Map<?, ?> map) {
+            Map<String, Object> casted = new HashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() instanceof String key) {
+                    casted.put(key, entry.getValue());
+                }
+            }
+            return casted;
+        }
+        return new HashMap<>();
+    }
+
+    private Map<String, Object> getSafeGameStats() {
+        return Objects.requireNonNullElseGet(this.gameStats, HashMap::new);
     }
 }  
