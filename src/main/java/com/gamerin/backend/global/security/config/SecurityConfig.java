@@ -75,7 +75,7 @@ public class SecurityConfig {
                                         response.setContentType("application/json;charset=UTF-8");
                                         // 3. 클라이언트에게 보낼 JSON 에러 메시지 작성
                                         String jsonResponse = "{" +
-                                            "\"code\": \"AUTH_UNAUTHORIZED\", " +
+                                            "\"success\": false, " +
                                             "\"message\": \"로그인이 필요하거나 인증이 만료되었습니다.\", " +
                                             "\"data\": null" +
                                             "}";
