@@ -7,7 +7,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: validate
+      ddl-auto: create  # # create or update 는 개발용 운영에서는 validate
     properties:
       hibernate:
         format_sql: true
