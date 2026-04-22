@@ -12,8 +12,8 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "refresh_tokens")
-public class RefreshToken {
+@Table(name = "password_reset_tokens")
+public class PasswordResetToken {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -28,38 +28,26 @@ public class RefreshToken {
     @Column(name = "expires_at", nullable = false)
     private OffsetDateTime expiresAt;
 
-    @Column(name = "revoked_at")
-    private OffsetDateTime revokedAt;
-
-    @Column(name = "user_agent", columnDefinition = "TEXT")
-    private String userAgent;
-
-    @Column(name = "ip_address", length = 45)
-    private String ipAddress;
+    @Column(name = "used_at")
+    private OffsetDateTime usedAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
-    protected RefreshToken() {
+    protected PasswordResetToken() {
     }
 
-    public static RefreshToken issue(UUID userId, String tokenHash, OffsetDateTime expiresAt, String userAgent, String ipAddress) {
-        RefreshToken token = new RefreshToken();
-        token.userId = userId;
-        token.tokenHash = tokenHash;
-        token.expiresAt = expiresAt;
-        token.userAgent = userAgent;
-        token.ipAddress = ipAddress;
-        return token;
+    public static PasswordResetToken issue(UUID userId, String tokenHash, OffsetDateTime expiresAt) {
+        PasswordResetToken passwordResetToken = new PasswordResetToken();
+        passwordResetToken.userId = userId;
+        passwordResetToken.tokenHash = tokenHash;
+        passwordResetToken.expiresAt = expiresAt;
+        return passwordResetToken;
     }
 
     @PrePersist
     protected void onCreate() {
         this.createdAt = OffsetDateTime.now();
-    }
-
-    public UUID getId() {
-        return id;
     }
 
     public UUID getUserId() {
@@ -74,27 +62,21 @@ public class RefreshToken {
         return expiresAt;
     }
 
-    public OffsetDateTime getRevokedAt() {
-        return revokedAt;
-    }
-
-    public String getUserAgent() { 
-        return userAgent;
-    }
-
-    public String getIpAddress() { 
-        return ipAddress; 
-    }
-    
-    public boolean isRevoked() {
-        return revokedAt != null;
+    public OffsetDateTime getUsedAt() {
+        return usedAt;
     }
 
     public boolean isExpired() {
         return expiresAt.isBefore(OffsetDateTime.now());
     }
 
-    public void revoke() {
-        this.revokedAt = OffsetDateTime.now();
+    public boolean isUsed() {
+        return usedAt != null;
+    }
+
+    public void use() {
+        if (usedAt == null) {
+            usedAt = OffsetDateTime.now();
+        }
     }
 }

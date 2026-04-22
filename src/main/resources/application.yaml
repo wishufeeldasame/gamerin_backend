@@ -7,7 +7,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate
     show-sql: true
     open-in-view: false
     properties:
@@ -23,3 +23,9 @@ app:
       - http://localhost:3000
   frontend:
     base-url: http://localhost:3000
+    password-reset-path: /auth/reset-password
+  mail:
+    from-address: no-reply@gamerin.local
+  auth:
+    password-reset:
+      expiration-minutes: 30

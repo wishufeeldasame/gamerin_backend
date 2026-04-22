@@ -3,6 +3,9 @@ package com.gamerin.backend.domain.user.service;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+
+import java.util.UUID;
+
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -25,7 +28,7 @@ public class CustomUserDetailsService implements UserDetailsService {
         return CustomUserPrincipal.from(user);
     }
 
-    public CustomUserPrincipal loadById(Long userId) {
+    public CustomUserPrincipal loadById(UUID userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new UsernameNotFoundException("사용자를 찾을 수 없습니다."));
         return CustomUserPrincipal.from(user);

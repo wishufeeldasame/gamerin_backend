@@ -15,6 +15,7 @@ spring:
 
   flyway:
     enabled: true
+    baseline-on-migrate: true
 
   security:
     oauth2:
@@ -30,15 +31,37 @@ spring:
       name: user
       password: your-password
 
+  mail:
+    host: smtp.example.com
+    port: 587
+    username: your-smtp-username  # ${mail.username}
+    password: your-smtp-password  # ${mail.password}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          timeout: 5000
+          starttls:
+            enable: true
+
 app:
   cors:
     allowed-origins:
       - http://localhost:3000
   frontend:
     base-url: http://localhost:3000
+    password-reset-path: /auth/reset-password
+  mail:
+    from-address: no-reply@example.com
   auth:
     jwt:
       secret: "여기에_충분히_긴_랜덤_문자열_또는_base64_secret"
       access-token-expiration-seconds: 1800
       refresh-token-expiration-seconds: 1209600
       refresh-cookie-name: refresh_token
+    password-reset:
+      expiration-minutes: 30
+
+pubg:
+  api:
+    key: "여기에_PUBG_API_KEY"
