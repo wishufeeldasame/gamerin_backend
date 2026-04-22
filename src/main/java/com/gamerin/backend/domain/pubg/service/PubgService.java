@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.pubg.service;
 
+import java.util.UUID;
+
 import com.gamerin.backend.domain.pubg.client.PubgApiClient;
 import com.gamerin.backend.domain.pubg.dto.request.PubgConnectRequest;
 import com.gamerin.backend.domain.pubg.dto.response.PubgConnectionResponse;
@@ -35,11 +37,25 @@ public class PubgService {
         User user = getCurrentUser(principal);
         UserProfile profile = getCurrentProfile(user);
 
-        String playerName = request.playerName().trim();
+        String playerName = request.playerName();
+
+        validatePubgPlayerNameDuplicate(user.getId(), playerName);
+
         String accountId = pubgApiClient.findAccountId(playerName);
 
         profile.connectPubg(playerName, accountId);
         return new PubgConnectionResponse(true, playerName);
+    }
+
+    private void validatePubgPlayerNameDuplicate(UUID userId, String playerName) {
+        boolean duplicated = userRepository.existsConnectedPubgPlayerNameByOtherUser(userId, playerName);
+
+        if (duplicated) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "이미 다른 유저가 사용 중인 PUBG 닉네임입니다."
+            );
+        }
     }
 
     public PubgSummaryResponse getMySummary(CustomUserPrincipal principal) {
