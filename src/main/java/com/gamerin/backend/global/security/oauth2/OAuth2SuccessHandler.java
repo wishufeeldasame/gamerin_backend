@@ -65,8 +65,15 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         String targetUrl;
         if (accountOpt.isPresent()) {
             // [기존 유저] 토큰 공장을 통해 토큰 생성 후 로그인 처리
-            User user = userRepository.findById(accountOpt.get().getUserId())
+            SocialAccount socialAccount = accountOpt.get();
+            User user = userRepository.findById(socialAccount.getUserId())
                     .orElseThrow(() -> new IllegalStateException("사용자를 찾을 수 없습니다."));
+
+            socialAccount.updateLastLoginAt();
+            socialAccountRepository.save(socialAccount);
+
+            user.updateLastLoginAt();
+            userRepository.save(user);
 
             TokenService.AuthResult result = tokenService.issueTokens(user);
             setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
@@ -83,9 +90,10 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
             );
             socialSignupSessionRepository.save(session);
 
+            // signupToken은 URL fragment로 전달해 서버 로그/Referer 헤더 노출을 방지함
             targetUrl = UriComponentsBuilder.fromUriString(frontendBaseUrl)
                     .path("/auth/social/complete")
-                    .queryParam("signupToken", signupToken)
+                    .fragment("signupToken=" + signupToken)
                     .build().toUriString();
         }
 

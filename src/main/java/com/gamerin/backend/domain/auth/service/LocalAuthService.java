@@ -2,9 +2,11 @@ package com.gamerin.backend.domain.auth.service;
 
 import com.gamerin.backend.domain.auth.dto.request.*;
 import com.gamerin.backend.domain.auth.dto.response.*;
+import com.gamerin.backend.domain.auth.entity.PasswordResetToken;
 import com.gamerin.backend.domain.auth.entity.RefreshToken;
 import com.gamerin.backend.domain.auth.entity.SocialAccount;
 import com.gamerin.backend.domain.auth.entity.SocialSignupSession;
+import com.gamerin.backend.domain.auth.repository.PasswordResetTokenRepository;
 import com.gamerin.backend.domain.auth.repository.RefreshTokenRepository;
 import com.gamerin.backend.domain.auth.repository.SocialAccountRepository;
 import com.gamerin.backend.domain.auth.repository.SocialSignupSessionRepository;
@@ -14,10 +16,14 @@ import com.gamerin.backend.domain.user.entity.UserStatus;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+
+import java.time.OffsetDateTime;
+import java.util.UUID;
 
 @Service
 @Transactional
@@ -25,25 +31,34 @@ public class LocalAuthService {
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final SocialAccountRepository socialAccountRepository;
     private final SocialSignupSessionRepository socialSignupSessionRepository;
     private final PasswordEncoder passwordEncoder;
-    private final TokenService tokenService; // TokenService 주입!
+    private final TokenService tokenService;
+    private final PasswordResetMailService passwordResetMailService;
+    private final long passwordResetExpirationMinutes;
 
     public LocalAuthService(
             UserRepository userRepository,
             RefreshTokenRepository refreshTokenRepository,
+            PasswordResetTokenRepository passwordResetTokenRepository,
             SocialAccountRepository socialAccountRepository,
             SocialSignupSessionRepository socialSignupSessionRepository,
             PasswordEncoder passwordEncoder,
-            TokenService tokenService
+            TokenService tokenService,
+            PasswordResetMailService passwordResetMailService,
+            @Value("${app.auth.password-reset.expiration-minutes:30}") long passwordResetExpirationMinutes
     ) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.socialAccountRepository = socialAccountRepository;
         this.socialSignupSessionRepository = socialSignupSessionRepository;
         this.passwordEncoder = passwordEncoder;
         this.tokenService = tokenService;
+        this.passwordResetMailService = passwordResetMailService;
+        this.passwordResetExpirationMinutes = passwordResetExpirationMinutes;
     }
 
     @Transactional(readOnly = true)
@@ -56,7 +71,7 @@ public class LocalAuthService {
         validatePasswordConfirmation(request.password(), request.passwordConfirm());
 
         String handle = normalizeHandle(request.handle());
-        String email = request.email().trim();
+        String email = normalizeEmail(request.email());
 
         if (userRepository.existsByHandle(handle)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 사용 중인 아이디입니다.");
@@ -99,7 +114,7 @@ public class LocalAuthService {
         socialAccountRepository.save(socialAccount);
         socialSignupSessionRepository.delete(session);
 
-        return tokenService.issueTokens(savedUser); // 토큰 공장 호출
+        return tokenService.issueTokens(savedUser);
     }
 
     public TokenService.AuthResult login(LoginRequest request) {
@@ -116,7 +131,7 @@ public class LocalAuthService {
         }
 
         user.updateLastLoginAt();
-        return tokenService.issueTokens(user); // 토큰 공장 호출
+        return tokenService.issueTokens(user);
     }
 
     public TokenService.AuthResult refresh(String rawRefreshToken) {
@@ -137,7 +152,7 @@ public class LocalAuthService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "사용자를 찾을 수 없습니다."));
 
         savedToken.revoke();
-        return tokenService.issueTokens(user); // 토큰 공장 호출
+        return tokenService.issueTokens(user);
     }
 
     public void logout(String rawRefreshToken) {
@@ -149,28 +164,37 @@ public class LocalAuthService {
 
     @Transactional(readOnly = true)
     public FindIdResponse findId(FindIdRequest request) {
-        String email = request.email().trim().toLowerCase();
+        String email = normalizeEmail(request.email());
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "일치하는 계정을 찾을 수 없습니다."));
         return new FindIdResponse(maskHandle(user.getHandle()), user.getCreatedAt());
     }
 
-    @Transactional(readOnly = true)
     public void findPassword(FindPasswordRequest request) {
         String handle = normalizeHandle(request.handle());
-        userRepository.findByHandle(handle)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "일치하는 계정을 찾을 수 없습니다."));
+        userRepository.findByHandle(handle).ifPresent(this::issuePasswordResetToken);
     }
 
     public void resetPassword(ResetPasswordRequest request) {
-        String handle = normalizeHandle(request.handle());
-        User user = userRepository.findByHandle(handle)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "일치하는 계정을 찾을 수 없습니다."));
-
         if (!request.newPassword().equals(request.newPasswordConfirm())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "비밀번호 확인이 일치하지 않습니다.");
         }
+
+        String tokenHash = tokenService.sha256(request.resetToken());
+        PasswordResetToken passwordResetToken = passwordResetTokenRepository.findByTokenHashAndUsedAtIsNull(tokenHash)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "유효하지 않은 비밀번호 재설정 토큰입니다."));
+
+        if (passwordResetToken.isExpired()) {
+            passwordResetToken.use();
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "만료된 비밀번호 재설정 토큰입니다.");
+        }
+
+        User user = userRepository.findById(passwordResetToken.getUserId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "일치하는 계정을 찾을 수 없습니다."));
+
         user.changePassword(passwordEncoder.encode(request.newPassword()));
+        passwordResetToken.use();
+        revokeActiveRefreshTokens(user.getId());
     }
 
     @Transactional(readOnly = true)
@@ -193,6 +217,42 @@ public class LocalAuthService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "아이디가 비어 있습니다.");
         }
         return rawHandle.trim().toLowerCase();
+    }
+
+    private String normalizeEmail(String rawEmail) {
+        if (rawEmail == null || rawEmail.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "이메일이 비어 있습니다.");
+        }
+        return rawEmail.trim().toLowerCase();
+    }
+
+    private void issuePasswordResetToken(User user) {
+        if (user.getEmail() == null || user.getEmail().isBlank()) {
+            return;
+        }
+
+        String email = normalizeEmail(user.getEmail());
+        invalidateActivePasswordResetTokens(user.getId());
+
+        String rawResetToken = tokenService.generateOpaqueToken();
+        PasswordResetToken passwordResetToken = PasswordResetToken.issue(
+                user.getId(),
+                tokenService.sha256(rawResetToken),
+                OffsetDateTime.now().plusMinutes(passwordResetExpirationMinutes)
+        );
+
+        passwordResetTokenRepository.save(passwordResetToken);
+        passwordResetMailService.sendPasswordResetMail(email, rawResetToken);
+    }
+
+    private void invalidateActivePasswordResetTokens(UUID userId) {
+        passwordResetTokenRepository.findAllByUserIdAndUsedAtIsNull(userId)
+                .forEach(PasswordResetToken::use);
+    }
+
+    private void revokeActiveRefreshTokens(UUID userId) {
+        refreshTokenRepository.findAllByUserIdAndRevokedAtIsNull(userId)
+                .forEach(RefreshToken::revoke);
     }
 
     private String maskHandle(String handle) {
