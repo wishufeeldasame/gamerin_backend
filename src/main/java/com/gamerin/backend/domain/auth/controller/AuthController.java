@@ -67,7 +67,7 @@ public class AuthController {
             setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
             return ApiResponse.ok(result.authTokenResponse());
         } catch (ResponseStatusException exception) {
-            if (exception.getStatusCode() == HttpStatus.UNAUTHORIZED) {
+            if (exception.getStatusCode().isSameCodeAs(HttpStatus.UNAUTHORIZED)) {
                 clearRefreshTokenCookie(response);
             }
             throw exception;
