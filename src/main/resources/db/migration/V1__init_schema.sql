@@ -26,15 +26,10 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     bio TEXT,
     profile_image_url TEXT,
-    -- JSONB를 사용하여 여러 게임의 스탯(LoL, 발로란트 등)과 메인 설정을 한꺼번에 관리합니다.
-    game_stats JSONB NOT NULL DEFAULT '{}',
     verified_badge BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-COMMENT ON COLUMN user_profiles.game_stats IS '게임별 요약 통계 및 메인 게임 설정 정보 (JSON)';
-
 -- 3. mileage_wallets 테이블 (기획 문서 기준 로컬 회원가입시 초기 row 자동 생성)
 CREATE TABLE IF NOT EXISTS mileage_wallets (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
