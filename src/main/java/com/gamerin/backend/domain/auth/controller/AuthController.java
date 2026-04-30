@@ -12,9 +12,11 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -60,9 +62,16 @@ public class AuthController {
     @PostMapping("/refresh")
     public ApiResponse<AuthTokenResponse> refresh(HttpServletRequest request, HttpServletResponse response) {
         String refreshToken = getRefreshTokenFromCookie(request);
-        TokenService.AuthResult result = localAuthService.refresh(refreshToken);
-        setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
-        return ApiResponse.ok(result.authTokenResponse());
+        try {
+            TokenService.AuthResult result = localAuthService.refresh(refreshToken);
+            setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
+            return ApiResponse.ok(result.authTokenResponse());
+        } catch (ResponseStatusException exception) {
+            if (exception.getStatusCode().isSameCodeAs(HttpStatus.UNAUTHORIZED)) {
+                clearRefreshTokenCookie(response);
+            }
+            throw exception;
+        }
     }
 
     @PostMapping("/logout")

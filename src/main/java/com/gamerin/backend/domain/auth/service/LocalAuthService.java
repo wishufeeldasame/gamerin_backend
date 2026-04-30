@@ -11,6 +11,7 @@ import com.gamerin.backend.domain.auth.repository.RefreshTokenRepository;
 import com.gamerin.backend.domain.auth.repository.SocialAccountRepository;
 import com.gamerin.backend.domain.auth.repository.SocialSignupSessionRepository;
 import com.gamerin.backend.domain.user.entity.User;
+import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.entity.UserStatus;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -81,6 +82,7 @@ public class LocalAuthService {
 
         String encodedPassword = passwordEncoder.encode(request.password());
         User user = User.createLocal(email, handle, request.nickname().trim(), encodedPassword);
+        user.setProfile(UserProfile.createDefault(user));
         User savedUser = userRepository.save(user);
 
         return tokenService.issueTokens(savedUser); // 토큰 공장 호출
@@ -102,6 +104,7 @@ public class LocalAuthService {
         }
 
         User user = User.createSocialOnly(session.getProviderEmail(), handle, request.nickname().trim());
+        user.setProfile(UserProfile.createDefault(user));
         User savedUser = userRepository.save(user);
 
         SocialAccount socialAccount = SocialAccount.create(

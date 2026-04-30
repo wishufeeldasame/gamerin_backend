@@ -50,3 +50,10 @@ gamerin DB 생성
   > 비밀번호 재설정 흐름에 대한 통합 테스트 및 LocalAuthService, TokenService 단위 테스트 추가  
   > password_reset_tokens 테이블 생성을 위한 데이터베이스 마이그레이션 스크립트 추가  
   > 기능 테스트 코드 추가  
+
+- **26/04/23** 서장호
+
+  > `POST /api/v1/auth/refresh`에서 리프레시 토큰이 유효하지 않아 `401 UNAUTHORIZED`가 나면, 예외를 다시 던지기 전에 refresh cookie를 즉시 삭제하도록 변경. 목적은 서버 재기동 뒤 남아 있던 오래된 refresh cookie가 계속 세션 복구를 시도하게 하지 않도록 막는 것.  
+  > JWT 자체는 유효하지만 DB에 해당 사용자가 더 이상 없을 때 `UsernameNotFoundException`을 잡아 `SecurityContext`를 비우도록 변경. 즉, 예전에는 이런 경우 필터에서 비정상 흐름이 날 수 있었는데, 지금은 “미인증 사용자”로 안전하게 처리  
+  > refresh 요청이 `401`일 때 `Set-Cookie`로 refresh cookie가 `Max-Age=0`으로 지워지는 테스트 코드 추가  
+  > 정상 JWT + 정상 사용자면 인증이 세팅되는지, JWT는 유효하지만 사용자가 없으면 인증이 비워지는지를 검증하는 테스트 코드 추가됨 
