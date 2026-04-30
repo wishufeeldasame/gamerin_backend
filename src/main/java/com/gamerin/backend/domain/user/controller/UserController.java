@@ -24,8 +24,7 @@ public class UserController {
     public ApiResponse<UserProfileResponse> getMyProfile(
         @AuthenticationPrincipal CustomUserPrincipal principal
     ) {
-    // 서비스에서 프로필 정보를 가져옵니다.
-    UserProfileResponse response = userService.getMyProfile(principal.getUserId());
-    return ApiResponse.ok(response);
+        UserProfileResponse response = userService.getMyProfile(principal.getUserId());
+        return ApiResponse.ok(response);
     }
 }
