@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     bio TEXT,
     profile_image_url TEXT,
+    game_stats JSONB NOT NULL DEFAULT '{}',
     verified_badge BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

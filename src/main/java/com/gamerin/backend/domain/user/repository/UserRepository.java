@@ -1,18 +1,26 @@
 package com.gamerin.backend.domain.user.repository;
 
-import com.gamerin.backend.domain.user.entity.User;
+import java.util.Optional;
+import java.util.UUID;
+
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
-import java.util.Optional;
-import java.util.UUID;
+import com.gamerin.backend.domain.user.entity.User;
 
 public interface UserRepository extends JpaRepository<User, UUID> {
+
+    Optional<User> findByIdAndDeletedAtIsNull(UUID id);
+
     Optional<User> findByHandle(String handle);
+
+    Optional<User> findByHandleAndDeletedAtIsNull(String handle);
+
     boolean existsByHandle(String handle);
 
     Optional<User> findByEmail(String email);
+
     boolean existsByEmail(String email);
 
     @Query(value = """
