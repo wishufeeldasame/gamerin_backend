@@ -1,26 +1,32 @@
-# 프론트 연동 명세서
+# 프론트 피드 연동 명세서
 
 ## 1. 개요
-- 기준 서버: `http://localhost:8080`
-- Swagger: `http://localhost:8080/swagger-ui/index.html`
-- 대상 기능:
-  - 홈 피드
-  - 게시글 작성 / 상세 / 좋아요 / 댓글
+- 서버 주소: `http://localhost:8080`
+- Swagger 주소: `http://localhost:8080/swagger-ui/index.html`
+- 지원 기능:
+  - 홈 피드 조회
+  - 팔로잉 피드 조회
+  - 게시글 작성
+  - 게시글 상세 조회
+  - 좋아요 / 좋아요 취소
+  - 댓글 작성
   - 프로필 조회
-  - 프로필 `posts` 탭
-  - 프로필 `media` 탭
+  - 프로필 `posts` 탭 조회
+  - 프로필 `media` 탭 조회
   - 팔로우 / 언팔로우
+  - 직접 업로드 이미지 / 영상 게시글
+  - 외부 링크 카드 게시글
 
 ## 2. 인증 방식
-- 로그인/회원가입 성공 시 응답 본문에 `accessToken`이 내려옵니다.
+- 로그인 또는 회원가입 성공 시 응답 본문에 `accessToken`이 내려옵니다.
 - 동시에 `refresh_token` 쿠키가 `Set-Cookie`로 내려옵니다.
-- 피드/게시글/프로필/팔로우 API 호출 시 프론트는 아래 헤더를 붙여야 합니다.
+- 인증이 필요한 API는 아래 헤더를 사용합니다.
 
 ```http
 Authorization: Bearer {accessToken}
 ```
 
-- 브라우저 환경에서 `refresh_token` 쿠키를 유지하려면 로그인/회원가입/refresh 요청에 `credentials: "include"` 또는 axios의 `withCredentials: true` 설정을 권장합니다.
+- 브라우저에서 refresh까지 사용할 경우 `credentials: "include"` 또는 `withCredentials: true` 설정이 필요합니다.
 
 ## 3. 공통 응답 형식
 
@@ -52,9 +58,9 @@ Authorization: Bearer {accessToken}
 }
 ```
 
-- `nextCursor`는 프론트에서 해석하지 말고 그대로 다음 요청에 넘기면 됩니다.
+- `nextCursor`는 프론트에서 해석하지 않고 그대로 다음 요청에 넘기면 됩니다.
 
-## 4. 인증 연동
+## 4. 인증 API
 
 ### 4-1. 회원가입
 `POST /api/v1/auth/signup`
@@ -72,20 +78,6 @@ Authorization: Bearer {accessToken}
 }
 ```
 
-응답 예시:
-```json
-{
-  "success": true,
-  "data": {
-    "userId": "uuid",
-    "handle": "feeda205114",
-    "nickname": "feeda205114",
-    "accessToken": "jwt-token",
-    "accessTokenExpiresIn": 1800
-  }
-}
-```
-
 ### 4-2. 로그인
 `POST /api/v1/auth/login`
 
@@ -97,17 +89,99 @@ Authorization: Bearer {accessToken}
 }
 ```
 
-## 5. DTO 요약
+## 5. 게시글 작성 방식
+
+### 5-1. 직접 업로드 미디어 게시글
+- 엔드포인트: `POST /api/v1/posts`
+- Content-Type: `multipart/form-data`
+
+폼 필드:
+- `content`: 선택
+- `gameName`: 선택
+- `mediaFiles`: 파일 배열
+- `thumbnailFile`: 영상 업로드 시만 사용
+- `durationSeconds`: 영상 업로드 시만 사용
+
+규칙:
+- `content` 또는 `mediaFiles` 중 하나는 필수
+- 이미지 최대 4장
+- 영상 최대 1개
+- 이미지와 영상 혼합 업로드 불가
+- 영상 업로드 시 `thumbnailFile` 필수
+- 영상 업로드 시 `durationSeconds` 필수
+- 이미지 업로드 시 `thumbnailFile`, `durationSeconds` 사용 불가
+
+예시:
+- 이미지 게시글
+  - `content`: `오늘 경기 하이라이트`
+  - `gameName`: `PUBG`
+  - `mediaFiles`: `image1.jpg`
+  - `mediaFiles`: `image2.jpg`
+- 영상 게시글
+  - `content`: `킬캠 영상`
+  - `gameName`: `PUBG`
+  - `mediaFiles`: `video.mp4`
+  - `thumbnailFile`: `video-thumb.jpg`
+  - `durationSeconds`: `12`
+
+### 5-2. 외부 링크 카드 게시글
+- 외부 링크는 업로드 미디어처럼 재생하지 않고 카드로만 노출합니다.
+- YouTube, 기사 링크, 블로그 링크, 기타 일반 URL 모두 동일하게 카드 처리합니다.
+
+#### JSON 요청
+`POST /api/v1/posts`
+
+```json
+{
+  "content": "이 링크 참고",
+  "gameName": "PUBG",
+  "media": [],
+  "externalLink": {
+    "url": "https://example.com/article"
+  }
+}
+```
+
+#### multipart 요청
+`POST /api/v1/posts`
+
+폼 필드:
+- `content`
+- `gameName`
+- `externalLinkUrl`
+
+예시:
+- `content`: `이 링크 참고`
+- `externalLinkUrl`: `https://example.com/article`
+
+### 5-3. 미디어와 외부 링크 동시 사용 규칙
+- 업로드 미디어와 외부 링크는 같은 게시글에 같이 넣을 수 없습니다.
+- 둘 중 하나만 선택해야 합니다.
+  - 업로드 미디어 게시글
+  - 외부 링크 카드 게시글
+
+## 6. 응답 DTO
 
 ### PostMediaResponse
 ```json
 {
   "mediaId": "uuid",
   "mediaType": "IMAGE",
-  "mediaUrl": "https://example.com/a.jpg",
+  "mediaUrl": "http://localhost:8080/uploads/post-media/file.jpg",
   "thumbnailUrl": null,
   "sortOrder": 0,
   "durationSeconds": null
+}
+```
+
+### ExternalLinkCardResponse
+```json
+{
+  "url": "https://example.com/article",
+  "host": "example.com",
+  "title": "example.com",
+  "description": "https://example.com/article",
+  "thumbnailUrl": null
 }
 ```
 
@@ -120,27 +194,31 @@ Authorization: Bearer {accessToken}
   "authorProfileImageUrl": null,
   "authorVerifiedBadge": false,
   "game": "PUBG",
-  "content": "A image post",
+  "content": "오늘 경기 하이라이트",
   "media": [],
+  "externalLink": null,
   "likes": 0,
   "comments": 0,
   "shares": 0,
   "likedByMe": false,
   "mine": true,
-  "createdAt": "2026-05-02T20:51:14.123+09:00"
+  "createdAt": "2026-05-02T21:19:38.885745+09:00"
 }
 ```
 
-### CommentResponse
+### 외부 링크 카드 게시글 응답 예시
 ```json
 {
-  "commentId": "uuid",
-  "author": "feeda205114",
-  "authorHandle": "feeda205114",
-  "authorProfileImageUrl": null,
-  "authorVerifiedBadge": false,
-  "content": "nice post",
-  "createdAt": "2026-05-02T20:52:00.123+09:00"
+  "postId": "uuid",
+  "content": "이 링크 참고",
+  "media": [],
+  "externalLink": {
+    "url": "https://youtu.be/abc123",
+    "host": "youtu.be",
+    "title": "YouTube",
+    "description": "https://youtu.be/abc123",
+    "thumbnailUrl": "https://img.youtube.com/vi/abc123/hqdefault.jpg"
+  }
 }
 ```
 
@@ -151,8 +229,8 @@ Authorization: Bearer {accessToken}
   "postId": "uuid",
   "authorHandle": "feedb205114",
   "mediaType": "VIDEO",
-  "mediaUrl": "https://example.com/b.mp4",
-  "thumbnailUrl": "https://example.com/b-thumb.jpg",
+  "mediaUrl": "http://localhost:8080/uploads/post-media/video.mp4",
+  "thumbnailUrl": "http://localhost:8080/uploads/post-media/video-thumb.jpg",
   "createdAt": "2026-05-02T20:51:20.123+09:00"
 }
 ```
@@ -175,194 +253,115 @@ Authorization: Bearer {accessToken}
 }
 ```
 
-## 6. 피드 / 게시글 / 프로필 API
+## 7. 피드 / 게시글 / 프로필 API
 
-### 6-1. 전체 피드 / 팔로잉 피드
+### 7-1. 전체 피드 / 팔로잉 피드
 `GET /api/v1/feed?tab=all|following&cursor=&size=`
 
-- 기본 `size=20`
 - `tab=all`: 전체 피드
-- `tab=following`: 내가 팔로우한 유저 + 내 글
+- `tab=following`: 나 + 내가 팔로우한 유저 글
+- 기본 `size=20`
+- 최대 `size=50`
+- 커서 형식: `createdAt|postId`
 
-응답 예시:
-```json
-{
-  "success": true,
-  "data": {
-    "items": [
-      {
-        "postId": "9426dc1b-f998-4171-ae0a-c9600d99bc06",
-        "author": "feedb205114",
-        "authorHandle": "feedb205114",
-        "authorProfileImageUrl": null,
-        "authorVerifiedBadge": false,
-        "game": "PUBG",
-        "content": "B video post",
-        "media": [
-          {
-            "mediaId": "uuid",
-            "mediaType": "VIDEO",
-            "mediaUrl": "https://example.com/b.mp4",
-            "thumbnailUrl": "https://example.com/b-thumb.jpg",
-            "sortOrder": 0,
-            "durationSeconds": 12
-          }
-        ],
-        "likes": 1,
-        "comments": 1,
-        "shares": 0,
-        "likedByMe": true,
-        "mine": false,
-        "createdAt": "2026-05-02T20:51:20.123+09:00"
-      }
-    ],
-    "nextCursor": null,
-    "hasNext": false
-  }
-}
-```
-
-### 6-2. 트렌딩 게임
+### 7-2. 트렌딩 게임
 `GET /api/v1/feed/trending/games`
 
-응답 예시:
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "gameName": "PUBG",
-      "postCount": 3
-    }
-  ]
-}
-```
+- 최근 7일 기준 집계
+- 최대 10개 게임 반환
 
-### 6-3. 게시글 작성
+### 7-3. 게시글 작성
 `POST /api/v1/posts`
 
-텍스트 게시글:
-```json
-{
-  "content": "A text post",
-  "gameName": "PUBG",
-  "media": []
-}
-```
+- JSON 방식: URL 기반 미디어 또는 외부 링크 카드
+- multipart 방식: 직접 파일 업로드 또는 외부 링크 카드
 
-이미지 게시글:
-```json
-{
-  "content": "A image post",
-  "gameName": "PUBG",
-  "media": [
-    {
-      "mediaType": "IMAGE",
-      "mediaUrl": "https://example.com/a.jpg",
-      "thumbnailUrl": null,
-      "sortOrder": 0,
-      "durationSeconds": null
-    }
-  ]
-}
-```
-
-영상 게시글:
-```json
-{
-  "content": "B video post",
-  "gameName": "PUBG",
-  "media": [
-    {
-      "mediaType": "VIDEO",
-      "mediaUrl": "https://example.com/b.mp4",
-      "thumbnailUrl": "https://example.com/b-thumb.jpg",
-      "sortOrder": 0,
-      "durationSeconds": 12
-    }
-  ]
-}
-```
-
-### 6-4. 게시글 상세
+### 7-4. 게시글 상세
 `GET /api/v1/posts/{postId}`
 
-### 6-5. 게시글 좋아요
+### 7-5. 좋아요
 `POST /api/v1/posts/{postId}/likes`
 
-응답:
-```json
-{
-  "success": true,
-  "data": null
-}
-```
+- 이미 좋아요 상태여도 에러 없이 유지됩니다
 
-### 6-6. 게시글 좋아요 취소
+### 7-6. 좋아요 취소
 `DELETE /api/v1/posts/{postId}/likes`
 
-### 6-7. 댓글 작성
+- 좋아요가 없어도 에러 없이 처리됩니다
+
+### 7-7. 댓글 작성
 `POST /api/v1/posts/{postId}/comments`
 
 요청 예시:
 ```json
 {
-  "content": "nice post"
+  "content": "좋은 글이네요"
 }
 ```
 
-### 6-8. 내 프로필
+### 7-8. 내 프로필
 `GET /api/v1/users/me`
 
-### 6-9. 사용자 프로필
+### 7-9. 특정 유저 프로필
 `GET /api/v1/users/{handle}`
 
-### 6-10. 프로필 posts 탭
+### 7-10. 프로필 posts 탭
 `GET /api/v1/users/{handle}/posts?cursor=&size=`
 
-- 게시글 단위 응답
-- 텍스트 게시글도 포함
+- 기본 `size=20`
+- 최대 `size=50`
+- 커서 형식: `createdAt|postId`
 
-### 6-11. 프로필 media 탭
+### 7-11. 프로필 media 탭
 `GET /api/v1/users/{handle}/media?cursor=&size=`
 
-- 미디어 단위 응답
-- 텍스트 전용 게시글은 제외
-- `IMAGE`, `VIDEO`만 내려옴
+- 기본 `size=24`
+- 최대 `size=50`
+- 커서 형식: `createdAt|postId|sortOrder|mediaId`
+- 텍스트-only 게시글 제외
+- 직접 업로드한 사진 / 영상만 포함
+- 외부 링크 카드는 포함하지 않음
 
-### 6-12. 팔로우
+### 7-12. 팔로우
 `POST /api/v1/users/{handle}/follow`
 
-### 6-13. 언팔로우
+- 자기 자신은 팔로우 불가
+- 이미 팔로우 중이면 에러 없이 유지
+
+### 7-13. 언팔로우
 `DELETE /api/v1/users/{handle}/follow`
 
-## 7. 프론트 구현 시 주의사항
-- 모든 피드/프로필 API는 로그인 필수입니다.
-- `accessToken`은 응답 본문에서 받고, 이후 `Authorization` 헤더에 넣어야 합니다.
-- `refresh_token`은 httpOnly 쿠키라 프론트 JS에서 직접 읽지 않습니다.
-- `content`는 `null`일 수 있습니다.
-  - 미디어 전용 게시글 가능
-- `media`는 빈 배열일 수 있습니다.
-  - 텍스트 전용 게시글 가능
-- `profileImageUrl`은 `null`일 수 있습니다.
-- `gameStats`는 현재 빈 객체 `{}` 로 내려올 수 있습니다.
-- `cursor`는 프론트가 파싱하지 말고 그대로 넘기면 됩니다.
-- `following` 피드는 팔로우한 유저 글과 내 글이 같이 나옵니다.
-- `users/{handle}/media`는 카드 목록이 아니라 미디어 아이템 목록입니다.
+- 팔로우 상태가 아니어도 에러 없이 처리
 
-## 8. 실제 검증한 예시 결과
-- 테스트 계정:
-  - `feeda205114` / `Test1234!`
-  - `feedb205114` / `Test1234!`
-- 검증 완료:
-  - 회원가입
-  - 로그인
-  - 텍스트 / 이미지 / 영상 게시글 작성
-  - 전체 피드 조회
-  - 팔로우 후 팔로잉 피드 조회
-  - 좋아요 / 댓글
-  - 게시글 상세
-  - 프로필 조회
-  - 프로필 posts 탭
-  - 프로필 media 탭
-  - 트렌딩 게임 조회
+## 8. 프론트 렌더링 규칙
+- `media.length > 0` 이면 업로드 미디어 UI를 렌더링합니다.
+- `externalLink != null` 이면 링크 카드 UI를 렌더링합니다.
+- 두 값은 동시에 내려오지 않는다고 가정해도 됩니다.
+
+예시:
+```tsx
+if (post.media.length > 0) {
+  return <UploadedMediaBlock media={post.media} />;
+}
+
+if (post.externalLink) {
+  return <ExternalLinkCard card={post.externalLink} />;
+}
+```
+
+## 9. 프론트 구현 시 주의사항
+- 업로드 미디어와 외부 링크는 함께 사용할 수 없습니다.
+- 외부 링크는 모두 카드 전용입니다.
+- 외부 링크는 자동 재생 / 임베드가 아닙니다.
+- YouTube도 현재는 카드로만 보여주고, 클릭 시 외부 이동 처리하면 됩니다.
+- 프로필 `media` 탭은 업로드 파일만 포함합니다.
+- 업로드된 파일은 인증 없이 `GET /uploads/**`로 접근 가능합니다.
+- 영상 업로드 시에는 반드시 썸네일 파일도 함께 보내야 합니다.
+
+## 10. 실제 검증 포인트
+- 이미지 업로드 게시글 생성 성공
+- 영상 업로드 게시글 생성 성공
+- JSON 외부 링크 카드 게시글 생성 성공
+- multipart 외부 링크 카드 게시글 생성 성공
+- 미디어 + 외부 링크 동시 요청 시 `400`
+- 피드 응답에서 `media` 또는 `externalLink`가 올바르게 내려오는지 확인

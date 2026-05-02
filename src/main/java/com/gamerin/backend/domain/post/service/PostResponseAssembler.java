@@ -12,13 +12,16 @@ import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
+import com.gamerin.backend.domain.post.dto.response.ExternalLinkCardResponse;
 import com.gamerin.backend.domain.post.dto.response.PostCardResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
 import com.gamerin.backend.domain.post.dto.response.PostMediaResponse;
 import com.gamerin.backend.domain.post.dto.response.ProfileMediaItemResponse;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostComment;
+import com.gamerin.backend.domain.post.entity.PostExternalLink;
 import com.gamerin.backend.domain.post.entity.PostMedia;
+import com.gamerin.backend.domain.post.repository.PostExternalLinkRepository;
 import com.gamerin.backend.domain.post.repository.PostLikeRepository;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.user.entity.UserProfile;
@@ -27,13 +30,16 @@ import com.gamerin.backend.domain.user.entity.UserProfile;
 public class PostResponseAssembler {
 
     private final PostMediaRepository postMediaRepository;
+    private final PostExternalLinkRepository postExternalLinkRepository;
     private final PostLikeRepository postLikeRepository;
 
     public PostResponseAssembler(
             PostMediaRepository postMediaRepository,
+            PostExternalLinkRepository postExternalLinkRepository,
             PostLikeRepository postLikeRepository
     ) {
         this.postMediaRepository = postMediaRepository;
+        this.postExternalLinkRepository = postExternalLinkRepository;
         this.postLikeRepository = postLikeRepository;
     }
 
@@ -42,12 +48,20 @@ public class PostResponseAssembler {
             return List.of();
         }
 
-        Map<UUID, List<PostMediaResponse>> mediaMap = buildMediaMap(extractPostIds(posts));
-        Set<UUID> likedPostIds = buildLikedPostIds(viewerId, extractPostIds(posts));
+        List<UUID> postIds = extractPostIds(posts);
+        Map<UUID, List<PostMediaResponse>> mediaMap = buildMediaMap(postIds);
+        Map<UUID, ExternalLinkCardResponse> externalLinkMap = buildExternalLinkMap(postIds);
+        Set<UUID> likedPostIds = buildLikedPostIds(viewerId, postIds);
 
         List<PostCardResponse> responses = new ArrayList<>();
         for (Post post : posts) {
-            responses.add(toPostCard(post, mediaMap.getOrDefault(post.getId(), List.of()), likedPostIds.contains(post.getId()), viewerId));
+            responses.add(toPostCard(
+                    post,
+                    mediaMap.getOrDefault(post.getId(), List.of()),
+                    externalLinkMap.get(post.getId()),
+                    likedPostIds.contains(post.getId()),
+                    viewerId
+            ));
         }
         return responses;
     }
@@ -61,6 +75,9 @@ public class PostResponseAssembler {
         boolean likedByMe = viewerId != null && postLikeRepository.existsByPostIdAndUserId(post.getId(), viewerId);
         boolean mine = viewerId != null && post.getAuthor().getId().equals(viewerId);
         UserProfile profile = post.getAuthor().getProfile();
+        ExternalLinkCardResponse externalLink = postExternalLinkRepository.findByPostId(post.getId())
+                .map(this::toExternalLinkCardResponse)
+                .orElse(null);
 
         return new PostDetailResponse(
                 post.getId(),
@@ -71,6 +88,7 @@ public class PostResponseAssembler {
                 post.getGameName(),
                 post.getContent(),
                 media,
+                externalLink,
                 post.getLikeCount(),
                 post.getCommentCount(),
                 post.getShareCount(),
@@ -107,7 +125,13 @@ public class PostResponseAssembler {
                 .toList();
     }
 
-    private PostCardResponse toPostCard(Post post, List<PostMediaResponse> media, boolean likedByMe, UUID viewerId) {
+    private PostCardResponse toPostCard(
+            Post post,
+            List<PostMediaResponse> media,
+            ExternalLinkCardResponse externalLink,
+            boolean likedByMe,
+            UUID viewerId
+    ) {
         UserProfile profile = post.getAuthor().getProfile();
         return new PostCardResponse(
                 post.getId(),
@@ -118,6 +142,7 @@ public class PostResponseAssembler {
                 post.getGameName(),
                 post.getContent(),
                 media,
+                externalLink,
                 post.getLikeCount(),
                 post.getCommentCount(),
                 post.getShareCount(),
@@ -138,6 +163,18 @@ public class PostResponseAssembler {
                     .add(toPostMediaResponse(media));
         }
         return mediaMap;
+    }
+
+    private Map<UUID, ExternalLinkCardResponse> buildExternalLinkMap(Collection<UUID> postIds) {
+        if (postIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<UUID, ExternalLinkCardResponse> linkMap = new HashMap<>();
+        for (PostExternalLink externalLink : postExternalLinkRepository.findByPostIds(postIds)) {
+            linkMap.put(externalLink.getPost().getId(), toExternalLinkCardResponse(externalLink));
+        }
+        return linkMap;
     }
 
     private Set<UUID> buildLikedPostIds(UUID viewerId, Collection<UUID> postIds) {
@@ -161,6 +198,16 @@ public class PostResponseAssembler {
                 media.getThumbnailUrl(),
                 media.getSortOrder(),
                 media.getDurationSeconds()
+        );
+    }
+
+    private ExternalLinkCardResponse toExternalLinkCardResponse(PostExternalLink externalLink) {
+        return new ExternalLinkCardResponse(
+                externalLink.getOriginalUrl(),
+                externalLink.getHost(),
+                externalLink.getTitle(),
+                externalLink.getDescription(),
+                externalLink.getThumbnailUrl()
         );
     }
 }
