@@ -3,11 +3,14 @@ package com.gamerin.backend.domain.user.dto.response;
 import java.util.Map;
 import java.util.UUID;
 
-public record UserProfileResponse(
+public record DetailedUserProfileResponse(
         UUID id,
         String handle,
         String nickname,
         String bio,
+        String location,
+        String website, 
+        String coverImageUrl,
         String profileImageUrl,
         Map<String, Object> gameStats,
         boolean verifiedBadge,
