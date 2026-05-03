@@ -11,6 +11,7 @@
   - 좋아요 / 좋아요 취소
   - 댓글 작성
   - 프로필 조회
+  - 프로필 편집
   - 프로필 `posts` 탭 조회
   - 프로필 `media` 탭 조회
   - 팔로우 / 언팔로우
@@ -235,13 +236,27 @@ Authorization: Bearer {accessToken}
 }
 ```
 
-### UserProfileResponse
+### SimpleUserProfileResponse (간략한 프로필 정보)
 ```json
 {
   "id": "uuid",
   "handle": "feeda205114",
   "nickname": "feeda205114",
-  "bio": null,
+  "profileImageUrl": null,
+  "verifiedBadge": false
+}
+```
+
+### DetailedUserProfileResponse (상세 프로필 정보)
+```json
+{
+  "id": "uuid",
+  "handle": "feeda205114",
+  "nickname": "feeda205114",
+  "bio": "프로필 소개글입니다.",
+  "location": "서울",
+  "website": "[https://github.com](https://github.com)",
+  "coverImageUrl": null,
   "profileImageUrl": null,
   "gameStats": {},
   "verifiedBadge": false,
@@ -252,7 +267,6 @@ Authorization: Bearer {accessToken}
   "mediaItemCount": 1
 }
 ```
-
 ## 7. 피드 / 게시글 / 프로필 API
 
 ### 7-1. 전체 피드 / 팔로잉 피드
@@ -299,20 +313,35 @@ Authorization: Bearer {accessToken}
 }
 ```
 
-### 7-8. 내 프로필
+### 7-8. 내 프로필 조회
 `GET /api/v1/users/me`
+- 응답: `DetailedUserProfileResponse`
 
-### 7-9. 특정 유저 프로필
+### 7-9 내 프로필 편집
+`PATCH /api/v1/users/me`
+요청 예시:
+```json
+{
+  "nickname": "수정된닉네임",
+  "bio": "안녕하세요! 프로필 수정 테스트 중입니다.",
+  "location": "서울",
+  "website": "[https://github.com/my-profile](https://github.com/my-profile)",
+  "profileImageUrl": "https://...",
+  "coverImageUrl": "https://..."
+}
+```
+
+### 7-10. 특정 유저 프로필 조회
 `GET /api/v1/users/{handle}`
 
-### 7-10. 프로필 posts 탭
+### 7-11. 프로필 posts 탭
 `GET /api/v1/users/{handle}/posts?cursor=&size=`
 
 - 기본 `size=20`
 - 최대 `size=50`
 - 커서 형식: `createdAt|postId`
 
-### 7-11. 프로필 media 탭
+### 7-12. 프로필 media 탭
 `GET /api/v1/users/{handle}/media?cursor=&size=`
 
 - 기본 `size=24`
@@ -322,13 +351,13 @@ Authorization: Bearer {accessToken}
 - 직접 업로드한 사진 / 영상만 포함
 - 외부 링크 카드는 포함하지 않음
 
-### 7-12. 팔로우
+### 7-13. 팔로우
 `POST /api/v1/users/{handle}/follow`
 
 - 자기 자신은 팔로우 불가
 - 이미 팔로우 중이면 에러 없이 유지
 
-### 7-13. 언팔로우
+### 7-14. 언팔로우
 `DELETE /api/v1/users/{handle}/follow`
 
 - 팔로우 상태가 아니어도 에러 없이 처리
