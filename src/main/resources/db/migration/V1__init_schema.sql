@@ -26,10 +26,12 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     bio TEXT,
     profile_image_url TEXT,
+    game_stats JSONB NOT NULL DEFAULT '{}',
     verified_badge BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
 -- 3. mileage_wallets 테이블 (기획 문서 기준 로컬 회원가입시 초기 row 자동 생성)
 CREATE TABLE IF NOT EXISTS mileage_wallets (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
