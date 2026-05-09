@@ -3,6 +3,7 @@ package com.gamerin.backend.domain.post.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -21,23 +22,26 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
-import com.gamerin.backend.domain.post.dto.request.CreateExternalLinkRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
-import com.gamerin.backend.domain.post.dto.request.CreatePostMediaRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
+import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
 import com.gamerin.backend.domain.post.entity.Post;
-import com.gamerin.backend.domain.post.entity.PostExternalLink;
+import com.gamerin.backend.domain.post.entity.PostBookmark;
 import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
+import com.gamerin.backend.domain.post.entity.PostShare;
+import com.gamerin.backend.domain.post.entity.ShareTarget;
+import com.gamerin.backend.domain.post.repository.PostBookmarkRepository;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
-import com.gamerin.backend.domain.post.repository.PostExternalLinkRepository;
 import com.gamerin.backend.domain.post.repository.PostLikeRepository;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
+import com.gamerin.backend.domain.post.repository.PostShareRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -55,13 +59,16 @@ class PostServiceTest {
     private PostMediaRepository postMediaRepository;
 
     @Mock
-    private PostExternalLinkRepository postExternalLinkRepository;
-
-    @Mock
     private PostLikeRepository postLikeRepository;
 
     @Mock
+    private PostBookmarkRepository postBookmarkRepository;
+
+    @Mock
     private PostCommentRepository postCommentRepository;
+
+    @Mock
+    private PostShareRepository postShareRepository;
 
     @Mock
     private PostResponseAssembler postResponseAssembler;
@@ -70,7 +77,7 @@ class PostServiceTest {
     private MediaStorageService mediaStorageService;
 
     @Mock
-    private ExternalLinkMetadataService externalLinkMetadataService;
+    private VideoMetadataService videoMetadataService;
 
     private PostService postService;
 
@@ -80,17 +87,18 @@ class PostServiceTest {
                 userRepository,
                 postRepository,
                 postMediaRepository,
-                postExternalLinkRepository,
                 postLikeRepository,
+                postBookmarkRepository,
                 postCommentRepository,
+                postShareRepository,
                 postResponseAssembler,
                 mediaStorageService,
-                externalLinkMetadataService
+                videoMetadataService
         );
     }
 
     @Test
-    void createRejectsWhenContentMediaAndExternalLinkAreMissing() {
+    void createRejectsWhenContentIsMissing() {
         UUID userId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
 
@@ -98,7 +106,7 @@ class PostServiceTest {
 
         assertThatThrownBy(() -> postService.create(
                 CustomUserPrincipal.from(user),
-                new CreatePostRequest("   ", null, List.of(), null)
+                new CreatePostRequest("   ")
         ))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
@@ -108,27 +116,7 @@ class PostServiceTest {
     }
 
     @Test
-    void createRejectsWhenMediaAndExternalLinkAreUsedTogether() {
-        UUID userId = UUID.randomUUID();
-        User user = savedUser(userId, "tester", "Tester");
-
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-
-        CreatePostRequest request = new CreatePostRequest(
-                "post",
-                "PUBG",
-                List.of(new CreatePostMediaRequest(PostMediaType.IMAGE, "https://cdn.example.com/image.png", null, 0, null)),
-                new CreateExternalLinkRequest("https://youtube.com/watch?v=test")
-        );
-
-        assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
-                .isEqualTo(HttpStatus.BAD_REQUEST.value());
-    }
-
-    @Test
-    void createStoresExternalLinkForLinkOnlyPost() {
+    void createMultipartStoresUploadedVideoWithoutThumbnail() throws Exception {
         UUID userId = UUID.randomUUID();
         UUID postId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
@@ -141,57 +129,15 @@ class PostServiceTest {
             return post;
         });
         when(postResponseAssembler.toPostDetail(any(Post.class), any(UUID.class))).thenReturn(response);
-        when(externalLinkMetadataService.fetch("https://youtu.be/abc123"))
-                .thenReturn(new ExternalLinkMetadataService.ExternalLinkMetadata(
-                        "https://youtu.be/abc123",
-                        "youtu.be",
-                        "YouTube",
-                        "https://youtu.be/abc123",
-                        "https://img.youtube.com/vi/abc123/hqdefault.jpg"
+        when(videoMetadataService.readDurationSeconds(any())).thenReturn(119.0);
+        when(mediaStorageService.storePostMedia(any()))
+                .thenReturn(new MediaStorageService.StoredFile(
+                        Path.of("uploads/post-media/video.mp4"),
+                        "http://localhost:8080/uploads/post-media/video.mp4"
                 ));
 
-        CreatePostRequest request = new CreatePostRequest(
-                null,
-                "PUBG",
-                List.of(),
-                new CreateExternalLinkRequest("https://youtu.be/abc123")
-        );
-
-        postService.create(CustomUserPrincipal.from(user), request);
-
-        ArgumentCaptor<PostExternalLink> linkCaptor = ArgumentCaptor.forClass(PostExternalLink.class);
-        verify(postExternalLinkRepository).save(linkCaptor.capture());
-        assertThat(linkCaptor.getValue().getOriginalUrl()).isEqualTo("https://youtu.be/abc123");
-        assertThat(linkCaptor.getValue().getHost()).isEqualTo("youtu.be");
-    }
-
-    @Test
-    void createStoresVideoMediaForVideoOnlyPost() {
-        UUID userId = UUID.randomUUID();
-        UUID postId = UUID.randomUUID();
-        User user = savedUser(userId, "tester", "Tester");
-        PostDetailResponse response = postDetailResponse(postId);
-
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.save(any(Post.class))).thenAnswer(invocation -> {
-            Post post = invocation.getArgument(0);
-            ReflectionTestUtils.setField(post, "id", postId);
-            return post;
-        });
-        when(postResponseAssembler.toPostDetail(any(Post.class), any(UUID.class))).thenReturn(response);
-
-        CreatePostRequest request = new CreatePostRequest(
-                null,
-                null,
-                List.of(new CreatePostMediaRequest(
-                        PostMediaType.VIDEO,
-                        "https://cdn.example.com/video.mp4",
-                        "https://cdn.example.com/video.jpg",
-                        0,
-                        30
-                )),
-                null
-        );
+        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
+        request.setMediaFiles(List.of(videoFile()));
 
         postService.create(CustomUserPrincipal.from(user), request);
 
@@ -200,20 +146,26 @@ class PostServiceTest {
 
         List<PostMedia> savedMedia = mediaCaptor.getValue();
         assertThat(savedMedia).hasSize(1);
-        assertThat(savedMedia.getFirst().getMediaType()).isEqualTo(PostMediaType.VIDEO);
-        assertThat(savedMedia.getFirst().getThumbnailUrl()).isEqualTo("https://cdn.example.com/video.jpg");
+        assertThat(savedMedia.get(0).getMediaType()).isEqualTo(PostMediaType.VIDEO);
+        assertThat(savedMedia.get(0).getMediaUrl()).endsWith("/video.mp4");
+        assertThat(savedMedia.get(0).getThumbnailUrl()).isNull();
+        verify(mediaStorageService, never()).deleteQuietly(any());
     }
 
     @Test
-    void createMultipartRejectsVideoWithoutThumbnail() {
+    void createMultipartRejectsVideoLargerThan500Mb() {
         UUID userId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
 
+        MultipartFile videoFile = mock(MultipartFile.class);
+        when(videoFile.isEmpty()).thenReturn(false);
+        when(videoFile.getContentType()).thenReturn("video/mp4");
+        when(videoFile.getSize()).thenReturn(500L * 1024L * 1024L + 1L);
+
         CreateMultipartPostRequest request = new CreateMultipartPostRequest();
-        request.setMediaFiles(List.of(videoFile()));
-        request.setDurationSeconds(30);
+        request.setMediaFiles(List.of(videoFile));
 
         assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
                 .isInstanceOf(ResponseStatusException.class)
@@ -224,21 +176,22 @@ class PostServiceTest {
     }
 
     @Test
-    void createMultipartRejectsMediaAndExternalLinkTogether() {
+    void createMultipartRejectsVideoLongerThanTwoMinutes() {
         UUID userId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(videoMetadataService.readDurationSeconds(any())).thenReturn(121.0);
 
         CreateMultipartPostRequest request = new CreateMultipartPostRequest();
-        request.setContent("post");
-        request.setMediaFiles(List.of(imageFile("a.jpg")));
-        request.setExternalLinkUrl("https://youtube.com/watch?v=test");
+        request.setMediaFiles(List.of(videoFile()));
 
         assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
                 .isEqualTo(HttpStatus.BAD_REQUEST.value());
+
+        verify(postRepository, never()).save(any(Post.class));
     }
 
     @Test
@@ -261,7 +214,6 @@ class PostServiceTest {
 
         CreateMultipartPostRequest request = new CreateMultipartPostRequest();
         request.setContent("image post");
-        request.setGameName("PUBG");
         request.setMediaFiles(List.of(imageFile("a.jpg"), imageFile("b.jpg")));
 
         postService.create(CustomUserPrincipal.from(user), request);
@@ -278,37 +230,51 @@ class PostServiceTest {
     }
 
     @Test
-    void createMultipartStoresExternalLinkForLinkOnlyPost() {
+    void bookmarkDoesNothingWhenAlreadyBookmarked() {
         UUID userId = UUID.randomUUID();
         UUID postId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
-        PostDetailResponse response = postDetailResponse(postId);
+        Post post = savedPost(postId, user);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.save(any(Post.class))).thenAnswer(invocation -> {
-            Post post = invocation.getArgument(0);
-            ReflectionTestUtils.setField(post, "id", postId);
-            return post;
-        });
-        when(postResponseAssembler.toPostDetail(any(Post.class), any(UUID.class))).thenReturn(response);
-        when(externalLinkMetadataService.fetch("https://example.com/article"))
-                .thenReturn(new ExternalLinkMetadataService.ExternalLinkMetadata(
-                        "https://example.com/article",
-                        "example.com",
-                        "example.com",
-                        "https://example.com/article",
-                        null
-                ));
+        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        when(postBookmarkRepository.existsByPostIdAndUserId(postId, userId)).thenReturn(true);
 
-        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
-        request.setContent("link post");
-        request.setExternalLinkUrl("https://example.com/article");
+        postService.bookmark(CustomUserPrincipal.from(user), postId);
 
-        postService.create(CustomUserPrincipal.from(user), request);
+        verify(postBookmarkRepository, never()).save(any(PostBookmark.class));
+    }
 
-        ArgumentCaptor<PostExternalLink> linkCaptor = ArgumentCaptor.forClass(PostExternalLink.class);
-        verify(postExternalLinkRepository).save(linkCaptor.capture());
-        assertThat(linkCaptor.getValue().getOriginalUrl()).isEqualTo("https://example.com/article");
+    @Test
+    void bookmarkStoresWhenMissing() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        Post post = savedPost(postId, user);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        when(postBookmarkRepository.existsByPostIdAndUserId(postId, userId)).thenReturn(false);
+
+        postService.bookmark(CustomUserPrincipal.from(user), postId);
+
+        verify(postBookmarkRepository).save(any(PostBookmark.class));
+    }
+
+    @Test
+    void shareStoresEventAndIncreasesShareCount() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        Post post = savedPost(postId, user);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+
+        postService.share(CustomUserPrincipal.from(user), postId, new CreateShareRequest(ShareTarget.KAKAO));
+
+        verify(postShareRepository).save(any(PostShare.class));
+        assertThat(post.getShareCount()).isEqualTo(1);
     }
 
     private PostDetailResponse postDetailResponse(UUID postId) {
@@ -318,13 +284,12 @@ class PostServiceTest {
                 "tester",
                 null,
                 false,
-                "GENERAL",
                 null,
                 List.of(),
-                null,
                 0,
                 0,
                 0,
+                false,
                 false,
                 true,
                 null
@@ -335,6 +300,12 @@ class PostServiceTest {
         User user = User.createLocal(handle + "@example.com", handle, nickname, "encoded-password");
         ReflectionTestUtils.setField(user, "id", id);
         return user;
+    }
+
+    private Post savedPost(UUID id, User author) {
+        Post post = Post.create(author, "post");
+        ReflectionTestUtils.setField(post, "id", id);
+        return post;
     }
 
     private MockMultipartFile imageFile(String name) {

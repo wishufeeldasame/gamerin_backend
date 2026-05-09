@@ -10,8 +10,8 @@ import java.util.UUID;
 
 import org.springframework.stereotype.Repository;
 
-import com.gamerin.backend.domain.post.dto.response.TrendingGameResponse;
 import com.gamerin.backend.domain.post.entity.Post;
+import com.gamerin.backend.domain.post.entity.PostBookmark;
 import com.gamerin.backend.domain.post.entity.PostMedia;
 
 import jakarta.persistence.EntityManager;
@@ -23,15 +23,18 @@ public class PostQueryRepositoryImpl implements PostQueryRepository {
     private final EntityManager entityManager;
     private final PostRepository postRepository;
     private final PostMediaRepository postMediaRepository;
+    private final PostBookmarkRepository postBookmarkRepository;
 
     public PostQueryRepositoryImpl(
             EntityManager entityManager,
             PostRepository postRepository,
-            PostMediaRepository postMediaRepository
+            PostMediaRepository postMediaRepository,
+            PostBookmarkRepository postBookmarkRepository
     ) {
         this.entityManager = entityManager;
         this.postRepository = postRepository;
         this.postMediaRepository = postMediaRepository;
+        this.postBookmarkRepository = postBookmarkRepository;
     }
 
     @Override
@@ -122,26 +125,25 @@ public class PostQueryRepositoryImpl implements PostQueryRepository {
     }
 
     @Override
-    public List<TrendingGameResponse> findTrendingGames(int days, int limit) {
-        @SuppressWarnings("unchecked")
-        List<Object[]> rows = entityManager.createNativeQuery("""
-                select p.game_name, count(p.id)
-                from posts p
-                where p.deleted_at is null
-                  and p.game_name is not null
-                  and p.game_name <> ''
-                  and p.created_at >= now() - (:days * interval '1 day')
-                group by p.game_name
-                order by count(p.id) desc, p.game_name asc
-                limit :limit
-                """)
-                .setParameter("days", days)
-                .setParameter("limit", limit)
-                .getResultList();
+    public List<PostBookmark> findBookmarkedPosts(UUID userId, String cursor, int limit) {
+        BookmarkCursor bookmarkCursor = BookmarkCursor.parse(cursor);
+        StringBuilder sql = new StringBuilder("""
+            select pb.id
+            from post_bookmarks pb
+            join posts p on p.id = pb.post_id
+            where pb.user_id = :userId
+              and p.deleted_at is null
+            """);
 
-        return rows.stream()
-                .map(row -> new TrendingGameResponse((String) row[0], ((Number) row[1]).longValue()))
-                .toList();
+        appendBookmarkCursor(sql, bookmarkCursor);
+        sql.append(" order by pb.created_at desc, pb.id desc limit :limit");
+
+        Query query = entityManager.createNativeQuery(sql.toString());
+        query.setParameter("userId", userId);
+        bindBookmarkCursor(query, bookmarkCursor);
+        query.setParameter("limit", limit);
+
+        return reorderBookmarks(castUuidList(query.getResultList()));
     }
 
     private void appendPostCursor(StringBuilder sql, PostCursor cursor) {
@@ -190,6 +192,27 @@ public class PostQueryRepositoryImpl implements PostQueryRepository {
         query.setParameter("cursorMediaId", cursor.mediaId());
     }
 
+    private void appendBookmarkCursor(StringBuilder sql, BookmarkCursor cursor) {
+        if (cursor == null) {
+            return;
+        }
+
+        sql.append("""
+            and (
+                pb.created_at < :cursorCreatedAt
+                or (pb.created_at = :cursorCreatedAt and pb.id < :cursorBookmarkId)
+            )
+            """);
+    }
+
+    private void bindBookmarkCursor(Query query, BookmarkCursor cursor) {
+        if (cursor == null) {
+            return;
+        }
+        query.setParameter("cursorCreatedAt", Timestamp.from(cursor.createdAt().toInstant()));
+        query.setParameter("cursorBookmarkId", cursor.bookmarkId());
+    }
+
     private List<Post> reorderPosts(List<UUID> ids) {
         if (ids.isEmpty()) {
             return List.of();
@@ -218,6 +241,21 @@ public class PostQueryRepositoryImpl implements PostQueryRepository {
         List<PostMedia> media = new ArrayList<>(postMediaRepository.findAllById(ids));
         media.sort((left, right) -> Integer.compare(order.get(left.getId()), order.get(right.getId())));
         return media;
+    }
+
+    private List<PostBookmark> reorderBookmarks(List<UUID> ids) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+
+        Map<UUID, Integer> order = new HashMap<>();
+        for (int index = 0; index < ids.size(); index++) {
+            order.put(ids.get(index), index);
+        }
+
+        List<PostBookmark> bookmarks = new ArrayList<>(postBookmarkRepository.findAllById(ids));
+        bookmarks.sort((left, right) -> Integer.compare(order.get(left.getId()), order.get(right.getId())));
+        return bookmarks;
     }
 
     private List<UUID> castUuidList(List<?> rows) {
@@ -263,6 +301,21 @@ public class PostQueryRepositoryImpl implements PostQueryRepository {
                     Integer.parseInt(values[2]),
                     UUID.fromString(values[3])
             );
+        }
+    }
+
+    private record BookmarkCursor(OffsetDateTime createdAt, UUID bookmarkId) {
+        private static BookmarkCursor parse(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+
+            String[] values = raw.split("\\|");
+            if (values.length != 2) {
+                return null;
+            }
+
+            return new BookmarkCursor(OffsetDateTime.parse(values[0]), UUID.fromString(values[1]));
         }
     }
 }

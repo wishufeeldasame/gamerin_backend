@@ -1,7 +1,6 @@
 package com.gamerin.backend.domain.post.service;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -13,23 +12,26 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
-import com.gamerin.backend.domain.post.dto.request.CreateExternalLinkRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
-import com.gamerin.backend.domain.post.dto.request.CreatePostMediaRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
+import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
+import com.gamerin.backend.domain.post.dto.response.ShareResponse;
 import com.gamerin.backend.domain.post.entity.Post;
+import com.gamerin.backend.domain.post.entity.PostBookmark;
 import com.gamerin.backend.domain.post.entity.PostComment;
-import com.gamerin.backend.domain.post.entity.PostExternalLink;
 import com.gamerin.backend.domain.post.entity.PostLike;
 import com.gamerin.backend.domain.post.entity.PostMedia;
+import com.gamerin.backend.domain.post.entity.PostShare;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
+import com.gamerin.backend.domain.post.entity.ShareTarget;
+import com.gamerin.backend.domain.post.repository.PostBookmarkRepository;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
-import com.gamerin.backend.domain.post.repository.PostExternalLinkRepository;
 import com.gamerin.backend.domain.post.repository.PostLikeRepository;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
+import com.gamerin.backend.domain.post.repository.PostShareRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -40,69 +42,52 @@ public class PostService {
 
     private static final int MAX_IMAGE_COUNT = 4;
     private static final int MAX_VIDEO_COUNT = 1;
+    private static final long MAX_VIDEO_FILE_SIZE_BYTES = 500L * 1024L * 1024L;
+    private static final double MAX_VIDEO_DURATION_SECONDS = 120.0;
 
     private final UserRepository userRepository;
     private final PostRepository postRepository;
     private final PostMediaRepository postMediaRepository;
-    private final PostExternalLinkRepository postExternalLinkRepository;
     private final PostLikeRepository postLikeRepository;
+    private final PostBookmarkRepository postBookmarkRepository;
     private final PostCommentRepository postCommentRepository;
+    private final PostShareRepository postShareRepository;
     private final PostResponseAssembler postResponseAssembler;
     private final MediaStorageService mediaStorageService;
-    private final ExternalLinkMetadataService externalLinkMetadataService;
+    private final VideoMetadataService videoMetadataService;
 
     public PostService(
             UserRepository userRepository,
             PostRepository postRepository,
             PostMediaRepository postMediaRepository,
-            PostExternalLinkRepository postExternalLinkRepository,
             PostLikeRepository postLikeRepository,
+            PostBookmarkRepository postBookmarkRepository,
             PostCommentRepository postCommentRepository,
+            PostShareRepository postShareRepository,
             PostResponseAssembler postResponseAssembler,
             MediaStorageService mediaStorageService,
-            ExternalLinkMetadataService externalLinkMetadataService
+            VideoMetadataService videoMetadataService
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
         this.postMediaRepository = postMediaRepository;
-        this.postExternalLinkRepository = postExternalLinkRepository;
         this.postLikeRepository = postLikeRepository;
+        this.postBookmarkRepository = postBookmarkRepository;
         this.postCommentRepository = postCommentRepository;
+        this.postShareRepository = postShareRepository;
         this.postResponseAssembler = postResponseAssembler;
         this.mediaStorageService = mediaStorageService;
-        this.externalLinkMetadataService = externalLinkMetadataService;
+        this.videoMetadataService = videoMetadataService;
     }
 
     public PostDetailResponse create(CustomUserPrincipal principal, CreatePostRequest request) {
         User user = getCurrentUser(principal);
         String content = normalizeContent(request.content());
-        List<CreatePostMediaRequest> mediaRequests = normalizeMediaRequests(request.media());
-        CreateExternalLinkRequest externalLink = normalizeExternalLink(request.externalLink());
 
-        validateCreateRequest(content, mediaRequests, externalLink);
+        validateCreateRequest(content);
 
-        Post post = Post.create(user, normalizeGameName(request.gameName()), content);
+        Post post = Post.create(user, content);
         Post savedPost = postRepository.save(post);
-
-        if (!mediaRequests.isEmpty()) {
-            List<PostMedia> mediaToSave = new ArrayList<>();
-            for (int index = 0; index < mediaRequests.size(); index++) {
-                CreatePostMediaRequest mediaRequest = mediaRequests.get(index);
-                mediaToSave.add(PostMedia.create(
-                        savedPost,
-                        mediaRequest.mediaType(),
-                        mediaRequest.mediaUrl().trim(),
-                        normalizeOptionalText(mediaRequest.thumbnailUrl()),
-                        mediaRequest.sortOrder() != null ? mediaRequest.sortOrder() : index,
-                        mediaRequest.durationSeconds()
-                ));
-            }
-            postMediaRepository.saveAll(mediaToSave);
-        }
-
-        if (externalLink != null) {
-            saveExternalLink(savedPost, externalLink.url());
-        }
 
         return postResponseAssembler.toPostDetail(savedPost, user.getId());
     }
@@ -112,19 +97,14 @@ public class PostService {
         String content = normalizeContent(request.getContent());
         List<MultipartFile> mediaFiles = normalizeMultipartFiles(request.getMediaFiles());
         MultipartFile thumbnailFile = normalizeMultipartFile(request.getThumbnailFile());
-        String externalLinkUrl = normalizeOptionalText(request.getExternalLinkUrl());
 
-        validateMultipartCreateRequest(content, mediaFiles, thumbnailFile, request.getDurationSeconds(), externalLinkUrl);
+        validateMultipartCreateRequest(content, mediaFiles, thumbnailFile);
 
-        Post post = Post.create(user, normalizeGameName(request.getGameName()), content);
+        Post post = Post.create(user, content);
         Post savedPost = postRepository.save(post);
 
         if (!mediaFiles.isEmpty()) {
-            saveUploadedMedia(savedPost, mediaFiles, thumbnailFile, request.getDurationSeconds());
-        }
-
-        if (externalLinkUrl != null) {
-            saveExternalLink(savedPost, externalLinkUrl);
+            saveUploadedMedia(savedPost, mediaFiles, thumbnailFile);
         }
 
         return postResponseAssembler.toPostDetail(savedPost, user.getId());
@@ -160,6 +140,36 @@ public class PostService {
                 });
     }
 
+    public void bookmark(CustomUserPrincipal principal, UUID postId) {
+        User user = getCurrentUser(principal);
+        Post post = getActivePost(postId);
+
+        if (postBookmarkRepository.existsByPostIdAndUserId(postId, user.getId())) {
+            return;
+        }
+
+        postBookmarkRepository.save(PostBookmark.create(post, user));
+    }
+
+    public void unbookmark(CustomUserPrincipal principal, UUID postId) {
+        User user = getCurrentUser(principal);
+        getActivePost(postId);
+
+        postBookmarkRepository.findByPostIdAndUserId(postId, user.getId())
+                .ifPresent(postBookmarkRepository::delete);
+    }
+
+    public ShareResponse share(CustomUserPrincipal principal, UUID postId, CreateShareRequest request) {
+        User user = getCurrentUser(principal);
+        Post post = getActivePost(postId);
+        ShareTarget target = request != null ? request.normalizedTarget() : ShareTarget.COPY_LINK;
+
+        postShareRepository.save(PostShare.create(post, user, target));
+        post.increaseShareCount();
+
+        return new ShareResponse(post.getId(), post.getShareCount());
+    }
+
     public CommentResponse createComment(CustomUserPrincipal principal, UUID postId, CreateCommentRequest request) {
         User user = getCurrentUser(principal);
         Post post = getActivePost(postId);
@@ -177,8 +187,7 @@ public class PostService {
     private void saveUploadedMedia(
             Post post,
             List<MultipartFile> mediaFiles,
-            MultipartFile thumbnailFile,
-            Integer durationSeconds
+            MultipartFile thumbnailFile
     ) {
         List<MediaStorageService.StoredFile> storedFiles = new ArrayList<>();
 
@@ -199,8 +208,7 @@ public class PostService {
                         mediaType,
                         storedMedia.publicUrl(),
                         storedThumbnail != null ? storedThumbnail.publicUrl() : null,
-                        index,
-                        mediaType == PostMediaType.VIDEO ? durationSeconds : null
+                        index
                 ));
             }
 
@@ -214,91 +222,24 @@ public class PostService {
         }
     }
 
-    private void saveExternalLink(Post post, String url) {
-        ExternalLinkMetadataService.ExternalLinkMetadata metadata = externalLinkMetadataService.fetch(url);
-        postExternalLinkRepository.save(PostExternalLink.create(
-                post,
-                metadata.url(),
-                metadata.host(),
-                metadata.title(),
-                metadata.description(),
-                metadata.thumbnailUrl()
-        ));
-    }
-
-    private void validateCreateRequest(
-            String content,
-            List<CreatePostMediaRequest> mediaRequests,
-            CreateExternalLinkRequest externalLink
-    ) {
-        if (content == null && mediaRequests.isEmpty() && externalLink == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Content, media, or external link is required.");
-        }
-
-        if (!mediaRequests.isEmpty() && externalLink != null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Uploaded media and external link cannot be used together.");
-        }
-
-        long imageCount = mediaRequests.stream()
-                .filter(media -> media.mediaType() == PostMediaType.IMAGE)
-                .count();
-        long videoCount = mediaRequests.stream()
-                .filter(media -> media.mediaType() == PostMediaType.VIDEO)
-                .count();
-
-        if (imageCount > 0 && videoCount > 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Images and videos cannot be uploaded together.");
-        }
-        if (imageCount > MAX_IMAGE_COUNT) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "You can upload up to 4 images.");
-        }
-        if (videoCount > MAX_VIDEO_COUNT) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "You can upload only one video.");
-        }
-
-        for (CreatePostMediaRequest mediaRequest : mediaRequests) {
-            if (mediaRequest.mediaType() == null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Media type is required.");
-            }
-            if (mediaRequest.mediaType() == PostMediaType.VIDEO && isBlank(mediaRequest.thumbnailUrl())) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video uploads require a thumbnail URL.");
-            }
-            if (mediaRequest.durationSeconds() != null && mediaRequest.durationSeconds() < 0) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duration seconds cannot be negative.");
-            }
+    private void validateCreateRequest(String content) {
+        if (content == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Content is required.");
         }
     }
 
     private void validateMultipartCreateRequest(
             String content,
             List<MultipartFile> mediaFiles,
-            MultipartFile thumbnailFile,
-            Integer durationSeconds,
-            String externalLinkUrl
+            MultipartFile thumbnailFile
     ) {
-        if (content == null && mediaFiles.isEmpty() && externalLinkUrl == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Content, media, or external link is required.");
-        }
-
-        if (!mediaFiles.isEmpty() && externalLinkUrl != null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Uploaded media and external link cannot be used together.");
-        }
-
-        if (externalLinkUrl != null) {
-            if (thumbnailFile != null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thumbnail file is only allowed for video uploads.");
-            }
-            if (durationSeconds != null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duration seconds is only allowed for video uploads.");
-            }
+        if (content == null && mediaFiles.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Content or media is required.");
         }
 
         if (mediaFiles.isEmpty()) {
             if (thumbnailFile != null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thumbnail file requires a video upload.");
-            }
-            if (durationSeconds != null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duration seconds requires a video upload.");
             }
             return;
         }
@@ -325,34 +266,26 @@ public class PostService {
         }
 
         if (videoCount == 1) {
-            if (thumbnailFile == null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video uploads require a thumbnail file.");
-            }
-            if (resolveMediaType(thumbnailFile) != PostMediaType.IMAGE) {
+            if (thumbnailFile != null && resolveMediaType(thumbnailFile) != PostMediaType.IMAGE) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video thumbnail must be an image file.");
             }
-            if (durationSeconds == null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video uploads require duration seconds.");
-            }
+            validateVideoConstraints(mediaFiles.getFirst());
         } else {
             if (thumbnailFile != null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thumbnail file is only allowed for video uploads.");
             }
-            if (durationSeconds != null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duration seconds is only allowed for video uploads.");
-            }
         }
     }
 
-    private List<CreatePostMediaRequest> normalizeMediaRequests(List<CreatePostMediaRequest> mediaRequests) {
-        if (mediaRequests == null || mediaRequests.isEmpty()) {
-            return List.of();
+    private void validateVideoConstraints(MultipartFile videoFile) {
+        if (videoFile.getSize() > MAX_VIDEO_FILE_SIZE_BYTES) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video file must be 500MB or smaller.");
         }
 
-        return mediaRequests.stream()
-                .filter(media -> media != null && !isBlank(media.mediaUrl()))
-                .sorted(Comparator.comparing(request -> request.sortOrder() != null ? request.sortOrder() : Integer.MAX_VALUE))
-                .toList();
+        double videoLengthSeconds = videoMetadataService.readDurationSeconds(videoFile);
+        if (videoLengthSeconds > MAX_VIDEO_DURATION_SECONDS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video duration must be 2 minutes or shorter.");
+        }
     }
 
     private List<MultipartFile> normalizeMultipartFiles(List<MultipartFile> mediaFiles) {
@@ -370,13 +303,6 @@ public class PostService {
             return null;
         }
         return file;
-    }
-
-    private CreateExternalLinkRequest normalizeExternalLink(CreateExternalLinkRequest externalLink) {
-        if (externalLink == null || isBlank(externalLink.url())) {
-            return null;
-        }
-        return new CreateExternalLinkRequest(externalLink.url().trim());
     }
 
     private PostMediaType resolveMediaType(MultipartFile file) {
@@ -421,11 +347,6 @@ public class PostService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
     }
 
-    private String normalizeGameName(String gameName) {
-        String normalized = normalizeOptionalText(gameName);
-        return normalized == null ? "GENERAL" : normalized;
-    }
-
     private String normalizeContent(String content) {
         String normalized = normalizeOptionalText(content);
         return normalized == null || normalized.isBlank() ? null : normalized;
@@ -437,9 +358,5 @@ public class PostService {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
-    }
-
-    private boolean isBlank(String value) {
-        return value == null || value.trim().isEmpty();
     }
 }

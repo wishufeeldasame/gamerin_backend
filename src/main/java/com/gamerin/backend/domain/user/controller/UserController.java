@@ -39,6 +39,15 @@ public class UserController {
         return ApiResponse.ok(response);
     }
 
+    @GetMapping("/me/bookmarks")
+    public ApiResponse<CursorPageResponse<PostCardResponse>> getMyBookmarks(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return ApiResponse.ok(feedService.getMyBookmarks(principal, cursor, size));
+    }
+
     @GetMapping("/{handle}")
     public ApiResponse<UserProfileResponse> getProfile(@PathVariable String handle) {
         return ApiResponse.ok(userService.getProfile(handle));
