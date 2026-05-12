@@ -4,6 +4,8 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+import org.springframework.data.domain.Persistable;
+
 import com.gamerin.backend.domain.user.entity.User;
 
 import jakarta.persistence.Column;
@@ -15,13 +17,15 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.MapsId;
 import jakarta.persistence.OneToOne;
+import jakarta.persistence.PostLoad;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 
 @Entity
 @Table(name = "mentor_profiles")
-public class MentorProfile {
+public class MentorProfile implements Persistable<UUID> {
     
     @Id
     private UUID userId;
@@ -50,12 +54,40 @@ public class MentorProfile {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
+    // 여기 부터 
+    @Transient
+    private boolean isNew = true; // 새로운 엔티티임을 표시
+
+    @Override
+    public UUID getId() {
+        return userId;
+    }
+
+    @Override
+    public boolean isNew() {
+        return isNew;
+    }  
+
+    @PostLoad
+    protected void markNotNew() {
+        this.isNew = false; // 저장된 후나 DB에서 로드된 후에는 새 데이터가 아님을 표시
+    }
+
     @PrePersist
-    protected void onCreate() {
+    protected void onPrePersist() {
+        this.isNew = false;
+
         OffsetDateTime now = OffsetDateTime.now();
         this.createdAt = now;
         this.updatedAt = now;
     }
+    // 여기 까지 테스트 임시 
+    // @PrePersist
+    // protected void onCreate() {
+    //     OffsetDateTime now = OffsetDateTime.now();
+    //     this.createdAt = now;
+    //     this.updatedAt = now;
+    // }
 
     @PreUpdate
     protected void onUpdate() {
