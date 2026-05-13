@@ -83,8 +83,6 @@ public class JwtTokenProvider {
                     .parseSignedClaims(token);
             return true;
         } catch (Exception e) {
-            // 테스트 후 지울것
-            System.out.println("JWT Validation Failed: " + e.getMessage());
             return false;
         }
     }
