@@ -1,8 +1,13 @@
 package com.gamerin.backend.domain.mentoring.controller;
 
+import java.util.UUID;
+
+import org.springdoc.core.annotations.ParameterObject;
+
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
 import com.gamerin.backend.domain.mentoring.dto.response.MentorProfileResponse;
+import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramDetailResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramResponse;
 import com.gamerin.backend.domain.mentoring.service.MentoringService;
 import com.gamerin.backend.global.response.ApiResponse;
@@ -18,6 +23,13 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
+import org.springframework.data.domain.Sort;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 
 
 @Tag(name = "Mentoring", description = "멘토링 관련 API")
@@ -50,5 +62,20 @@ public class MentoringController {
         return ApiResponse.ok(mentoringService.registerProgram(principal, request));
     }
     
+    @Operation(summary = "멘토링 프로그램 목록 조회", description = "전체 또는 특정 게임의 멘토링 프로그램 목록을 조회(페이징 지원)")
+    @GetMapping("/programs")
+    public ApiResponse<Page<MentoringProgramResponse>> getPrograms(
+        @RequestParam(required = false) String gameName,
+        @ParameterObject @PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
+    ) {
+        return ApiResponse.ok(mentoringService.getPrograms(gameName, pageable));
+    }
+
+    @Operation(summary = "멘토링 프로그램 상세 조회", description = "특정 멘토링 프로그램의 상세 정보를 조회")
+    @GetMapping("/programs/{id}")
+    public ApiResponse<MentoringProgramDetailResponse> getProgramDetail(@PathVariable UUID id) {
+        return ApiResponse.ok(mentoringService.getProgramDetail(id));
+    }
+
     
 }

@@ -2,11 +2,16 @@ package com.gamerin.backend.domain.mentoring.service;
 
 import org.springframework.stereotype.Service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
+import java.util.UUID;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
 import com.gamerin.backend.domain.mentoring.dto.response.MentorProfileResponse;
+import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramDetailResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramResponse;
 import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
 import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
@@ -16,7 +21,7 @@ import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
-import jakarta.transaction.Transactional;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class MentoringService {
@@ -78,6 +83,26 @@ public class MentoringService {
         // 저장 및 응답 변환
         MentoringProgram savedProgram = mentoringProgramRepository.save(program);
         return MentoringProgramResponse.from(savedProgram);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<MentoringProgramResponse> getPrograms(String gameName, Pageable pageable) {
+        Page<MentoringProgram> programs;
+
+        if (gameName != null && !gameName.isBlank()) {
+            programs = mentoringProgramRepository.findByGameName(gameName, pageable);
+        } else {
+            programs = mentoringProgramRepository.findAll(pageable);
+        }
+        
+        return programs.map(MentoringProgramResponse::from);
+    }
+
+    @Transactional(readOnly = true)
+    public MentoringProgramDetailResponse getProgramDetail(UUID id) {
+        MentoringProgram program = mentoringProgramRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("프로그램을 찾을 수 없습니다."));
+        return MentoringProgramDetailResponse.from(program);
     }
     
 }
