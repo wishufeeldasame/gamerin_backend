@@ -6,6 +6,7 @@ import org.springdoc.core.annotations.ParameterObject;
 
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
+import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramUpdateRequest;
 import com.gamerin.backend.domain.mentoring.dto.response.MentorProfileResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramDetailResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramResponse;
@@ -30,6 +31,9 @@ import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 
 
 @Tag(name = "Mentoring", description = "멘토링 관련 API")
@@ -77,5 +81,24 @@ public class MentoringController {
         return ApiResponse.ok(mentoringService.getProgramDetail(id));
     }
 
+    @Operation(summary = "멘토링 프로그램 수정", description = "자신이 등록한 멘토링 상품 정보를 수정")
+    @PatchMapping("/programs/{id}")
+    public ApiResponse<MentoringProgramResponse> updateProgram(
+        @AuthenticationPrincipal CustomUserPrincipal principal,
+        @PathVariable UUID id,
+        @Valid @RequestBody MentoringProgramUpdateRequest request
+    ) {
+        return ApiResponse.ok(mentoringService.updateProgram(principal, id, request));
+    }
+
+    @Operation(summary = "멘토링 프로그램 삭제", description = "자신이 등록한 멘토링 상품을 삭제")
+    @DeleteMapping("/programs/{id}")
+    public ApiResponse<Void> deleteProgram(
+        @AuthenticationPrincipal CustomUserPrincipal principal,
+        @PathVariable UUID id
+    ) {
+        mentoringService.deleteProgram(principal, id);
+        return ApiResponse.ok(null);
+    }
     
 }

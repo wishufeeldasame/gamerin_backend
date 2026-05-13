@@ -8,6 +8,7 @@ import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
 
 public record MentoringProgramDetailResponse(
     UUID id,
+    UUID mentorId,
     String mentorNickname,
     String mentorAbout,
     String gameName,
@@ -22,6 +23,7 @@ public record MentoringProgramDetailResponse(
     public static MentoringProgramDetailResponse from(MentoringProgram program) {
         return new MentoringProgramDetailResponse(
             program.getId(),
+            program.getMentor().getId(),
             program.getMentor().getUser().getNickname(),
             program.getMentor().getAbout(),
             program.getGameName(),

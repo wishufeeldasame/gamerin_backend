@@ -10,6 +10,7 @@ import org.springframework.data.domain.Pageable;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
+import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramUpdateRequest;
 import com.gamerin.backend.domain.mentoring.dto.response.MentorProfileResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramDetailResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramResponse;
@@ -104,5 +105,44 @@ public class MentoringService {
                 .orElseThrow(() -> new RuntimeException("프로그램을 찾을 수 없습니다."));
         return MentoringProgramDetailResponse.from(program);
     }
+
+    @Transactional
+    public MentoringProgramResponse updateProgram(CustomUserPrincipal principal, UUID programId, MentoringProgramUpdateRequest request) {
+        // 프로그램 존재 여부 확인
+        MentoringProgram program = mentoringProgramRepository.findById(programId)
+                .orElseThrow(() -> new RuntimeException("프로그램을 찾을 수 없습니다."));
+
+        // 권한 확인 (프로그램의 멘토 ID와 현재 접속 유저 ID 비교)
+        if (!program.getMentor().getId().equals(principal.getUserId())) {
+            throw new RuntimeException("해당 프로그램을 수정할 권한이 없습니다.");
+        }
+
+        // 필드 업데이트
+        program.setTitle(request.title());
+        program.setContent(request.content());
+        program.setAvailableTimeDesc(request.availableTimeDesc());    
+        program.setPrice(request.price());
+        program.setStatus(request.status());
+        program.setTags(request.tags());
+
+        return MentoringProgramResponse.from(program);
+
+    }
+
+    @Transactional
+    public void deleteProgram(CustomUserPrincipal principal, UUID programId) {
+        // 프로그램 존재 여부 확인
+        MentoringProgram program = mentoringProgramRepository.findById(programId)
+                .orElseThrow(() -> new RuntimeException("프로그램을 찾을 수 없습니다."));
+
+        // 권한 확인
+        if (!program.getMentor().getId().equals(principal.getUserId())) {
+            throw new RuntimeException("해당 프로그램을 삭제할 권한이 없습니다.");
+        }
+
+        // 삭제 처리
+        mentoringProgramRepository.delete(program);
+    }
+
     
 }
