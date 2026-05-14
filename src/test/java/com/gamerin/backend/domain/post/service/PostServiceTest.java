@@ -79,6 +79,9 @@ class PostServiceTest {
     @Mock
     private VideoMetadataService videoMetadataService;
 
+    @Mock
+    private MediaUploadSecurityService mediaUploadSecurityService;
+
     private PostService postService;
 
     @BeforeEach
@@ -93,7 +96,8 @@ class PostServiceTest {
                 postShareRepository,
                 postResponseAssembler,
                 mediaStorageService,
-                videoMetadataService
+                videoMetadataService,
+                mediaUploadSecurityService
         );
     }
 
@@ -130,7 +134,7 @@ class PostServiceTest {
         });
         when(postResponseAssembler.toPostDetail(any(Post.class), any(UUID.class))).thenReturn(response);
         when(videoMetadataService.readDurationSeconds(any())).thenReturn(119.0);
-        when(mediaStorageService.storePostMedia(any()))
+        when(mediaStorageService.storePostMedia(any(MultipartFile.class)))
                 .thenReturn(new MediaStorageService.StoredFile(
                         Path.of("uploads/post-media/video.mp4"),
                         "http://localhost:8080/uploads/post-media/video.mp4"
@@ -208,7 +212,10 @@ class PostServiceTest {
             return post;
         });
         when(postResponseAssembler.toPostDetail(any(Post.class), any(UUID.class))).thenReturn(response);
-        when(mediaStorageService.storePostMedia(any()))
+        when(mediaUploadSecurityService.prepareImage(any(MultipartFile.class)))
+                .thenReturn(preparedImage())
+                .thenReturn(preparedImage());
+        when(mediaStorageService.storePostMedia(any(MediaStorageService.PreparedMediaFile.class)))
                 .thenReturn(new MediaStorageService.StoredFile(Path.of("uploads/post-media/a.jpg"), "http://localhost:8080/uploads/post-media/a.jpg"))
                 .thenReturn(new MediaStorageService.StoredFile(Path.of("uploads/post-media/b.jpg"), "http://localhost:8080/uploads/post-media/b.jpg"));
 
@@ -314,5 +321,9 @@ class PostServiceTest {
 
     private MockMultipartFile videoFile() {
         return new MockMultipartFile("mediaFiles", "video.mp4", "video/mp4", "video".getBytes());
+    }
+
+    private MediaStorageService.PreparedMediaFile preparedImage() {
+        return new MediaStorageService.PreparedMediaFile("compressed-image".getBytes(), ".jpg");
     }
 }
