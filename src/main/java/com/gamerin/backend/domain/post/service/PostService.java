@@ -26,6 +26,7 @@ import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.entity.PostShare;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
 import com.gamerin.backend.domain.post.entity.ShareTarget;
+import com.gamerin.backend.domain.post.moderation.ContentModerationService;
 import com.gamerin.backend.domain.post.repository.PostBookmarkRepository;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostLikeRepository;
@@ -55,6 +56,7 @@ public class PostService {
     private final PostResponseAssembler postResponseAssembler;
     private final MediaStorageService mediaStorageService;
     private final VideoMetadataService videoMetadataService;
+    private final ContentModerationService contentModerationService;
 
     public PostService(
             UserRepository userRepository,
@@ -66,7 +68,8 @@ public class PostService {
             PostShareRepository postShareRepository,
             PostResponseAssembler postResponseAssembler,
             MediaStorageService mediaStorageService,
-            VideoMetadataService videoMetadataService
+            VideoMetadataService videoMetadataService,
+            ContentModerationService contentModerationService
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -78,6 +81,7 @@ public class PostService {
         this.postResponseAssembler = postResponseAssembler;
         this.mediaStorageService = mediaStorageService;
         this.videoMetadataService = videoMetadataService;
+        this.contentModerationService = contentModerationService;
     }
 
     public PostDetailResponse create(CustomUserPrincipal principal, CreatePostRequest request) {
@@ -85,6 +89,7 @@ public class PostService {
         String content = normalizeContent(request.content());
 
         validateCreateRequest(content);
+        contentModerationService.assertTextAllowed(content);
 
         Post post = Post.create(user, content);
         Post savedPost = postRepository.save(post);
@@ -99,6 +104,7 @@ public class PostService {
         MultipartFile thumbnailFile = normalizeMultipartFile(request.getThumbnailFile());
 
         validateMultipartCreateRequest(content, mediaFiles, thumbnailFile);
+        contentModerationService.assertPostAllowed(content, mediaFiles);
 
         Post post = Post.create(user, content);
         Post savedPost = postRepository.save(post);
@@ -178,6 +184,7 @@ public class PostService {
         if (content == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Comment content is required.");
         }
+        contentModerationService.assertTextAllowed(content);
 
         PostComment savedComment = postCommentRepository.save(PostComment.create(post, user, content));
         post.increaseCommentCount();

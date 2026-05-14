@@ -3,6 +3,9 @@ package com.gamerin.backend.domain.post.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -36,6 +39,7 @@ import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
 import com.gamerin.backend.domain.post.entity.PostShare;
 import com.gamerin.backend.domain.post.entity.ShareTarget;
+import com.gamerin.backend.domain.post.moderation.ContentModerationService;
 import com.gamerin.backend.domain.post.repository.PostBookmarkRepository;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostLikeRepository;
@@ -79,6 +83,9 @@ class PostServiceTest {
     @Mock
     private VideoMetadataService videoMetadataService;
 
+    @Mock
+    private ContentModerationService contentModerationService;
+
     private PostService postService;
 
     @BeforeEach
@@ -93,7 +100,8 @@ class PostServiceTest {
                 postShareRepository,
                 postResponseAssembler,
                 mediaStorageService,
-                videoMetadataService
+                videoMetadataService,
+                contentModerationService
         );
     }
 
@@ -111,6 +119,27 @@ class PostServiceTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
                 .isEqualTo(HttpStatus.BAD_REQUEST.value());
+
+        verify(postRepository, never()).save(any(Post.class));
+    }
+
+    @Test
+    void createRejectsWhenTextModerationFlagsContent() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: violence"))
+                .when(contentModerationService)
+                .assertTextAllowed("bad post");
+
+        assertThatThrownBy(() -> postService.create(
+                CustomUserPrincipal.from(user),
+                new CreatePostRequest(" bad post ")
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
 
         verify(postRepository, never()).save(any(Post.class));
     }
@@ -195,6 +224,29 @@ class PostServiceTest {
     }
 
     @Test
+    void createMultipartRejectsWhenModerationFlagsMediaBeforeStorage() throws Exception {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: sexual"))
+                .when(contentModerationService)
+                .assertPostAllowed(eq("image post"), anyList());
+
+        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
+        request.setContent(" image post ");
+        request.setMediaFiles(List.of(imageFile("a.jpg")));
+
+        assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
+
+        verify(postRepository, never()).save(any(Post.class));
+        verify(mediaStorageService, never()).storePostMedia(any());
+    }
+
+    @Test
     void createMultipartStoresUploadedImages() throws Exception {
         UUID userId = UUID.randomUUID();
         UUID postId = UUID.randomUUID();
@@ -275,6 +327,31 @@ class PostServiceTest {
 
         verify(postShareRepository).save(any(PostShare.class));
         assertThat(post.getShareCount()).isEqualTo(1);
+    }
+
+    @Test
+    void createCommentRejectsWhenTextModerationFlagsContent() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        Post post = savedPost(postId, user);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: harassment"))
+                .when(contentModerationService)
+                .assertTextAllowed("bad comment");
+
+        assertThatThrownBy(() -> postService.createComment(
+                CustomUserPrincipal.from(user),
+                postId,
+                new CreateCommentRequest(" bad comment ")
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
+
+        verify(postCommentRepository, never()).save(any());
     }
 
     private PostDetailResponse postDetailResponse(UUID postId) {

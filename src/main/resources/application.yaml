@@ -36,3 +36,11 @@ app:
   auth:
     password-reset:
       expiration-minutes: 30
+
+openai:
+  api:
+    key: ${OPENAI_API_KEY:}
+  moderation:
+    enabled: true
+    model: omni-moderation-latest
+    ffmpeg-path: ffmpeg

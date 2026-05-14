@@ -65,3 +65,11 @@ app:
 pubg:
   api:
     key: "여기에_PUBG_API_KEY"
+
+openai:
+  api:
+    key: ${OPENAI_API_KEY:}
+  moderation:
+    enabled: true
+    model: omni-moderation-latest
+    ffmpeg-path: ffmpeg
