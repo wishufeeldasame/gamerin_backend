@@ -67,6 +67,15 @@ public class MentoringService {
         // 유저 엔티티 조회
         User user = userRepository.findById(principal.getUserId())
                 .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
+
+        
+        // 멘토 등록 시 마일리지 지갑 생성 확인
+        if (!mileageWalletRepository.existsById(user.getId())) {
+            MileageWallet wallet = new MileageWallet();
+            wallet.setUser(user);
+            wallet.setBalance(0L);
+            mileageWalletRepository.save(wallet);
+        }
         
 
         // 멘토 프로필 생성 및 저장
@@ -250,11 +259,74 @@ public class MentoringService {
         application.setPaymentStatus(PaymentStatus.REFUNDED);
 
         // 마일리지 환불
-        MileageWallet wallet = mileageWalletRepository.findById(application.getMentee().getId())
-                .orElseThrow(() -> new RuntimeException("멘티의 마일리지 지갑을 찾을 수 없습니다."));
+        MileageWallet wallet = getOrCreateWallet(application.getMentee());
         wallet.addBalance(application.getAppliedMileage());
 
         return MentoringApplicationResponse.from(application);
+    }
+
+    // 멘토링 시작 (멘토가 수행)
+    @Transactional
+    public MentoringApplicationResponse startMentoring(CustomUserPrincipal principal, UUID applicationId) {
+        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
+                .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
+
+        // 권한 확인: 해당 프로그램의 멘토만 시작 가능
+        if (!application.getProgram().getMentor().getId().equals(principal.getUserId())) {
+            throw new RuntimeException("해당 멘토링을 시작할 권한이 없습니다.");
+        }
+
+        // 상태 확인: 수락된 상태(ACCEPTED)에서만 시작 가능
+        if (application.getStatus() != ApplicationStatus.ACCEPTED) {
+            throw new RuntimeException("수락된 신청 건만 시작할 수 있습니다.");
+        }
+
+        application.setStatus(ApplicationStatus.ONGOING);
+        return MentoringApplicationResponse.from(application);
+    }
+
+    // 멘토링 완료 확정 및 정산 (멘티가 수행)
+    @Transactional
+    public MentoringApplicationResponse completeMentoring(CustomUserPrincipal principal, UUID applicationId) {
+        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
+                .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
+
+        // 권한 확인: 신청한 멘티만 완료 확정 가능
+        if (!application.getMentee().getId().equals(principal.getUserId())) {
+            throw new RuntimeException("해당 멘토링을 완료 확정할 권한이 없습니다.");
+        }
+
+        // 상태 확인: 진행 중(ONGOING)인 상태에서만 완료 가능
+        if (application.getStatus() != ApplicationStatus.ONGOING) {
+            throw new RuntimeException("진행 중인 멘토링만 완료 확정할 수 있습니다.");
+        }
+
+        // 상태 변경
+        application.setStatus(ApplicationStatus.COMPLETED);
+        application.setPaymentStatus(PaymentStatus.SETTLED);
+        application.setCompletedAt(java.time.OffsetDateTime.now());
+
+        // 멘토에게 마일리지 입금,정산
+        MentorProfile mentorProfile = application.getProgram().getMentor();
+        MileageWallet mentorWallet = getOrCreateWallet(mentorProfile.getUser());
+
+        mentorWallet.addBalance(application.getAppliedMileage());
+
+        // 멘토 통계 업데이트 : 누적 멘티 수 증가
+        mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
+
+        return MentoringApplicationResponse.from(application);
+
+    }
+
+    private MileageWallet getOrCreateWallet(User user) {
+        return mileageWalletRepository.findById(user.getId())
+                .orElseGet(() -> {
+                    MileageWallet newWallet = new MileageWallet();
+                    newWallet.setUser(user);
+                    newWallet.setBalance(0L);
+                    return mileageWalletRepository.save(newWallet);
+                });
     }
 
 

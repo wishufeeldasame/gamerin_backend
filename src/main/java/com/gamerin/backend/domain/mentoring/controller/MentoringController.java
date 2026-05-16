@@ -147,5 +147,22 @@ public class MentoringController {
         return ApiResponse.ok(mentoringService.rejectApplication(principal, id));
     }
 
+    @Operation(summary = "멘토링 시작", description = "멘토가 수락된 멘토링을 시작 (상태: ONGOING)")
+    @PatchMapping("/applications/{id}/start")
+    public ApiResponse<MentoringApplicationResponse> startMentoring(
+        @AuthenticationPrincipal CustomUserPrincipal principal,
+        @PathVariable UUID id
+    ) {
+        return ApiResponse.ok(mentoringService.startMentoring(principal, id));
+    }
+
+    @Operation(summary = "멘토링 완료 확정", description = "멘티가 멘토링 완료를 확정하고 멘토에게 마일리지를 지급 (상태: COMPLETED, 정산 완료)")
+    @PatchMapping("/applications/{id}/complete")
+    public ApiResponse<MentoringApplicationResponse> completeMentoring(
+        @AuthenticationPrincipal CustomUserPrincipal principal,
+        @PathVariable UUID id
+    ) {
+        return ApiResponse.ok(mentoringService.completeMentoring(principal, id));
+    }
     
 }
