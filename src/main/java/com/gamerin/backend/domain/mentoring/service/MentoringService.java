@@ -2,6 +2,8 @@ package com.gamerin.backend.domain.mentoring.service;
 
 import org.springframework.stereotype.Service;
 
+import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.data.domain.Page;
@@ -285,6 +287,25 @@ public class MentoringService {
         return MentoringApplicationResponse.from(application);
     }
 
+    // 멘토가 수업 완료를 선언 (정산 대기 상태로 진입)
+    @Transactional
+    public MentoringApplicationResponse finishMentoring(CustomUserPrincipal principal, UUID applicationId) {
+        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
+                .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
+
+        if (!application.getProgram().getMentor().getId().equals(principal.getUserId())) {
+            throw new RuntimeException("해당 권한이 없습니다.");
+        }
+
+        if (application.getStatus() != ApplicationStatus.ONGOING) {
+            throw new RuntimeException("진행 중인 멘토링만 완료 보고를 할 수 있습니다.");
+        }
+
+        application.setStatus(ApplicationStatus.FINISHED);
+
+        return MentoringApplicationResponse.from(application);
+    }
+
     // 멘토링 완료 확정 및 정산 (멘티가 수행)
     @Transactional
     public MentoringApplicationResponse completeMentoring(CustomUserPrincipal principal, UUID applicationId) {
@@ -317,6 +338,38 @@ public class MentoringService {
 
         return MentoringApplicationResponse.from(application);
 
+    }
+
+    // 자동 정산 대상 처리
+    @Transactional
+    public void processAutoSettlement() {
+        
+        OffsetDateTime threshold = OffsetDateTime.now().minusDays(7);
+        List<MentoringApplication> targets = mentoringApplicationRepository.findByStatusAndUpdatedAtBefore(ApplicationStatus.FINISHED, threshold);
+
+        for (MentoringApplication application : targets) {
+            try {
+                // 기존 완료 로직 수행
+                application.setStatus(ApplicationStatus.COMPLETED);
+                application.setPaymentStatus(PaymentStatus.SETTLED);
+                application.setCompletedAt(OffsetDateTime.now());
+
+                // 멘토 정산
+                MentorProfile mentorProfile = application.getProgram().getMentor();
+                MileageWallet mentorWallet = getOrCreateWallet(mentorProfile.getUser());
+                mentorWallet.addBalance(application.getAppliedMileage());
+
+                // 통계 업데이트
+                mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
+
+                System.out.println("자동 정산 완료: " + application.getId());
+
+            } catch (Exception e) {
+                System.err.println("자동 정산 실패 (ID: " + application.getId() + "): " + e.getMessage());
+            }
+        }
+
+        
     }
 
     private MileageWallet getOrCreateWallet(User user) {

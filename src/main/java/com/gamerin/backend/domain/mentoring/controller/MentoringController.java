@@ -164,5 +164,15 @@ public class MentoringController {
     ) {
         return ApiResponse.ok(mentoringService.completeMentoring(principal, id));
     }
+
+    @Operation(summary = "멘토의 수업 완료 보고", description = "멘토가 모든 수업을 마쳤음을 선언 (상태: FINISHED)")
+    @PatchMapping("/applications/{id}/finish")
+    public ApiResponse<MentoringApplicationResponse> finishMentoring(
+        @AuthenticationPrincipal CustomUserPrincipal principal,
+        @PathVariable UUID id
+    ) {
+        return ApiResponse.ok(mentoringService.finishMentoring(principal, id));
+    }
+
     
 }
