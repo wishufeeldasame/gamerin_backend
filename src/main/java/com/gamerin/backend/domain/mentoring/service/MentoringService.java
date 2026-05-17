@@ -2,6 +2,8 @@ package com.gamerin.backend.domain.mentoring.service;
 
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -14,18 +16,22 @@ import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationReques
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramUpdateRequest;
+import com.gamerin.backend.domain.mentoring.dto.request.MentoringReviewRequest;
 import com.gamerin.backend.domain.mentoring.dto.response.MentorProfileResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringApplicationResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramDetailResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramResponse;
+import com.gamerin.backend.domain.mentoring.dto.response.MentoringReviewResponse;
 import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
+import com.gamerin.backend.domain.mentoring.entity.MentoringReview;
 import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
 import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
+import com.gamerin.backend.domain.mentoring.repository.MentoringReviewRepository;
 import com.gamerin.backend.domain.user.entity.MileageWallet;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.MileageWalletRepository;
@@ -42,6 +48,7 @@ public class MentoringService {
     private final MentoringProgramRepository mentoringProgramRepository;
     private final MentoringApplicationRepository mentoringApplicationRepository;
     private final MileageWalletRepository mileageWalletRepository;
+    private final MentoringReviewRepository mentoringReviewRepository;
     private final ObjectMapper objectMapper;
 
     public MentoringService(
@@ -50,12 +57,14 @@ public class MentoringService {
             MentoringProgramRepository mentoringProgramRepository,
             MentoringApplicationRepository mentoringApplicationRepository,
             MileageWalletRepository mileageWalletRepository,
+            MentoringReviewRepository mentoringReviewRepository,
             ObjectMapper objectMapper) {
         this.mentorProfileRepository = mentorProfileRepository;
         this.userRepository = userRepository;
         this.mentoringProgramRepository = mentoringProgramRepository;
         this.mentoringApplicationRepository = mentoringApplicationRepository;
         this.mileageWalletRepository = mileageWalletRepository;
+        this.mentoringReviewRepository = mentoringReviewRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -89,6 +98,15 @@ public class MentoringService {
 
         return MentorProfileResponse.from(savedProfile);
 
+    }
+
+    // 멘토 프로필 조회
+    @Transactional(readOnly = true)
+    public MentorProfileResponse getMentorProfile(UUID mentorId) {
+        MentorProfile mentorProfile = mentorProfileRepository.findById(mentorId)
+                .orElseThrow(() -> new RuntimeException("해당 멘토를 찾을 수 없습니다."));
+
+        return MentorProfileResponse.from(mentorProfile);
     }
 
     @Transactional
@@ -380,6 +398,68 @@ public class MentoringService {
                     newWallet.setBalance(0L);
                     return mileageWalletRepository.save(newWallet);
                 });
+    }
+
+    // 리뷰 생성
+    @Transactional
+    public MentoringReviewResponse createReview(CustomUserPrincipal principal, MentoringReviewRequest request) {
+        MentoringApplication application = mentoringApplicationRepository.findById(request.applicationId())
+                .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
+        
+
+        // 권한 확인: 해당 멘토링을 신청한 멘티만 작성 가능
+        if (!application.getMentee().getId().equals(principal.getUserId())) {
+            throw new RuntimeException("리뷰를 작성할 권한이 없습니다.");
+        }
+
+        // 상태 확인: 완료(COMPLETED)된 멘토링만 리뷰 작성 가능
+        if (application.getStatus() != ApplicationStatus.COMPLETED) {
+            throw new RuntimeException("완료된 멘토링에 대해서만 리뷰를 남길 수 있습니다.");
+        }
+
+        // 중복 확인: 이미 리뷰를 작성했는지 확인
+        if (mentoringReviewRepository.existsByApplicationId(application.getId())) {
+            throw new RuntimeException("이미 이 멘토링에 대한 리뷰를 작성했습니다.");
+        }
+
+        // 리뷰 엔티티 생성 및 저장
+        MentoringReview review = new MentoringReview();
+        review.setApplication(application);
+        review.setMentor(application.getProgram().getMentor());
+        review.setMentee(application.getMentee());
+        review.setRating(request.rating());
+        review.setContent(request.content());
+
+        MentoringReview savedReview = mentoringReviewRepository.save(review);
+
+        // 멘토 통계 업데이트
+        updateMentorStats(application.getProgram().getMentor(), request.rating());
+
+        return MentoringReviewResponse.from(savedReview);
+    }
+
+    // 멘토 평점 업데이트
+    private void updateMentorStats(MentorProfile mentor, int newRating) {
+        int oldCount = mentor.getReviewCount();
+        BigDecimal oldAvg = mentor.getRatingAvg();
+
+        int newCount = oldCount + 1;
+        // 새로운 평균 = (기존평균 * 기존갯수 + 신규점수) / 신규갯수
+        BigDecimal newAvg = oldAvg.multiply(BigDecimal.valueOf(oldCount))
+                .add(BigDecimal.valueOf(newRating))
+                .divide(BigDecimal.valueOf(newCount), 2, RoundingMode.HALF_UP);
+
+        mentor.setReviewCount(newCount);
+        mentor.setRatingAvg(newAvg);
+
+        mentorProfileRepository.save(mentor);
+
+    }
+
+    // 특정 멘토의 리뷰 목록 조회
+    @Transactional(readOnly = true)
+    public Page<MentoringReviewResponse> getMentorReviews(UUID mentorId, Pageable pageable) {
+        return mentoringReviewRepository.findByMentorUserId(mentorId, pageable).map(MentoringReviewResponse::from);
     }
 
 

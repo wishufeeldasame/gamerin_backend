@@ -8,10 +8,12 @@ import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationReques
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramUpdateRequest;
+import com.gamerin.backend.domain.mentoring.dto.request.MentoringReviewRequest;
 import com.gamerin.backend.domain.mentoring.dto.response.MentorProfileResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringApplicationResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramDetailResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramResponse;
+import com.gamerin.backend.domain.mentoring.dto.response.MentoringReviewResponse;
 import com.gamerin.backend.domain.mentoring.service.MentoringService;
 import com.gamerin.backend.global.response.ApiResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -56,6 +58,14 @@ public class MentoringController {
         @Valid @RequestBody MentorRegistrationRequest request
     ) {
         return ApiResponse.ok(mentoringService.registerMentor(principal, request));
+    }
+
+    @Operation(summary = "멘토 프로필 조회", description = "특정 멘토의 프로필(평점, 리뷰 수 등)을 조회")
+    @GetMapping("/mentors/{mentorId}")
+    public ApiResponse<MentorProfileResponse> getMentorProfile(
+        @PathVariable UUID mentorId
+    ) {
+        return ApiResponse.ok(mentoringService.getMentorProfile(mentorId));
     }
 
     @Operation(summary = "멘토링 프로그램 등록", description = "멘토가 새로운 멘토링 상품을 등록")
@@ -172,6 +182,26 @@ public class MentoringController {
         @PathVariable UUID id
     ) {
         return ApiResponse.ok(mentoringService.finishMentoring(principal, id));
+    }
+
+    @Operation(summary = "리뷰 작성", description = "완료된 멘토링에 대해 리뷰를 작성")
+    @PostMapping("/reviews")
+    public ApiResponse<MentoringReviewResponse> createReview(
+        @AuthenticationPrincipal CustomUserPrincipal principal,
+        @Valid @RequestBody MentoringReviewRequest request
+
+    ) {
+        return ApiResponse.ok(mentoringService.createReview(principal, request));
+    }
+
+    @Operation(summary = "멘토 리뷰 목록 조회", description = "특정 멘토에게 달린 리뷰 목록을 조회")
+    @GetMapping("/mentors/{mentorId}/reviews")
+    public ApiResponse<Page<MentoringReviewResponse>> getMentorReviews(
+        @PathVariable UUID mentorId,
+        @ParameterObject @PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
+
+    ) {
+        return ApiResponse.ok(mentoringService.getMentorReviews(mentorId, pageable));
     }
 
     
