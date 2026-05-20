@@ -55,6 +55,7 @@ public class PostService {
     private final PostResponseAssembler postResponseAssembler;
     private final MediaStorageService mediaStorageService;
     private final VideoMetadataService videoMetadataService;
+    private final MediaUploadSecurityService mediaUploadSecurityService;
 
     public PostService(
             UserRepository userRepository,
@@ -66,7 +67,8 @@ public class PostService {
             PostShareRepository postShareRepository,
             PostResponseAssembler postResponseAssembler,
             MediaStorageService mediaStorageService,
-            VideoMetadataService videoMetadataService
+            VideoMetadataService videoMetadataService,
+            MediaUploadSecurityService mediaUploadSecurityService
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -78,6 +80,7 @@ public class PostService {
         this.postResponseAssembler = postResponseAssembler;
         this.mediaStorageService = mediaStorageService;
         this.videoMetadataService = videoMetadataService;
+        this.mediaUploadSecurityService = mediaUploadSecurityService;
     }
 
     public PostDetailResponse create(CustomUserPrincipal principal, CreatePostRequest request) {
@@ -99,12 +102,13 @@ public class PostService {
         MultipartFile thumbnailFile = normalizeMultipartFile(request.getThumbnailFile());
 
         validateMultipartCreateRequest(content, mediaFiles, thumbnailFile);
+        PreparedMediaUpload preparedMediaUpload = prepareMediaUpload(mediaFiles, thumbnailFile);
 
         Post post = Post.create(user, content);
         Post savedPost = postRepository.save(post);
 
-        if (!mediaFiles.isEmpty()) {
-            saveUploadedMedia(savedPost, mediaFiles, thumbnailFile);
+        if (!preparedMediaUpload.isEmpty()) {
+            saveUploadedMedia(savedPost, preparedMediaUpload);
         }
 
         return postResponseAssembler.toPostDetail(savedPost, user.getId());
@@ -186,26 +190,29 @@ public class PostService {
 
     private void saveUploadedMedia(
             Post post,
-            List<MultipartFile> mediaFiles,
-            MultipartFile thumbnailFile
+            PreparedMediaUpload preparedMediaUpload
     ) {
         List<MediaStorageService.StoredFile> storedFiles = new ArrayList<>();
 
         try {
-            PostMediaType mediaType = resolveMediaType(mediaFiles.getFirst());
             MediaStorageService.StoredFile storedThumbnail = null;
-            if (mediaType == PostMediaType.VIDEO && thumbnailFile != null) {
-                storedThumbnail = mediaStorageService.storePostMedia(thumbnailFile);
+            if (preparedMediaUpload.preparedThumbnailFile() != null) {
+                storedThumbnail = mediaStorageService.storePostMedia(preparedMediaUpload.preparedThumbnailFile());
                 storedFiles.add(storedThumbnail);
             }
 
             List<PostMedia> mediaToSave = new ArrayList<>();
-            for (int index = 0; index < mediaFiles.size(); index++) {
-                MediaStorageService.StoredFile storedMedia = mediaStorageService.storePostMedia(mediaFiles.get(index));
+            for (int index = 0; index < preparedMediaUpload.mediaCount(); index++) {
+                MediaStorageService.StoredFile storedMedia;
+                if (preparedMediaUpload.mediaType() == PostMediaType.IMAGE) {
+                    storedMedia = mediaStorageService.storePostMedia(preparedMediaUpload.preparedImageFiles().get(index));
+                } else {
+                    storedMedia = mediaStorageService.storePostMedia(preparedMediaUpload.videoFiles().get(index));
+                }
                 storedFiles.add(storedMedia);
                 mediaToSave.add(PostMedia.create(
                         post,
-                        mediaType,
+                        preparedMediaUpload.mediaType(),
                         storedMedia.publicUrl(),
                         storedThumbnail != null ? storedThumbnail.publicUrl() : null,
                         index
@@ -220,6 +227,25 @@ public class PostService {
             }
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to upload media files.", ex);
         }
+    }
+
+    private PreparedMediaUpload prepareMediaUpload(List<MultipartFile> mediaFiles, MultipartFile thumbnailFile) {
+        if (mediaFiles.isEmpty()) {
+            return PreparedMediaUpload.empty();
+        }
+
+        PostMediaType mediaType = resolveMediaType(mediaFiles.getFirst());
+        if (mediaType == PostMediaType.IMAGE) {
+            List<MediaStorageService.PreparedMediaFile> preparedImageFiles = mediaFiles.stream()
+                    .map(mediaUploadSecurityService::prepareImage)
+                    .toList();
+            return new PreparedMediaUpload(mediaType, preparedImageFiles, List.of(), null);
+        }
+
+        MediaStorageService.PreparedMediaFile preparedThumbnailFile = thumbnailFile == null
+                ? null
+                : mediaUploadSecurityService.prepareImage(thumbnailFile);
+        return new PreparedMediaUpload(mediaType, List.of(), mediaFiles, preparedThumbnailFile);
     }
 
     private void validateCreateRequest(String content) {
@@ -250,6 +276,7 @@ public class PostService {
             PostMediaType mediaType = resolveMediaType(mediaFile);
             if (mediaType == PostMediaType.IMAGE) {
                 imageCount++;
+                mediaUploadSecurityService.assertImageFileSafe(mediaFile);
             } else if (mediaType == PostMediaType.VIDEO) {
                 videoCount++;
             }
@@ -269,6 +296,9 @@ public class PostService {
             if (thumbnailFile != null && resolveMediaType(thumbnailFile) != PostMediaType.IMAGE) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video thumbnail must be an image file.");
             }
+            if (thumbnailFile != null) {
+                mediaUploadSecurityService.assertImageFileSafe(thumbnailFile);
+            }
             validateVideoConstraints(mediaFiles.getFirst());
         } else {
             if (thumbnailFile != null) {
@@ -281,6 +311,8 @@ public class PostService {
         if (videoFile.getSize() > MAX_VIDEO_FILE_SIZE_BYTES) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video file must be 500MB or smaller.");
         }
+
+        mediaUploadSecurityService.assertVideoFileSafe(videoFile);
 
         double videoLengthSeconds = videoMetadataService.readDurationSeconds(videoFile);
         if (videoLengthSeconds > MAX_VIDEO_DURATION_SECONDS) {
@@ -324,7 +356,7 @@ public class PostService {
                     || normalized.endsWith(".gif") || normalized.endsWith(".webp")) {
                 return PostMediaType.IMAGE;
             }
-            if (normalized.endsWith(".mp4") || normalized.endsWith(".mov") || normalized.endsWith(".webm")
+            if (normalized.endsWith(".mp4") || normalized.endsWith(".mov")
                     || normalized.endsWith(".m4v")) {
                 return PostMediaType.VIDEO;
             }
@@ -358,5 +390,25 @@ public class PostService {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private record PreparedMediaUpload(
+            PostMediaType mediaType,
+            List<MediaStorageService.PreparedMediaFile> preparedImageFiles,
+            List<MultipartFile> videoFiles,
+            MediaStorageService.PreparedMediaFile preparedThumbnailFile
+    ) {
+
+        private static PreparedMediaUpload empty() {
+            return new PreparedMediaUpload(null, List.of(), List.of(), null);
+        }
+
+        private boolean isEmpty() {
+            return preparedImageFiles.isEmpty() && videoFiles.isEmpty();
+        }
+
+        private int mediaCount() {
+            return mediaType == PostMediaType.IMAGE ? preparedImageFiles.size() : videoFiles.size();
+        }
     }
 }
