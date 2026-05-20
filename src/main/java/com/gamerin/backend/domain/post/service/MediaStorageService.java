@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -46,6 +47,25 @@ public class MediaStorageService {
         return new StoredFile(storedPath, publicUrl);
     }
 
+    public StoredFile storePostMedia(PreparedMediaFile file) throws IOException {
+        Path targetDirectory = uploadRoot.resolve(POST_MEDIA_DIRECTORY);
+        Files.createDirectories(targetDirectory);
+
+        String storedName = UUID.randomUUID() + file.extension();
+        Path storedPath = targetDirectory.resolve(storedName).normalize();
+
+        Files.write(storedPath, file.bytes(), StandardOpenOption.CREATE_NEW);
+
+        String publicUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
+                .path("/uploads/")
+                .path(POST_MEDIA_DIRECTORY)
+                .path("/")
+                .path(storedName)
+                .toUriString();
+
+        return new StoredFile(storedPath, publicUrl);
+    }
+
     public void deleteQuietly(StoredFile storedFile) {
         if (storedFile == null) {
             return;
@@ -72,5 +92,17 @@ public class MediaStorageService {
     }
 
     public record StoredFile(Path path, String publicUrl) {
+    }
+
+    public record PreparedMediaFile(byte[] bytes, String extension) {
+
+        public PreparedMediaFile {
+            if (bytes == null || bytes.length == 0) {
+                throw new IllegalArgumentException("Prepared media file bytes are required.");
+            }
+            if (extension == null || extension.isBlank() || !extension.startsWith(".")) {
+                throw new IllegalArgumentException("Prepared media file extension is required.");
+            }
+        }
     }
 }
