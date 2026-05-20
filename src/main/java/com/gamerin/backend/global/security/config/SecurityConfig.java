@@ -17,6 +17,8 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import com.gamerin.backend.global.logging.ApiRequestLoggingFilter;
+import com.gamerin.backend.global.logging.JsonLogContext;
 import com.gamerin.backend.global.security.jwt.JwtAuthenticationFilter;
 import com.gamerin.backend.global.security.oauth2.OAuth2SuccessHandler;
 
@@ -71,11 +73,13 @@ public class SecurityConfig {
                 .exceptionHandling(exception -> exception
                         .defaultAuthenticationEntryPointFor(
                                 (request, response, authException) -> {
+                                    String message = "Authentication is required or the token has expired.";
+                                    JsonLogContext.setFailureReason(request, message);
                                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                                     response.setContentType("application/json;charset=UTF-8");
                                     String jsonResponse = "{"
                                             + "\"success\": false, "
-                                            + "\"message\": \"Authentication is required or the token has expired.\", "
+                                            + "\"message\": \"" + message + "\", "
                                             + "\"data\": null"
                                             + "}";
                                     response.getWriter().write(jsonResponse);
@@ -84,7 +88,8 @@ public class SecurityConfig {
                         )
                 )
                 .oauth2Login(oauth2 -> oauth2.successHandler(oAuth2SuccessHandler))
-                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(new ApiRequestLoggingFilter(), JwtAuthenticationFilter.class);
 
         return http.build();
     }

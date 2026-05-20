@@ -7,8 +7,6 @@ import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
@@ -17,11 +15,10 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.gamerin.backend.global.logging.JsonConsoleLogger;
 
 @Component
 public class OpenAiModerationClient {
-
-    private static final Logger log = LoggerFactory.getLogger(OpenAiModerationClient.class);
 
     private static final String BASE_URL = "https://api.openai.com";
     private static final String DEFAULT_MODEL = "omni-moderation-latest";
@@ -48,6 +45,10 @@ public class OpenAiModerationClient {
 
     public ModerationDecision moderate(List<ModerationInput> inputs) {
         if (!enabled || inputs == null || inputs.isEmpty()) {
+            JsonConsoleLogger.info("moderation.openai.skipped", "success", resolveSkipReason(inputs), Map.of(
+                    "enabled", enabled,
+                    "inputCount", inputs == null ? 0 : inputs.size()
+            ));
             return ModerationDecision.allowed();
         }
 
@@ -104,24 +105,71 @@ public class OpenAiModerationClient {
                     .body(OpenAiModerationResponse.class);
 
             if (response == null || response.results() == null || response.results().isEmpty()) {
+                JsonConsoleLogger.failure("moderation.openai.request", "empty_response", Map.of(
+                        "model", model,
+                        "inputCount", inputs.size()
+                ));
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Moderation response was empty.");
             }
 
-            return ModerationDecision.from(response.results());
+            ModerationDecision decision = ModerationDecision.from(response.results());
+            JsonConsoleLogger.success("moderation.openai.request", Map.of(
+                    "model", model,
+                    "inputCount", inputs.size(),
+                    "flagged", decision.flagged(),
+                    "flaggedCategories", decision.flaggedCategories()
+            ));
+            return decision;
         } catch (HttpClientErrorException.TooManyRequests ex) {
+            JsonConsoleLogger.warnFailure("moderation.openai.request", "rate_limit_exceeded", Map.of(
+                    "model", model,
+                    "inputCount", inputs.size(),
+                    "statusCode", ex.getStatusCode().value()
+            ));
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "OpenAI moderation rate limit exceeded.", ex);
         } catch (HttpClientErrorException.BadRequest ex) {
-            log.warn("OpenAI moderation bad request: {}", ex.getResponseBodyAsString());
+            JsonConsoleLogger.warnFailure("moderation.openai.request", "bad_request", Map.of(
+                    "model", model,
+                    "inputCount", inputs.size(),
+                    "statusCode", ex.getStatusCode().value(),
+                    "responseBody", truncate(ex.getResponseBodyAsString())
+            ));
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "OpenAI moderation request was rejected.", ex);
         } catch (RestClientException ex) {
+            JsonConsoleLogger.failure("moderation.openai.request", "rest_client_exception", Map.of(
+                    "model", model,
+                    "inputCount", inputs.size(),
+                    "exception", ex.getClass().getSimpleName()
+            ));
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to moderate content with OpenAI.", ex);
         }
     }
 
     private void validateApiKeyConfigured() {
         if (!apiKeyConfigured) {
+            JsonConsoleLogger.failure("moderation.openai.config", "api_key_not_configured", Map.of(
+                    "enabled", enabled,
+                    "model", model
+            ));
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "OpenAI API key is not configured.");
         }
+    }
+
+    private String resolveSkipReason(List<ModerationInput> inputs) {
+        if (!enabled) {
+            return "moderation_disabled";
+        }
+        return inputs == null || inputs.isEmpty() ? "empty_input" : "unknown";
+    }
+
+    private String truncate(String value) {
+        if (value == null) {
+            return "";
+        }
+        if (value.length() <= 500) {
+            return value;
+        }
+        return value.substring(0, 500) + "...";
     }
 
     public record ModerationInput(String type, String text, String imageDataUrl) {
