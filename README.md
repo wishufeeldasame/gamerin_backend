@@ -57,3 +57,9 @@ gamerin DB 생성
   > JWT 자체는 유효하지만 DB에 해당 사용자가 더 이상 없을 때 `UsernameNotFoundException`을 잡아 `SecurityContext`를 비우도록 변경. 즉, 예전에는 이런 경우 필터에서 비정상 흐름이 날 수 있었는데, 지금은 “미인증 사용자”로 안전하게 처리  
   > refresh 요청이 `401`일 때 `Set-Cookie`로 refresh cookie가 `Max-Age=0`으로 지워지는 테스트 코드 추가  
   > 정상 JWT + 정상 사용자면 인증이 세팅되는지, JWT는 유효하지만 사용자가 없으면 인증이 비워지는지를 검증하는 테스트 코드 추가됨 
+
+- **26/05/20** 서장호
+
+  > OpenAI Moderation API를 통한 게시물 이미지/텍스트/동영상 검열 추가  
+  > 동영상은 시작 중간 끝 프레임 이미지 추출하여 API를 통해 검열함  
+  > 검열 정책 1차 수정  

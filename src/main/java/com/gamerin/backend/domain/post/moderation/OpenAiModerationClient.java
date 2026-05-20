@@ -7,6 +7,8 @@ import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
@@ -18,6 +20,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 @Component
 public class OpenAiModerationClient {
+
+    private static final Logger log = LoggerFactory.getLogger(OpenAiModerationClient.class);
 
     private static final String BASE_URL = "https://api.openai.com";
     private static final String DEFAULT_MODEL = "omni-moderation-latest";
@@ -49,6 +53,42 @@ public class OpenAiModerationClient {
 
         validateApiKeyConfigured();
 
+        for (List<ModerationInput> requestInputs : splitRequestsByImageLimit(inputs)) {
+            ModerationDecision decision = moderateSingleRequest(requestInputs);
+            if (decision.flagged()) {
+                return decision;
+            }
+        }
+
+        return ModerationDecision.allowed();
+    }
+
+    static List<List<ModerationInput>> splitRequestsByImageLimit(List<ModerationInput> inputs) {
+        List<ModerationInput> normalizedInputs = inputs.stream()
+                .filter(input -> input != null)
+                .toList();
+        List<ModerationInput> imageInputs = normalizedInputs.stream()
+                .filter(ModerationInput::isImage)
+                .toList();
+
+        if (imageInputs.size() <= 1) {
+            return normalizedInputs.isEmpty() ? List.of() : List.of(normalizedInputs);
+        }
+
+        List<ModerationInput> nonImageInputs = normalizedInputs.stream()
+                .filter(input -> !input.isImage())
+                .toList();
+
+        List<List<ModerationInput>> requests = new ArrayList<>();
+        for (ModerationInput imageInput : imageInputs) {
+            List<ModerationInput> requestInputs = new ArrayList<>(nonImageInputs);
+            requestInputs.add(imageInput);
+            requests.add(List.copyOf(requestInputs));
+        }
+        return List.copyOf(requests);
+    }
+
+    private ModerationDecision moderateSingleRequest(List<ModerationInput> inputs) {
         List<Map<String, Object>> requestInputs = inputs.stream()
                 .map(ModerationInput::toRequestBody)
                 .toList();
@@ -71,6 +111,7 @@ public class OpenAiModerationClient {
         } catch (HttpClientErrorException.TooManyRequests ex) {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "OpenAI moderation rate limit exceeded.", ex);
         } catch (HttpClientErrorException.BadRequest ex) {
+            log.warn("OpenAI moderation bad request: {}", ex.getResponseBodyAsString());
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "OpenAI moderation request was rejected.", ex);
         } catch (RestClientException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to moderate content with OpenAI.", ex);
@@ -91,6 +132,10 @@ public class OpenAiModerationClient {
 
         public static ModerationInput image(String imageDataUrl) {
             return new ModerationInput("image_url", null, imageDataUrl);
+        }
+
+        private boolean isImage() {
+            return "image_url".equals(type);
         }
 
         private Map<String, Object> toRequestBody() {

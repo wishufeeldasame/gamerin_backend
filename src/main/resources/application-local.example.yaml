@@ -40,19 +40,21 @@ spring:
       mail:
         smtp:
           auth: true
+          connectiontimeout: 5000
           timeout: 5000
+          writetimeout: 5000
           starttls:
             enable: true
 
 app:
+  mail:
+    from-address: no-reply@example.com
   cors:
     allowed-origins:
       - http://localhost:3000
   frontend:
     base-url: http://localhost:3000
     password-reset-path: /auth/reset-password
-  mail:
-    from-address: no-reply@example.com
   auth:
     jwt:
       secret: "여기에_충분히_긴_랜덤_문자열_또는_base64_secret"

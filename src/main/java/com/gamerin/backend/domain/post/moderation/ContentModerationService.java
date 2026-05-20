@@ -3,6 +3,7 @@ package com.gamerin.backend.domain.post.moderation;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -15,6 +16,26 @@ import com.gamerin.backend.domain.post.moderation.OpenAiModerationClient.Moderat
 
 @Service
 public class ContentModerationService {
+
+    // Gameplay violence is expected in a gaming feed; graphic violence remains blocked below.
+    private static final Set<String> ALLOWED_GAMEPLAY_CATEGORIES = Set.of(
+            "violence"
+    );
+
+    private static final Set<String> BLOCKED_CATEGORIES = Set.of(
+            "harassment",
+            "harassment/threatening",
+            "hate",
+            "hate/threatening",
+            "illicit",
+            "illicit/violent",
+            "self-harm",
+            "self-harm/intent",
+            "self-harm/instructions",
+            "sexual",
+            "sexual/minors",
+            "violence/graphic"
+    );
 
     private final OpenAiModerationClient openAiModerationClient;
     private final ImageModerationPreprocessor imageModerationPreprocessor;
@@ -75,13 +96,40 @@ public class ContentModerationService {
             return;
         }
 
-        String categories = decision.flaggedCategories().isEmpty()
-                ? "unknown"
-                : String.join(", ", decision.flaggedCategories());
+        if (decision.flaggedCategories().isEmpty()) {
+            throwModerationRejection("unknown");
+        }
+
+        List<String> blockedCategories = decision.flaggedCategories()
+                .stream()
+                .filter(this::isBlockedCategory)
+                .toList();
+        if (blockedCategories.isEmpty()) {
+            boolean onlyAllowedGameplayCategories = decision.flaggedCategories()
+                    .stream()
+                    .allMatch(this::isAllowedGameplayCategory);
+            if (onlyAllowedGameplayCategories) {
+                return;
+            }
+            throwModerationRejection("unknown");
+        }
+
+        throwModerationRejection(String.join(", ", blockedCategories));
+    }
+
+    private void throwModerationRejection(String categories) {
         throw new ResponseStatusException(
                 HttpStatus.UNPROCESSABLE_ENTITY,
                 "Content violates moderation policy: " + categories
         );
+    }
+
+    private boolean isBlockedCategory(String category) {
+        return BLOCKED_CATEGORIES.contains(category);
+    }
+
+    private boolean isAllowedGameplayCategory(String category) {
+        return ALLOWED_GAMEPLAY_CATEGORIES.contains(category);
     }
 
     private PostMediaType resolveMediaType(MultipartFile file) {
