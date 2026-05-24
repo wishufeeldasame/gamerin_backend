@@ -66,6 +66,25 @@ public class MediaStorageService {
         return new StoredFile(storedPath, publicUrl);
     }
 
+    public StoredFile storePostMedia(PreparedMediaPath file) throws IOException {
+        Path targetDirectory = uploadRoot.resolve(POST_MEDIA_DIRECTORY);
+        Files.createDirectories(targetDirectory);
+
+        String storedName = UUID.randomUUID() + file.extension();
+        Path storedPath = targetDirectory.resolve(storedName).normalize();
+
+        Files.copy(file.path(), storedPath, StandardCopyOption.REPLACE_EXISTING);
+
+        String publicUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
+                .path("/uploads/")
+                .path(POST_MEDIA_DIRECTORY)
+                .path("/")
+                .path(storedName)
+                .toUriString();
+
+        return new StoredFile(storedPath, publicUrl);
+    }
+
     public void deleteQuietly(StoredFile storedFile) {
         if (storedFile == null) {
             return;
@@ -75,6 +94,18 @@ public class MediaStorageService {
             Files.deleteIfExists(storedFile.path());
         } catch (IOException ignored) {
             // Best-effort cleanup for files written before a request fails.
+        }
+    }
+
+    public void deleteQuietly(PreparedMediaPath preparedMediaPath) {
+        if (preparedMediaPath == null) {
+            return;
+        }
+
+        try {
+            Files.deleteIfExists(preparedMediaPath.path());
+        } catch (IOException ignored) {
+            // Best-effort cleanup for temporary prepared media files.
         }
     }
 
@@ -99,6 +130,18 @@ public class MediaStorageService {
         public PreparedMediaFile {
             if (bytes == null || bytes.length == 0) {
                 throw new IllegalArgumentException("Prepared media file bytes are required.");
+            }
+            if (extension == null || extension.isBlank() || !extension.startsWith(".")) {
+                throw new IllegalArgumentException("Prepared media file extension is required.");
+            }
+        }
+    }
+
+    public record PreparedMediaPath(Path path, String extension) {
+
+        public PreparedMediaPath {
+            if (path == null) {
+                throw new IllegalArgumentException("Prepared media file path is required.");
             }
             if (extension == null || extension.isBlank() || !extension.startsWith(".")) {
                 throw new IllegalArgumentException("Prepared media file extension is required.");

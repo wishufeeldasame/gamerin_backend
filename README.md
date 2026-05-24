@@ -68,3 +68,13 @@ gamerin DB 생성
   > 기존 비밀번호 재설정 링크 출력 로그와 OpenAI Moderation 경고 로그를 JSON 형식 이벤트 로그로 변경  
   > 인증 실패 및 주요 요청 오류의 실패 사유가 JSON 로그에 기록되도록 예외 처리 로직 보강  
   > Hibernate SQL 원문 콘솔 출력을 막기 위해 `spring.jpa.show-sql` 설정 비활성화  
+
+- **26/05/24** 서장호  
+
+  > 동영상 저장 전 FFmpeg로 빠른 MP4 최적화(stream copy, faststart, metadata 제거)를 먼저 시도하고, 실패 시 1080p 품질 기준의 H.264 변환을 수행하도록 변경  
+  > 최적화된 동영상 임시 파일을 저장할 수 있도록 MediaStorageService에 PreparedMediaPath 저장 흐름 추가  
+  > 경량 보안 스캔 추가: 실행 파일 헤더, EICAR 테스트 시그니처 차단  
+  > 텍스트 입력에 위험 마크업과 제어문자 차단 로직 추가  
+  > 이미지/썸네일/동영상 모두 저장 전 경량 파일 스캔을 거치도록 업로드 흐름 보강  
+  > application.yaml과 프론트 연동 문서에 동영상 최적화 및 업로드 보안 기준 반영  
+  > PostService, 동영상 최적화, 텍스트 보안, 경량 파일 스캔 기능 테스트 코드 추가  

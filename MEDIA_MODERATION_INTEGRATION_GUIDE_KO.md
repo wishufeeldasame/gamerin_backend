@@ -207,7 +207,7 @@ PreparedMediaUpload preparedMediaUpload = prepareMediaUpload(mediaFiles, thumbna
 저장할 파일을 미리 준비한다.
 
 - 이미지는 압축된 JPEG로 준비한다.
-- 동영상은 원본 `MultipartFile`을 유지한다.
+- 동영상은 빠른 MP4 최적화 결과 파일로 준비한다.
 - 썸네일은 압축된 JPEG로 준비한다.
 
 ```java
@@ -322,10 +322,10 @@ saveUploadedMedia
 mediaStorageService.storePostMedia(preparedMediaFile);
 ```
 
-동영상은 기존 원본 파일을 저장한다.
+동영상은 최적화된 임시 파일을 저장한다.
 
 ```java
-mediaStorageService.storePostMedia(videoMultipartFile);
+mediaStorageService.storePostMedia(preparedVideoPath);
 ```
 
 ## 테스트에서 맞춰야 하는 것
@@ -338,6 +338,15 @@ private MediaUploadSecurityService mediaUploadSecurityService;
 
 @Mock
 private ContentModerationService contentModerationService;
+
+@Mock
+private LightweightSecurityScanService lightweightSecurityScanService;
+
+@Mock
+private TextSecurityService textSecurityService;
+
+@Mock
+private VideoOptimizationService videoOptimizationService;
 ```
 
 확인해야 할 테스트:
@@ -346,7 +355,7 @@ private ContentModerationService contentModerationService;
 - 댓글 moderation 실패 시 댓글 저장 안 됨
 - 이미지 moderation 실패 시 게시글 저장 안 됨
 - 이미지 업로드 성공 시 `PreparedMediaFile` 저장
-- 동영상 업로드 성공 시 `MultipartFile` 저장
+- 동영상 업로드 성공 시 `PreparedMediaPath` 저장
 - 썸네일 업로드 성공 시 `PreparedMediaFile` 저장
 
 ## 최종 체크리스트
@@ -359,7 +368,7 @@ private ContentModerationService contentModerationService;
 - 파일 게시글은 파일 보안 검증 후 moderation을 하는가
 - moderation 실패 시 DB 저장이 안 되는가
 - 이미지 저장은 압축된 JPEG로 되는가
-- 동영상 저장은 기존 원본 저장 흐름을 유지하는가
+- 동영상 저장은 빠른 MP4 최적화 결과로 되는가
 - 썸네일은 압축된 JPEG로 저장되는가
 - `PostServiceTest` 생성자가 깨지지 않았는가
 - `application.yaml`에 OpenAI 설정이 유지되어 있는가
@@ -371,4 +380,3 @@ private ContentModerationService contentModerationService;
 그 다음 내용이 유해한지 본다.
 둘 다 통과하면 저장한다.
 ```
-

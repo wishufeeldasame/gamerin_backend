@@ -47,6 +47,12 @@ spring:
             enable: true
 
 app:
+  media:
+    upload-dir: uploads
+    video:
+      optimization:
+        enabled: true
+        ffmpeg-path: /opt/homebrew/bin/ffmpeg
   mail:
     from-address: no-reply@example.com
   cors:
@@ -74,4 +80,4 @@ openai:
   moderation:
     enabled: true
     model: omni-moderation-latest
-    ffmpeg-path: mac: /opt/homebrew/bin/ffmpe linux: /usr/bin/ffmpeg
+    ffmpeg-path: /opt/homebrew/bin/ffmpeg

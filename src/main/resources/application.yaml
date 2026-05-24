@@ -28,6 +28,10 @@ app:
       - http://localhost:3000
   media:
     upload-dir: uploads
+    video:
+      optimization:
+        enabled: true
+        ffmpeg-path: ffmpeg
   frontend:
     base-url: http://localhost:3000
     password-reset-path: /auth/reset-password

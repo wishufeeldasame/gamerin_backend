@@ -89,6 +89,15 @@ class PostServiceTest {
     @Mock
     private MediaUploadSecurityService mediaUploadSecurityService;
 
+    @Mock
+    private LightweightSecurityScanService lightweightSecurityScanService;
+
+    @Mock
+    private TextSecurityService textSecurityService;
+
+    @Mock
+    private VideoOptimizationService videoOptimizationService;
+
     private PostService postService;
 
     @BeforeEach
@@ -105,7 +114,10 @@ class PostServiceTest {
                 mediaStorageService,
                 videoMetadataService,
                 contentModerationService,
-                mediaUploadSecurityService
+                mediaUploadSecurityService,
+                lightweightSecurityScanService,
+                textSecurityService,
+                videoOptimizationService
         );
     }
 
@@ -163,7 +175,9 @@ class PostServiceTest {
         });
         when(postResponseAssembler.toPostDetail(any(Post.class), any(UUID.class))).thenReturn(response);
         when(videoMetadataService.readDurationSeconds(any())).thenReturn(119.0);
-        when(mediaStorageService.storePostMedia(any(MultipartFile.class)))
+        MediaStorageService.PreparedMediaPath preparedVideo = preparedVideo();
+        when(videoOptimizationService.prepareVideo(any(MultipartFile.class))).thenReturn(preparedVideo);
+        when(mediaStorageService.storePostMedia(any(MediaStorageService.PreparedMediaPath.class)))
                 .thenReturn(new MediaStorageService.StoredFile(
                         Path.of("uploads/post-media/video.mp4"),
                         "http://localhost:8080/uploads/post-media/video.mp4"
@@ -182,7 +196,8 @@ class PostServiceTest {
         assertThat(savedMedia.get(0).getMediaType()).isEqualTo(PostMediaType.VIDEO);
         assertThat(savedMedia.get(0).getMediaUrl()).endsWith("/video.mp4");
         assertThat(savedMedia.get(0).getThumbnailUrl()).isNull();
-        verify(mediaStorageService, never()).deleteQuietly(any());
+        verify(mediaStorageService).deleteQuietly(preparedVideo);
+        verify(mediaStorageService, never()).deleteQuietly(any(MediaStorageService.StoredFile.class));
     }
 
     @Test
@@ -249,6 +264,7 @@ class PostServiceTest {
         verify(postRepository, never()).save(any(Post.class));
         verify(mediaStorageService, never()).storePostMedia(any(MultipartFile.class));
         verify(mediaStorageService, never()).storePostMedia(any(MediaStorageService.PreparedMediaFile.class));
+        verify(mediaStorageService, never()).storePostMedia(any(MediaStorageService.PreparedMediaPath.class));
     }
 
     @Test
@@ -286,7 +302,8 @@ class PostServiceTest {
         assertThat(savedMedia.get(0).getMediaType()).isEqualTo(PostMediaType.IMAGE);
         assertThat(savedMedia.get(0).getMediaUrl()).endsWith("/a.jpg");
         assertThat(savedMedia.get(1).getMediaUrl()).endsWith("/b.jpg");
-        verify(mediaStorageService, never()).deleteQuietly(any());
+        verify(mediaStorageService, never()).deleteQuietly(any(MediaStorageService.StoredFile.class));
+        verify(mediaStorageService, never()).deleteQuietly(any(MediaStorageService.PreparedMediaPath.class));
     }
 
     @Test
@@ -403,5 +420,9 @@ class PostServiceTest {
 
     private MediaStorageService.PreparedMediaFile preparedImage() {
         return new MediaStorageService.PreparedMediaFile("compressed-image".getBytes(), ".jpg");
+    }
+
+    private MediaStorageService.PreparedMediaPath preparedVideo() {
+        return new MediaStorageService.PreparedMediaPath(Path.of("tmp/optimized-video.mp4"), ".mp4");
     }
 }

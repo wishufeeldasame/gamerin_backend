@@ -58,6 +58,9 @@ public class PostService {
     private final VideoMetadataService videoMetadataService;
     private final ContentModerationService contentModerationService;
     private final MediaUploadSecurityService mediaUploadSecurityService;
+    private final LightweightSecurityScanService lightweightSecurityScanService;
+    private final TextSecurityService textSecurityService;
+    private final VideoOptimizationService videoOptimizationService;
 
     public PostService(
             UserRepository userRepository,
@@ -71,7 +74,10 @@ public class PostService {
             MediaStorageService mediaStorageService,
             VideoMetadataService videoMetadataService,
             ContentModerationService contentModerationService,
-            MediaUploadSecurityService mediaUploadSecurityService
+            MediaUploadSecurityService mediaUploadSecurityService,
+            LightweightSecurityScanService lightweightSecurityScanService,
+            TextSecurityService textSecurityService,
+            VideoOptimizationService videoOptimizationService
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -85,6 +91,9 @@ public class PostService {
         this.videoMetadataService = videoMetadataService;
         this.contentModerationService = contentModerationService;
         this.mediaUploadSecurityService = mediaUploadSecurityService;
+        this.lightweightSecurityScanService = lightweightSecurityScanService;
+        this.textSecurityService = textSecurityService;
+        this.videoOptimizationService = videoOptimizationService;
     }
 
     public PostDetailResponse create(CustomUserPrincipal principal, CreatePostRequest request) {
@@ -92,6 +101,7 @@ public class PostService {
         String content = normalizeContent(request.content());
 
         validateCreateRequest(content);
+        textSecurityService.assertTextSafe(content);
         contentModerationService.assertTextAllowed(content);
 
         Post post = Post.create(user, content);
@@ -107,17 +117,23 @@ public class PostService {
         MultipartFile thumbnailFile = normalizeMultipartFile(request.getThumbnailFile());
 
         validateMultipartCreateRequest(content, mediaFiles, thumbnailFile);
+        textSecurityService.assertTextSafe(content);
         contentModerationService.assertPostAllowed(content, mediaFiles);
         PreparedMediaUpload preparedMediaUpload = prepareMediaUpload(mediaFiles, thumbnailFile);
 
-        Post post = Post.create(user, content);
-        Post savedPost = postRepository.save(post);
+        try {
+            Post post = Post.create(user, content);
+            Post savedPost = postRepository.save(post);
 
-        if (!preparedMediaUpload.isEmpty()) {
-            saveUploadedMedia(savedPost, preparedMediaUpload);
+            if (!preparedMediaUpload.isEmpty()) {
+                saveUploadedMedia(savedPost, preparedMediaUpload);
+            }
+
+            return postResponseAssembler.toPostDetail(savedPost, user.getId());
+        } catch (RuntimeException ex) {
+            preparedMediaUpload.deleteTemporaryFiles(mediaStorageService);
+            throw ex;
         }
-
-        return postResponseAssembler.toPostDetail(savedPost, user.getId());
     }
 
     @Transactional(readOnly = true)
@@ -188,6 +204,7 @@ public class PostService {
         if (content == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Comment content is required.");
         }
+        textSecurityService.assertTextSafe(content);
         contentModerationService.assertTextAllowed(content);
 
         PostComment savedComment = postCommentRepository.save(PostComment.create(post, user, content));
@@ -214,7 +231,7 @@ public class PostService {
                 if (preparedMediaUpload.mediaType() == PostMediaType.IMAGE) {
                     storedMedia = mediaStorageService.storePostMedia(preparedMediaUpload.preparedImageFiles().get(index));
                 } else {
-                    storedMedia = mediaStorageService.storePostMedia(preparedMediaUpload.videoFiles().get(index));
+                    storedMedia = mediaStorageService.storePostMedia(preparedMediaUpload.preparedVideoFiles().get(index));
                 }
                 storedFiles.add(storedMedia);
                 mediaToSave.add(PostMedia.create(
@@ -233,6 +250,8 @@ public class PostService {
                 throw responseStatusException;
             }
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to upload media files.", ex);
+        } finally {
+            preparedMediaUpload.deleteTemporaryFiles(mediaStorageService);
         }
     }
 
@@ -249,10 +268,13 @@ public class PostService {
             return new PreparedMediaUpload(mediaType, preparedImageFiles, List.of(), null);
         }
 
+        List<MediaStorageService.PreparedMediaPath> preparedVideoFiles = mediaFiles.stream()
+                .map(videoOptimizationService::prepareVideo)
+                .toList();
         MediaStorageService.PreparedMediaFile preparedThumbnailFile = thumbnailFile == null
                 ? null
                 : mediaUploadSecurityService.prepareImage(thumbnailFile);
-        return new PreparedMediaUpload(mediaType, List.of(), mediaFiles, preparedThumbnailFile);
+        return new PreparedMediaUpload(mediaType, List.of(), preparedVideoFiles, preparedThumbnailFile);
     }
 
     private void validateCreateRequest(String content) {
@@ -284,6 +306,7 @@ public class PostService {
             if (mediaType == PostMediaType.IMAGE) {
                 imageCount++;
                 mediaUploadSecurityService.assertImageFileSafe(mediaFile);
+                lightweightSecurityScanService.assertFileClean(mediaFile);
             } else if (mediaType == PostMediaType.VIDEO) {
                 videoCount++;
             }
@@ -305,6 +328,7 @@ public class PostService {
             }
             if (thumbnailFile != null) {
                 mediaUploadSecurityService.assertImageFileSafe(thumbnailFile);
+                lightweightSecurityScanService.assertFileClean(thumbnailFile);
             }
             validateVideoConstraints(mediaFiles.getFirst());
         } else {
@@ -320,6 +344,7 @@ public class PostService {
         }
 
         mediaUploadSecurityService.assertVideoFileSafe(videoFile);
+        lightweightSecurityScanService.assertFileClean(videoFile);
 
         double videoLengthSeconds = videoMetadataService.readDurationSeconds(videoFile);
         if (videoLengthSeconds > MAX_VIDEO_DURATION_SECONDS) {
@@ -402,7 +427,7 @@ public class PostService {
     private record PreparedMediaUpload(
             PostMediaType mediaType,
             List<MediaStorageService.PreparedMediaFile> preparedImageFiles,
-            List<MultipartFile> videoFiles,
+            List<MediaStorageService.PreparedMediaPath> preparedVideoFiles,
             MediaStorageService.PreparedMediaFile preparedThumbnailFile
     ) {
 
@@ -411,11 +436,15 @@ public class PostService {
         }
 
         private boolean isEmpty() {
-            return preparedImageFiles.isEmpty() && videoFiles.isEmpty();
+            return preparedImageFiles.isEmpty() && preparedVideoFiles.isEmpty();
         }
 
         private int mediaCount() {
-            return mediaType == PostMediaType.IMAGE ? preparedImageFiles.size() : videoFiles.size();
+            return mediaType == PostMediaType.IMAGE ? preparedImageFiles.size() : preparedVideoFiles.size();
+        }
+
+        private void deleteTemporaryFiles(MediaStorageService mediaStorageService) {
+            preparedVideoFiles.forEach(mediaStorageService::deleteQuietly);
         }
     }
 }
