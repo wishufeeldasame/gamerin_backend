@@ -151,7 +151,7 @@ public class ContentModerationService {
                     || normalized.endsWith(".gif") || normalized.endsWith(".webp")) {
                 return PostMediaType.IMAGE;
             }
-            if (normalized.endsWith(".mp4") || normalized.endsWith(".mov") || normalized.endsWith(".webm")
+            if (normalized.endsWith(".mp4") || normalized.endsWith(".mov")
                     || normalized.endsWith(".m4v")) {
                 return PostMediaType.VIDEO;
             }
