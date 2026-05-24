@@ -63,10 +63,10 @@ public class MentoringController {
     @Operation(summary = "멘토 프로필 조회", description = "특정 멘토의 프로필(평점, 리뷰 수 등)을 조회")
     @GetMapping("/mentors/{mentorId}")
     public ApiResponse<MentorProfileResponse> getMentorProfile(
-        @PathVariable UUID mentorId
-    ) {
-        return ApiResponse.ok(mentoringService.getMentorProfile(mentorId));
-    }
+    @PathVariable UUID mentorId
+) {
+    return ApiResponse.ok(mentoringService.getMentorProfile(mentorId));
+}
 
     @Operation(summary = "멘토링 프로그램 등록", description = "멘토가 새로운 멘토링 상품을 등록")
     @PostMapping("/programs")
@@ -119,6 +119,15 @@ public class MentoringController {
         @Valid @RequestBody MentoringApplicationRequest request
     ) {
         return ApiResponse.ok(mentoringService.applyToProgram(principal, request));
+    }
+
+    @Operation(summary = "멘토링 신청 취소", description = "멘티가 수락 전인 신청을 취소하고 마일리지를 환불받습니다.")
+    @PatchMapping("/applications/{id}/cancel")
+    public ApiResponse<MentoringApplicationResponse> cancelApplication(
+        @AuthenticationPrincipal CustomUserPrincipal principal,
+        @PathVariable UUID id
+    ) {
+        return ApiResponse.ok(mentoringService.cancelApplication(principal, id));
     }
 
     @Operation(summary = "나의 멘토링 신청 내역 (멘티용)", description = "내가 신청한 멘토링 목록 조회")
