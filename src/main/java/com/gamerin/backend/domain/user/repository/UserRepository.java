@@ -3,6 +3,7 @@ package com.gamerin.backend.domain.user.repository;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -35,5 +36,22 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     boolean existsConnectedPubgPlayerNameByOtherUser(
             @Param("userId") UUID userId,
             @Param("playerName") String playerName
+    );
+
+    @Query("""
+        select u
+        from User u
+        where u.deletedAt is null
+          and u.id <> :viewerId
+          and (
+              lower(u.handle) like lower(concat('%', :keyword, '%'))
+              or lower(u.nickname) like lower(concat('%', :keyword, '%'))
+          )
+        order by u.nickname asc, u.handle asc
+        """)
+    java.util.List<User> searchMessageRecipients(
+            @Param("viewerId") UUID viewerId,
+            @Param("keyword") String keyword,
+            Pageable pageable
     );
 }

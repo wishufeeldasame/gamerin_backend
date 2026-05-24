@@ -5,6 +5,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import com.gamerin.backend.domain.message.entity.MessageParticipant;
 
@@ -16,5 +18,14 @@ public interface MessageParticipantRepository extends JpaRepository<MessageParti
 
     List<MessageParticipant> findByConversationIdAndDeletedAtIsNull(UUID conversationId);
 
-    List<MessageParticipant> findByUserIdAndDeletedAtIsNull(UUID userId);
+    @Query("""
+        select mp
+        from MessageParticipant mp
+        join fetch mp.conversation
+        where mp.user.id = :userId
+          and mp.deletedAt is null
+          and mp.conversation.deletedAt is null
+        order by mp.conversation.updatedAt desc, mp.conversation.id desc
+        """)
+    List<MessageParticipant> findActiveByUserIdWithConversation(@Param("userId") UUID userId);
 }
