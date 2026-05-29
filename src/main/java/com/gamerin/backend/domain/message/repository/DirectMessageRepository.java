@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.message.repository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.domain.Pageable;
@@ -11,6 +12,8 @@ import org.springframework.data.repository.query.Param;
 import com.gamerin.backend.domain.message.entity.DirectMessage;
 
 public interface DirectMessageRepository extends JpaRepository<DirectMessage, UUID> {
+
+    Optional<DirectMessage> findByIdAndConversationIdAndDeletedAtIsNull(UUID id, UUID conversationId);
 
     @Query("""
         select dm

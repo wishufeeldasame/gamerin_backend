@@ -80,6 +80,10 @@ public class DirectMessage {
         this.deletedAt = OffsetDateTime.now();
     }
 
+    public boolean isSentBy(UUID userId) {
+        return this.sender != null && this.sender.getId().equals(userId);
+    }
+
     public UUID getId() {
         return id;
     }

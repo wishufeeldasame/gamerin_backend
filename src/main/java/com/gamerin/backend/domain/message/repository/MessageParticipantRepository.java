@@ -14,7 +14,11 @@ public interface MessageParticipantRepository extends JpaRepository<MessageParti
 
     boolean existsByConversationIdAndUserIdAndDeletedAtIsNull(UUID conversationId, UUID userId);
 
+    Optional<MessageParticipant> findByConversationIdAndUserId(UUID conversationId, UUID userId);
+
     Optional<MessageParticipant> findByConversationIdAndUserIdAndDeletedAtIsNull(UUID conversationId, UUID userId);
+
+    List<MessageParticipant> findByConversationId(UUID conversationId);
 
     List<MessageParticipant> findByConversationIdAndDeletedAtIsNull(UUID conversationId);
 

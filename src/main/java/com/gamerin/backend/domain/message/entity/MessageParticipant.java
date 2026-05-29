@@ -64,6 +64,11 @@ public class MessageParticipant {
         this.deletedAt = OffsetDateTime.now();
     }
 
+    public void reactivate() {
+        this.deletedAt = null;
+        this.lastReadAt = OffsetDateTime.now();
+    }
+
     public UUID getId() {
         return id;
     }

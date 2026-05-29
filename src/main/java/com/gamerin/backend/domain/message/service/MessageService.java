@@ -20,6 +20,7 @@ import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMultipartMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SharePostMessageRequest;
+import com.gamerin.backend.domain.message.dto.request.UpdateMessageRequest;
 import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageRecipientResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageResponse;
@@ -99,7 +100,7 @@ public class MessageService {
         User recipient = getRecipientUser(request.recipientId(), request.recipientHandle(), viewer.getId());
 
         MessageConversation conversation = getOrCreateDirectConversation(viewer, recipient);
-        MessageParticipant viewerParticipant = getParticipant(conversation.getId(), viewer.getId());
+        MessageParticipant viewerParticipant = getOrCreateParticipant(conversation, viewer);
         return toConversationResponse(conversation, viewer.getId(), viewerParticipant);
     }
 
@@ -131,7 +132,7 @@ public class MessageService {
         List<DirectMessage> pageMessages = new ArrayList<>(pageMessagesDesc);
         Collections.reverse(pageMessages);
 
-        List<MessageParticipant> participants = messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(conversationId);
+        List<MessageParticipant> participants = messageParticipantRepository.findByConversationId(conversationId);
         Map<UUID, List<DirectMessageAttachment>> attachmentMap = buildAttachmentMap(pageMessages);
 
         List<MessageResponse> items = pageMessages.stream()
@@ -220,6 +221,51 @@ public class MessageService {
         }
     }
 
+    public MessageResponse updateMessage(
+            CustomUserPrincipal principal,
+            UUID conversationId,
+            UUID messageId,
+            UpdateMessageRequest request
+    ) {
+        User viewer = getCurrentUser(principal);
+        getParticipant(conversationId, viewer.getId());
+
+        DirectMessage message = getActiveMessage(conversationId, messageId);
+        if (!message.isSentBy(viewer.getId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the sender can modify this message.");
+        }
+
+        String content = normalizeContent(request.content());
+        if (content == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message content is required.");
+        }
+
+        message.edit(content);
+        return toMessageResponse(message, viewer.getId());
+    }
+
+    public void deleteMessage(
+            CustomUserPrincipal principal,
+            UUID conversationId,
+            UUID messageId
+    ) {
+        User viewer = getCurrentUser(principal);
+        getParticipant(conversationId, viewer.getId());
+
+        DirectMessage message = getActiveMessage(conversationId, messageId);
+        if (!message.isSentBy(viewer.getId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the sender can delete this message.");
+        }
+
+        message.softDelete();
+    }
+
+    public void leaveConversation(CustomUserPrincipal principal, UUID conversationId) {
+        User viewer = getCurrentUser(principal);
+        MessageParticipant participant = getParticipant(conversationId, viewer.getId());
+        participant.softDelete();
+    }
+
     public void markRead(CustomUserPrincipal principal, UUID conversationId) {
         User viewer = getCurrentUser(principal);
         MessageParticipant participant = getParticipant(conversationId, viewer.getId());
@@ -259,7 +305,7 @@ public class MessageService {
         List<ConversationResponse> responses = new ArrayList<>();
         for (User recipient : recipients) {
             MessageConversation conversation = getOrCreateDirectConversation(viewer, recipient);
-            MessageParticipant viewerParticipant = getParticipant(conversation.getId(), viewer.getId());
+            MessageParticipant viewerParticipant = getOrCreateParticipant(conversation, viewer);
             DirectMessage savedMessage = saveMessage(conversation, viewer, content != null ? content : "", sharedPost);
             viewerParticipant.markRead();
             responses.add(toConversationResponse(conversation, viewer.getId(), viewerParticipant));
@@ -274,6 +320,11 @@ public class MessageService {
 
         String directKey = buildDirectKey(viewer.getId(), recipient.getId());
         return messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(directKey)
+                .map(conversation -> {
+                    getOrCreateParticipant(conversation, viewer);
+                    getOrCreateParticipant(conversation, recipient);
+                    return conversation;
+                })
                 .orElseGet(() -> {
                     MessageConversation conversation =
                             messageConversationRepository.save(MessageConversation.createDirect(directKey));
@@ -281,6 +332,17 @@ public class MessageService {
                     messageParticipantRepository.save(MessageParticipant.create(conversation, recipient));
                     return conversation;
                 });
+    }
+
+    private MessageParticipant getOrCreateParticipant(MessageConversation conversation, User user) {
+        return messageParticipantRepository.findByConversationIdAndUserId(conversation.getId(), user.getId())
+                .map(participant -> {
+                    if (participant.getDeletedAt() != null) {
+                        participant.reactivate();
+                    }
+                    return participant;
+                })
+                .orElseGet(() -> messageParticipantRepository.save(MessageParticipant.create(conversation, user)));
     }
 
     private DirectMessage saveMessage(
@@ -305,7 +367,7 @@ public class MessageService {
             MessageParticipant viewerParticipant
     ) {
         List<MessageParticipant> participants =
-                messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(conversation.getId());
+                messageParticipantRepository.findByConversationId(conversation.getId());
         User recipient = participants.stream()
                 .map(MessageParticipant::getUser)
                 .filter(user -> !user.getId().equals(viewerId))
@@ -338,7 +400,7 @@ public class MessageService {
 
     private MessageResponse toMessageResponse(DirectMessage message, UUID viewerId) {
         List<MessageParticipant> participants =
-                messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(message.getConversation().getId());
+                messageParticipantRepository.findByConversationId(message.getConversation().getId());
         Map<UUID, List<DirectMessageAttachment>> attachmentMap = buildAttachmentMap(List.of(message));
         return messageResponseAssembler.toMessage(
                 message,
@@ -378,6 +440,11 @@ public class MessageService {
     private MessageConversation getActiveConversation(UUID conversationId) {
         return messageConversationRepository.findByIdAndDeletedAtIsNull(conversationId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found."));
+    }
+
+    private DirectMessage getActiveMessage(UUID conversationId, UUID messageId) {
+        return directMessageRepository.findByIdAndConversationIdAndDeletedAtIsNull(messageId, conversationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Message not found."));
     }
 
     private User getCurrentUser(CustomUserPrincipal principal) {

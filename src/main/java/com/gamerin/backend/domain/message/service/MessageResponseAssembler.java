@@ -61,6 +61,7 @@ public class MessageResponseAssembler {
                 mine ? "me" : message.getSender().getId().toString(),
                 message.getContent() != null ? message.getContent() : "",
                 message.getCreatedAt(),
+                message.getEditedAt(),
                 isRead(message, viewerId, participants),
                 "sent",
                 attachments.stream()

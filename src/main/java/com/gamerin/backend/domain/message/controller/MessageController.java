@@ -5,6 +5,7 @@ import java.util.UUID;
 
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -19,6 +20,7 @@ import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMultipartMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SharePostMessageRequest;
+import com.gamerin.backend.domain.message.dto.request.UpdateMessageRequest;
 import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageRecipientResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageResponse;
@@ -88,6 +90,35 @@ public class MessageController {
             @Valid @ModelAttribute SendMultipartMessageRequest request
     ) {
         return ApiResponse.ok(messageService.sendMultipartMessage(principal, conversationId, request));
+    }
+
+    @PatchMapping("/conversations/{conversationId}/messages/{messageId}")
+    public ApiResponse<MessageResponse> updateMessage(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID conversationId,
+            @PathVariable UUID messageId,
+            @Valid @RequestBody UpdateMessageRequest request
+    ) {
+        return ApiResponse.ok(messageService.updateMessage(principal, conversationId, messageId, request));
+    }
+
+    @DeleteMapping("/conversations/{conversationId}/messages/{messageId}")
+    public ApiResponse<Void> deleteMessage(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID conversationId,
+            @PathVariable UUID messageId
+    ) {
+        messageService.deleteMessage(principal, conversationId, messageId);
+        return ApiResponse.ok(null);
+    }
+
+    @DeleteMapping("/conversations/{conversationId}")
+    public ApiResponse<Void> leaveConversation(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID conversationId
+    ) {
+        messageService.leaveConversation(principal, conversationId);
+        return ApiResponse.ok(null);
     }
 
     @PatchMapping("/conversations/{conversationId}/read")
