@@ -18,12 +18,9 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-<<<<<<< HEAD
 import com.fasterxml.jackson.databind.ObjectMapper;
-=======
 import com.gamerin.backend.global.logging.ApiRequestLoggingFilter;
 import com.gamerin.backend.global.logging.JsonLogContext;
->>>>>>> 1633e5245181c70610770bdda8fedff24f56a8f0
 import com.gamerin.backend.global.security.jwt.JwtAuthenticationFilter;
 import com.gamerin.backend.global.security.oauth2.OAuth2SuccessHandler;
 
@@ -85,7 +82,6 @@ public class SecurityConfig {
                                     JsonLogContext.setFailureReason(request, message);
                                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                                     response.setContentType("application/json;charset=UTF-8");
-<<<<<<< HEAD
                                     Map<String, Object> errorResponse = Map.of(
                                             "success", false,
                                             "message", "인증이 필요하거나 토큰이 만료되었습니다."
@@ -94,14 +90,6 @@ public class SecurityConfig {
 
                                     response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
 
-=======
-                                    String jsonResponse = "{"
-                                            + "\"success\": false, "
-                                            + "\"message\": \"" + message + "\", "
-                                            + "\"data\": null"
-                                            + "}";
-                                    response.getWriter().write(jsonResponse);
->>>>>>> 1633e5245181c70610770bdda8fedff24f56a8f0
                                 },
                                 new AntPathRequestMatcher("/api/**")
                         )
