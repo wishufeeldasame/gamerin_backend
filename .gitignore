@@ -7,6 +7,9 @@ build/
 !**/src/test/**/build/
 src/main/resources/application-local.yaml
 uploads/
+.env
+.env.*
+!.env.example
 
 ### STS ###
 .apt_generated
