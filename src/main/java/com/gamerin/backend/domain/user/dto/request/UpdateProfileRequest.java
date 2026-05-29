@@ -12,7 +12,11 @@ public class UpdateProfileRequest {
 
     private String profileImageUrl;
     private String coverImageUrl;
+
+    @Size(max = 100, message = "위치는 100자를 초과할 수 없습니다.")
     private String location;
+    
+    @Size(max = 2048, message = "웹사이트 주소는 2048자를 초과할 수 없습니다.")
     private String website;
 
     public UpdateProfileRequest() {
