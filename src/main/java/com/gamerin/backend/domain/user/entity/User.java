@@ -155,4 +155,10 @@ public class User {
     public void setProfile(UserProfile profile) {
         this.profile = profile;
     }
+
+    public void updateNickname(String nickname) {
+        if (nickname != null && !nickname.isBlank()) {
+            this.nickname = nickname;
+        }
+    }
 }

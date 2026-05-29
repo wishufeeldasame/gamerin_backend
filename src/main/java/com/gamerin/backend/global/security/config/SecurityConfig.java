@@ -1,6 +1,7 @@
 package com.gamerin.backend.global.security.config;
 
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -17,6 +18,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamerin.backend.global.logging.ApiRequestLoggingFilter;
 import com.gamerin.backend.global.logging.JsonLogContext;
 import com.gamerin.backend.global.security.jwt.JwtAuthenticationFilter;
@@ -30,15 +32,18 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final OAuth2SuccessHandler oAuth2SuccessHandler;
+    private final ObjectMapper objectMapper;
     private final List<String> allowedOrigins;
 
     public SecurityConfig(
             JwtAuthenticationFilter jwtAuthenticationFilter,
             OAuth2SuccessHandler oAuth2SuccessHandler,
+            ObjectMapper objectMapper,
             @Value("${app.cors.allowed-origins:http://localhost:3000}") List<String> allowedOrigins
     ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.oAuth2SuccessHandler = oAuth2SuccessHandler;
+        this.objectMapper = objectMapper;
         this.allowedOrigins = allowedOrigins;
     }
 
@@ -77,12 +82,14 @@ public class SecurityConfig {
                                     JsonLogContext.setFailureReason(request, message);
                                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                                     response.setContentType("application/json;charset=UTF-8");
-                                    String jsonResponse = "{"
-                                            + "\"success\": false, "
-                                            + "\"message\": \"" + message + "\", "
-                                            + "\"data\": null"
-                                            + "}";
-                                    response.getWriter().write(jsonResponse);
+                                    Map<String, Object> errorResponse = Map.of(
+                                            "success", false,
+                                            "message", "인증이 필요하거나 토큰이 만료되었습니다."
+
+                                    );
+
+                                    response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
+
                                 },
                                 new AntPathRequestMatcher("/api/**")
                         )
