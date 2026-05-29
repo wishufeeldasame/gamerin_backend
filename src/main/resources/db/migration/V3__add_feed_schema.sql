@@ -1,7 +1,6 @@
 CREATE TABLE IF NOT EXISTS posts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    game_name VARCHAR(50),
     content TEXT,
     like_count BIGINT NOT NULL DEFAULT 0,
     comment_count BIGINT NOT NULL DEFAULT 0,
@@ -18,7 +17,6 @@ CREATE TABLE IF NOT EXISTS post_media (
     media_url TEXT NOT NULL,
     thumbnail_url TEXT,
     sort_order INT NOT NULL DEFAULT 0,
-    duration_seconds INT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ,
     CONSTRAINT chk_post_media_type CHECK (media_type IN ('IMAGE', 'VIDEO')),

@@ -10,14 +10,13 @@ public record PostCardResponse(
         String authorHandle,
         String authorProfileImageUrl,
         boolean authorVerifiedBadge,
-        String game,
         String content,
         List<PostMediaResponse> media,
-        ExternalLinkCardResponse externalLink,
         long likes,
         long comments,
         long shares,
         boolean likedByMe,
+        boolean bookmarkedByMe,
         boolean mine,
         OffsetDateTime createdAt
 ) {

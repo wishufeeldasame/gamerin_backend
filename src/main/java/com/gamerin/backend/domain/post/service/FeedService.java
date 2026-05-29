@@ -10,8 +10,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.post.dto.response.PostCardResponse;
 import com.gamerin.backend.domain.post.dto.response.ProfileMediaItemResponse;
-import com.gamerin.backend.domain.post.dto.response.TrendingGameResponse;
 import com.gamerin.backend.domain.post.entity.Post;
+import com.gamerin.backend.domain.post.entity.PostBookmark;
 import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.repository.PostQueryRepository;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -98,9 +98,25 @@ public class FeedService {
         );
     }
 
-    public List<TrendingGameResponse> getTrendingGames(CustomUserPrincipal principal) {
-        getCurrentUserId(principal);
-        return postQueryRepository.findTrendingGames(7, 10);
+    public CursorPageResponse<PostCardResponse> getMyBookmarks(
+            CustomUserPrincipal principal,
+            String cursor,
+            int size
+    ) {
+        UUID viewerId = getCurrentUserId(principal);
+        int pageSize = clampSize(size, DEFAULT_PAGE_SIZE);
+        List<PostBookmark> loadedBookmarks = postQueryRepository.findBookmarkedPosts(viewerId, cursor, pageSize + 1);
+        boolean hasNext = loadedBookmarks.size() > pageSize;
+        List<PostBookmark> pageBookmarks = hasNext ? loadedBookmarks.subList(0, pageSize) : loadedBookmarks;
+        List<Post> posts = pageBookmarks.stream()
+                .map(PostBookmark::getPost)
+                .toList();
+
+        return new CursorPageResponse<>(
+                postResponseAssembler.toPostCards(posts, viewerId),
+                buildBookmarkCursor(pageBookmarks, hasNext),
+                hasNext
+        );
     }
 
     private UUID getCurrentUserId(CustomUserPrincipal principal) {
@@ -156,5 +172,14 @@ public class FeedService {
                 + "|" + last.getPost().getId()
                 + "|" + last.getSortOrder()
                 + "|" + last.getId();
+    }
+
+    private String buildBookmarkCursor(List<PostBookmark> bookmarks, boolean hasNext) {
+        if (!hasNext || bookmarks.isEmpty()) {
+            return null;
+        }
+
+        PostBookmark last = bookmarks.get(bookmarks.size() - 1);
+        return last.getCreatedAt() + "|" + last.getId();
     }
 }

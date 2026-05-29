@@ -51,6 +51,15 @@ public class UserController {
         userService.updateProfile(principal.getUserId(), request);
         return ApiResponse.ok(null);
     }
+    
+    @GetMapping("/me/bookmarks")
+    public ApiResponse<CursorPageResponse<PostCardResponse>> getMyBookmarks(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return ApiResponse.ok(feedService.getMyBookmarks(principal, cursor, size));
+    }
 
     @GetMapping("/{handle}")
     public ApiResponse<DetailedUserProfileResponse> getProfile(@PathVariable String handle) {
@@ -76,4 +85,5 @@ public class UserController {
     ) {
         return ApiResponse.ok(feedService.getUserMedia(principal, handle, cursor, size));
     }
+
 }

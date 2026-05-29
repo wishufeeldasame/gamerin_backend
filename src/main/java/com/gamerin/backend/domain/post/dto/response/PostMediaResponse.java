@@ -9,7 +9,6 @@ public record PostMediaResponse(
         PostMediaType mediaType,
         String mediaUrl,
         String thumbnailUrl,
-        int sortOrder,
-        Integer durationSeconds
+        int sortOrder
 ) {
 }

@@ -29,9 +29,6 @@ public class Post {
     @JoinColumn(name = "author_id")
     private User author;
 
-    @Column(name = "game_name", length = 50)
-    private String gameName;
-
     @Column(columnDefinition = "TEXT")
     private String content;
 
@@ -56,10 +53,9 @@ public class Post {
     protected Post() {
     }
 
-    public static Post create(User author, String gameName, String content) {
+    public static Post create(User author, String content) {
         Post post = new Post();
         post.author = author;
-        post.gameName = gameName;
         post.content = content;
         post.likeCount = 0L;
         post.commentCount = 0L;
@@ -99,6 +95,10 @@ public class Post {
         }
     }
 
+    public void increaseShareCount() {
+        this.shareCount++;
+    }
+
     public void softDelete() {
         this.deletedAt = OffsetDateTime.now();
     }
@@ -109,10 +109,6 @@ public class Post {
 
     public User getAuthor() {
         return author;
-    }
-
-    public String getGameName() {
-        return gameName;
     }
 
     public String getContent() {

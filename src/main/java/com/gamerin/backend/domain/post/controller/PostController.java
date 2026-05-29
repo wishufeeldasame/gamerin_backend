@@ -16,8 +16,10 @@ import org.springframework.web.bind.annotation.RestController;
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
+import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
+import com.gamerin.backend.domain.post.dto.response.ShareResponse;
 import com.gamerin.backend.domain.post.service.PostService;
 import com.gamerin.backend.global.response.ApiResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -76,6 +78,33 @@ public class PostController {
     ) {
         postService.unlike(principal, postId);
         return ApiResponse.ok(null);
+    }
+
+    @PostMapping("/{postId}/bookmarks")
+    public ApiResponse<Void> bookmark(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId
+    ) {
+        postService.bookmark(principal, postId);
+        return ApiResponse.ok(null);
+    }
+
+    @DeleteMapping("/{postId}/bookmarks")
+    public ApiResponse<Void> unbookmark(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId
+    ) {
+        postService.unbookmark(principal, postId);
+        return ApiResponse.ok(null);
+    }
+
+    @PostMapping("/{postId}/shares")
+    public ApiResponse<ShareResponse> share(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId,
+            @RequestBody(required = false) CreateShareRequest request
+    ) {
+        return ApiResponse.ok(postService.share(principal, postId, request));
     }
 
     @PostMapping("/{postId}/comments")

@@ -41,9 +41,6 @@ public class PostMedia {
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
 
-    @Column(name = "duration_seconds")
-    private Integer durationSeconds;
-
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
@@ -58,8 +55,7 @@ public class PostMedia {
             PostMediaType mediaType,
             String mediaUrl,
             String thumbnailUrl,
-            int sortOrder,
-            Integer durationSeconds
+            int sortOrder
     ) {
         PostMedia media = new PostMedia();
         media.post = post;
@@ -67,7 +63,6 @@ public class PostMedia {
         media.mediaUrl = mediaUrl;
         media.thumbnailUrl = thumbnailUrl;
         media.sortOrder = sortOrder;
-        media.durationSeconds = durationSeconds;
         return media;
     }
 
@@ -102,10 +97,6 @@ public class PostMedia {
 
     public int getSortOrder() {
         return sortOrder;
-    }
-
-    public Integer getDurationSeconds() {
-        return durationSeconds;
     }
 
     public OffsetDateTime getCreatedAt() {
