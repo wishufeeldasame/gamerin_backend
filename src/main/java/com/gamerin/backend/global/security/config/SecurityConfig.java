@@ -1,8 +1,7 @@
 package com.gamerin.backend.global.security.config;
 
-import com.gamerin.backend.global.security.jwt.JwtAuthenticationFilter;
-import com.gamerin.backend.global.security.oauth2.OAuth2SuccessHandler;
-import jakarta.servlet.http.HttpServletResponse;
+import java.util.List;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -18,7 +17,12 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-import java.util.List;
+import com.gamerin.backend.global.logging.ApiRequestLoggingFilter;
+import com.gamerin.backend.global.logging.JsonLogContext;
+import com.gamerin.backend.global.security.jwt.JwtAuthenticationFilter;
+import com.gamerin.backend.global.security.oauth2.OAuth2SuccessHandler;
+
+import jakarta.servlet.http.HttpServletResponse;
 
 @Configuration
 @EnableWebSecurity
@@ -59,35 +63,33 @@ public class SecurityConfig {
                                 "/api/v1/auth/availability/**",
                                 "/oauth2/**",
                                 "/login/oauth2/**",
-                                // Swagger 관련 엔드포인트는 인증 없이 접근 허용  배포시 삭제 !!! 
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**",
-                                "/swagger-ui.html"
+                                "/swagger-ui.html",
+                                "/uploads/**"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(exception -> exception
                         .defaultAuthenticationEntryPointFor(
-                                (request, response, authException) ->{
-                                        // 1. 상태 코드를 401로 설정
-                                        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                                        // 2. 응답 타입을 JSON 및 UTF-8 한글 깨짐 방지 설정
-                                        response.setContentType("application/json;charset=UTF-8");
-                                        // 3. 클라이언트에게 보낼 JSON 에러 메시지 작성
-                                        String jsonResponse = "{" +
-                                            "\"success\": false, " +
-                                            "\"message\": \"로그인이 필요하거나 인증이 만료되었습니다.\", " +
-                                            "\"data\": null" +
-                                            "}";
-                                        // 4. 응답 본문에 쓰기
-                                        response.getWriter().write(jsonResponse);
+                                (request, response, authException) -> {
+                                    String message = "Authentication is required or the token has expired.";
+                                    JsonLogContext.setFailureReason(request, message);
+                                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                                    response.setContentType("application/json;charset=UTF-8");
+                                    String jsonResponse = "{"
+                                            + "\"success\": false, "
+                                            + "\"message\": \"" + message + "\", "
+                                            + "\"data\": null"
+                                            + "}";
+                                    response.getWriter().write(jsonResponse);
                                 },
                                 new AntPathRequestMatcher("/api/**")
                         )
                 )
-                .oauth2Login(oauth2 -> oauth2
-                            .successHandler(oAuth2SuccessHandler))
-                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+                .oauth2Login(oauth2 -> oauth2.successHandler(oAuth2SuccessHandler))
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(new ApiRequestLoggingFilter(), JwtAuthenticationFilter.class);
 
         return http.build();
     }
