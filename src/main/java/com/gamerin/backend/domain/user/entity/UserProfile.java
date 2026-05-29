@@ -45,8 +45,17 @@ public class UserProfile {
     @Column(columnDefinition = "TEXT")
     private String bio;
 
+    @Column(length = 100)
+    private String location;
+
+    @Column(name = "cover_image_url", columnDefinition = "TEXT")
+    private String coverImageUrl;
+
     @Column(name = "profile_image_url", columnDefinition = "TEXT")
     private String profileImageUrl;
+
+    @Column(columnDefinition = "TEXT")
+    private String website;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "game_stats", columnDefinition = "jsonb", nullable = false)
@@ -98,8 +107,20 @@ public class UserProfile {
         return bio;
     }
 
+    public String getLocation() {
+        return location;
+    }
+
+    public String getCoverImageUrl() {
+        return coverImageUrl;
+    }
+
     public String getProfileImageUrl() {
         return profileImageUrl;
+    }
+
+    public String getWebsite() {
+        return website;
     }
 
     public Map<String, Object> getGameStats() {
@@ -123,8 +144,21 @@ public class UserProfile {
         this.bio = bio;
     }
 
-    public void updateProfileImage(String profileImageUrl) {
+    public void updateLocation(String location) {
+        this.location = location;
+    }
+
+    public void updateCoverImageUrl(String coverImageUrl) {
+        this.coverImageUrl = coverImageUrl;
+    }
+
+
+    public void updateProfileImageUrl(String profileImageUrl) {
         this.profileImageUrl = profileImageUrl;
+    }
+
+    public void updateWebsite(String website) {
+        this.website = website;
     }
 
     public void updateGameStats(Map<String, Object> gameStats) {
