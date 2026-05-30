@@ -126,3 +126,10 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > Docker 관련 readme 추가  
   > nginx/reverse proxy 전환 후 IP, 포트, 도메인 변경에 영향을 받지 않도록 게시글 미디어 URL을 절대주소 대신 `/uploads/post-media/...` 상대경로로 저장하도록 변경  
   > 기존 DB에 저장된 `http://.../uploads/...` 형식의 게시글 미디어 URL을 `/uploads/...` 상대경로로 보정하는 V8 Flyway 마이그레이션 추가  
+
+- **26/05/31** 서장호  
+
+  > 게시글 상세 화면에서 기존 댓글 목록을 불러올 수 있도록 `GET /api/v1/posts/{postId}/comments` API 추가  
+  > 댓글 목록 조회 시 삭제되지 않은 댓글만 최신순으로 반환하고, 작성자 정보와 프로필 정보를 함께 조회하도록 PostCommentRepository 쿼리 보강  
+  > PostService에 댓글 목록 조회 로직 추가 및 CommentResponse 변환 흐름 연결  
+  > 댓글 목록 조회 기능 테스트 코드 추가  
