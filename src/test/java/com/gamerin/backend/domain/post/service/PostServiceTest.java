@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.file.Path;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -32,9 +33,11 @@ import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
+import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostBookmark;
+import com.gamerin.backend.domain.post.entity.PostComment;
 import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
 import com.gamerin.backend.domain.post.entity.PostShare;
@@ -377,6 +380,34 @@ class PostServiceTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
 
         verify(postCommentRepository, never()).save(any());
+    }
+
+    @Test
+    void getCommentsReturnsActiveComments() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        UUID commentId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        Post post = savedPost(postId, user);
+        PostComment comment = PostComment.create(post, user, "hello");
+        CommentResponse response = new CommentResponse(
+                commentId,
+                "Tester",
+                "tester",
+                null,
+                false,
+                "hello",
+                OffsetDateTime.now()
+        );
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        when(postCommentRepository.findActiveByPostId(postId)).thenReturn(List.of(comment));
+        when(postResponseAssembler.toCommentResponse(comment)).thenReturn(response);
+
+        List<CommentResponse> comments = postService.getComments(CustomUserPrincipal.from(user), postId);
+
+        assertThat(comments).containsExactly(response);
     }
 
     private PostDetailResponse postDetailResponse(UUID postId) {

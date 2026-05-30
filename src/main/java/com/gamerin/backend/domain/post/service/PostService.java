@@ -212,6 +212,17 @@ public class PostService {
         return postResponseAssembler.toCommentResponse(savedComment);
     }
 
+    @Transactional(readOnly = true)
+    public List<CommentResponse> getComments(CustomUserPrincipal principal, UUID postId) {
+        getCurrentUser(principal);
+        getActivePost(postId);
+
+        return postCommentRepository.findActiveByPostId(postId)
+                .stream()
+                .map(postResponseAssembler::toCommentResponse)
+                .toList();
+    }
+
     private void saveUploadedMedia(
             Post post,
             PreparedMediaUpload preparedMediaUpload

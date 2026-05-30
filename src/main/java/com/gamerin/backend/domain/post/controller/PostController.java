@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.post.controller;
 
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.http.MediaType;
@@ -114,5 +115,13 @@ public class PostController {
             @Valid @RequestBody CreateCommentRequest request
     ) {
         return ApiResponse.ok(postService.createComment(principal, postId, request));
+    }
+
+    @GetMapping("/{postId}/comments")
+    public ApiResponse<List<CommentResponse>> getComments(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId
+    ) {
+        return ApiResponse.ok(postService.getComments(principal, postId));
     }
 }

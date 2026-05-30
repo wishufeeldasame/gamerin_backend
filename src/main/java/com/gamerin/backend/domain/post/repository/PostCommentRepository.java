@@ -14,6 +14,8 @@ public interface PostCommentRepository extends JpaRepository<PostComment, UUID> 
     @Query("""
         select pc
         from PostComment pc
+        join fetch pc.author author
+        left join fetch author.profile
         where pc.post.id = :postId
           and pc.deletedAt is null
         order by pc.createdAt desc, pc.id desc
