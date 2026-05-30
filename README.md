@@ -133,3 +133,12 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 댓글 목록 조회 시 삭제되지 않은 댓글만 최신순으로 반환하고, 작성자 정보와 프로필 정보를 함께 조회하도록 PostCommentRepository 쿼리 보강  
   > PostService에 댓글 목록 조회 로직 추가 및 CommentResponse 변환 흐름 연결  
   > 댓글 목록 조회 기능 테스트 코드 추가  
+  > 작성자 본인 댓글을 즉시 hard delete 할 수 있도록 `DELETE /api/v1/posts/{postId}/comments/{commentId}` API 추가  
+  > 댓글 삭제 시 게시글 댓글 수를 함께 감소시키고, 댓글 목록 응답에 본인 댓글 여부를 나타내는 `mine` 필드 추가  
+  > 작성자 본인 게시물을 삭제할 수 있도록 `DELETE /api/v1/posts/{postId}` API 추가  
+  > 게시물 삭제 요청 시 즉시 `deleted_at`을 채워 soft delete 처리하고, 피드/상세 조회에서는 보이지 않도록 기존 active 조회 흐름과 연결  
+  > soft delete 후 24시간이 지난 게시물을 스케줄러가 hard delete 하도록 PostCleanupService 추가  
+  > hard delete 시 `posts` row를 실제 삭제하여 댓글, 좋아요, 북마크, 공유, 미디어 DB row가 cascade로 정리되도록 구현  
+  > hard delete 대상 게시물의 `media_url`, `thumbnail_url`을 실제 업로드 파일 경로로 변환하여 서버 파일도 함께 삭제하도록 MediaStorageService 보강  
+  > 게시물 정리 주기 설정을 `app.post.cleanup.*`으로 추가하고 운영 환경에서는 환경변수로 조정할 수 있도록 구성  
+  > 게시물 삭제 권한, soft delete, hard delete 스케줄러, 미디어 파일 삭제 경로 검증 테스트 코드 추가  

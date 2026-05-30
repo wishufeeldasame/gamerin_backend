@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.post.repository;
 
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -14,6 +15,15 @@ import com.gamerin.backend.domain.post.entity.Post;
 public interface PostRepository extends JpaRepository<Post, UUID> {
 
     Optional<Post> findByIdAndDeletedAtIsNull(UUID id);
+
+    @Query("""
+        select p
+        from Post p
+        where p.deletedAt is not null
+          and p.deletedAt <= :cutoff
+        order by p.deletedAt asc, p.id asc
+        """)
+    List<Post> findHardDeleteCandidates(@Param("cutoff") OffsetDateTime cutoff);
 
     long countByAuthorIdAndDeletedAtIsNull(UUID authorId);
 

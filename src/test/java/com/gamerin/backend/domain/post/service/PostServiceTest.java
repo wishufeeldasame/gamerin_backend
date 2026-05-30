@@ -342,6 +342,41 @@ class PostServiceTest {
     }
 
     @Test
+    void deleteSoftDeletesOwnPost() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        Post post = savedPost(postId, user);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+
+        postService.delete(CustomUserPrincipal.from(user), postId);
+
+        assertThat(post.getDeletedAt()).isNotNull();
+    }
+
+    @Test
+    void deleteRejectsWhenUserIsNotAuthor() {
+        UUID userId = UUID.randomUUID();
+        UUID otherUserId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        User author = savedUser(otherUserId, "author", "Author");
+        Post post = savedPost(postId, author);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+
+        assertThatThrownBy(() -> postService.delete(CustomUserPrincipal.from(user), postId))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.FORBIDDEN.value());
+
+        assertThat(post.getDeletedAt()).isNull();
+    }
+
+    @Test
     void shareStoresEventAndIncreasesShareCount() {
         UUID userId = UUID.randomUUID();
         UUID postId = UUID.randomUUID();
@@ -397,17 +432,59 @@ class PostServiceTest {
                 null,
                 false,
                 "hello",
-                OffsetDateTime.now()
+                OffsetDateTime.now(),
+                true
         );
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
         when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
         when(postCommentRepository.findActiveByPostId(postId)).thenReturn(List.of(comment));
-        when(postResponseAssembler.toCommentResponse(comment)).thenReturn(response);
+        when(postResponseAssembler.toCommentResponse(comment, userId)).thenReturn(response);
 
         List<CommentResponse> comments = postService.getComments(CustomUserPrincipal.from(user), postId);
 
         assertThat(comments).containsExactly(response);
+    }
+
+    @Test
+    void deleteCommentHardDeletesOwnCommentAndDecreasesCommentCount() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        UUID commentId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        Post post = savedPost(postId, user);
+        post.increaseCommentCount();
+        PostComment comment = PostComment.create(post, user, "hello");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postCommentRepository.findActiveByPostIdAndId(postId, commentId)).thenReturn(Optional.of(comment));
+
+        postService.deleteComment(CustomUserPrincipal.from(user), postId, commentId);
+
+        verify(postCommentRepository).delete(comment);
+        assertThat(post.getCommentCount()).isZero();
+    }
+
+    @Test
+    void deleteCommentRejectsWhenUserIsNotAuthor() {
+        UUID userId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        UUID commentId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedPost(postId, author);
+        PostComment comment = PostComment.create(post, author, "hello");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postCommentRepository.findActiveByPostIdAndId(postId, commentId)).thenReturn(Optional.of(comment));
+
+        assertThatThrownBy(() -> postService.deleteComment(CustomUserPrincipal.from(user), postId, commentId))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.FORBIDDEN.value());
+
+        assertThat(comment.getDeletedAt()).isNull();
     }
 
     private PostDetailResponse postDetailResponse(UUID postId) {

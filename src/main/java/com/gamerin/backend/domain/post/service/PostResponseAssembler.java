@@ -93,7 +93,7 @@ public class PostResponseAssembler {
         );
     }
 
-    public CommentResponse toCommentResponse(PostComment comment) {
+    public CommentResponse toCommentResponse(PostComment comment, UUID viewerId) {
         UserProfile profile = comment.getAuthor().getProfile();
         return new CommentResponse(
                 comment.getId(),
@@ -102,7 +102,8 @@ public class PostResponseAssembler {
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
                 comment.getContent(),
-                comment.getCreatedAt()
+                comment.getCreatedAt(),
+                viewerId != null && comment.getAuthor().getId().equals(viewerId)
         );
     }
 

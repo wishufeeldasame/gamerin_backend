@@ -63,6 +63,15 @@ public class PostController {
         return ApiResponse.ok(postService.getDetail(principal, postId));
     }
 
+    @DeleteMapping("/{postId}")
+    public ApiResponse<Void> delete(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId
+    ) {
+        postService.delete(principal, postId);
+        return ApiResponse.ok(null);
+    }
+
     @PostMapping("/{postId}/likes")
     public ApiResponse<Void> like(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -123,5 +132,15 @@ public class PostController {
             @PathVariable UUID postId
     ) {
         return ApiResponse.ok(postService.getComments(principal, postId));
+    }
+
+    @DeleteMapping("/{postId}/comments/{commentId}")
+    public ApiResponse<Void> deleteComment(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId,
+            @PathVariable UUID commentId
+    ) {
+        postService.deleteComment(principal, postId, commentId);
+        return ApiResponse.ok(null);
     }
 }

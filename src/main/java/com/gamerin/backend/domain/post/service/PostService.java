@@ -166,6 +166,17 @@ public class PostService {
                 });
     }
 
+    public void delete(CustomUserPrincipal principal, UUID postId) {
+        User user = getCurrentUser(principal);
+        Post post = getActivePost(postId);
+
+        if (!post.getAuthor().getId().equals(user.getId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the author can delete this post.");
+        }
+
+        post.softDelete();
+    }
+
     public void bookmark(CustomUserPrincipal principal, UUID postId) {
         User user = getCurrentUser(principal);
         Post post = getActivePost(postId);
@@ -209,18 +220,31 @@ public class PostService {
 
         PostComment savedComment = postCommentRepository.save(PostComment.create(post, user, content));
         post.increaseCommentCount();
-        return postResponseAssembler.toCommentResponse(savedComment);
+        return postResponseAssembler.toCommentResponse(savedComment, user.getId());
     }
 
     @Transactional(readOnly = true)
     public List<CommentResponse> getComments(CustomUserPrincipal principal, UUID postId) {
-        getCurrentUser(principal);
+        User user = getCurrentUser(principal);
         getActivePost(postId);
 
         return postCommentRepository.findActiveByPostId(postId)
                 .stream()
-                .map(postResponseAssembler::toCommentResponse)
+                .map(comment -> postResponseAssembler.toCommentResponse(comment, user.getId()))
                 .toList();
+    }
+
+    public void deleteComment(CustomUserPrincipal principal, UUID postId, UUID commentId) {
+        User user = getCurrentUser(principal);
+        PostComment comment = postCommentRepository.findActiveByPostIdAndId(postId, commentId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Comment not found."));
+
+        if (!comment.getAuthor().getId().equals(user.getId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the author can delete this comment.");
+        }
+
+        postCommentRepository.delete(comment);
+        comment.getPost().decreaseCommentCount();
     }
 
     private void saveUploadedMedia(
