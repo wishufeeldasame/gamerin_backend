@@ -124,3 +124,5 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > reverse proxy 뒤에서 업로드 URL이 올바르게 생성되도록 `server.forward-headers-strategy` 설정 추가  
   > 메인 병합 후 중복된 Flyway V5 마이그레이션 문제를 해결하기 위해 프로필 컬럼 추가 마이그레이션을 V7로 변경  
   > Docker 관련 readme 추가  
+  > nginx/reverse proxy 전환 후 IP, 포트, 도메인 변경에 영향을 받지 않도록 게시글 미디어 URL을 절대주소 대신 `/uploads/post-media/...` 상대경로로 저장하도록 변경  
+  > 기존 DB에 저장된 `http://.../uploads/...` 형식의 게시글 미디어 URL을 `/uploads/...` 상대경로로 보정하는 V8 Flyway 마이그레이션 추가  

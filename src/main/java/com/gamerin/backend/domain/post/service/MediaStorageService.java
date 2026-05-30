@@ -12,12 +12,12 @@ import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 @Service
 public class MediaStorageService {
 
     private static final String POST_MEDIA_DIRECTORY = "post-media";
+    private static final String UPLOADS_PUBLIC_PATH = "/uploads/";
 
     private final Path uploadRoot;
 
@@ -37,14 +37,7 @@ public class MediaStorageService {
             Files.copy(inputStream, storedPath, StandardCopyOption.REPLACE_EXISTING);
         }
 
-        String publicUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
-                .path("/uploads/")
-                .path(POST_MEDIA_DIRECTORY)
-                .path("/")
-                .path(storedName)
-                .toUriString();
-
-        return new StoredFile(storedPath, publicUrl);
+        return new StoredFile(storedPath, publicPostMediaUrl(storedName));
     }
 
     public StoredFile storePostMedia(PreparedMediaFile file) throws IOException {
@@ -56,14 +49,7 @@ public class MediaStorageService {
 
         Files.write(storedPath, file.bytes(), StandardOpenOption.CREATE_NEW);
 
-        String publicUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
-                .path("/uploads/")
-                .path(POST_MEDIA_DIRECTORY)
-                .path("/")
-                .path(storedName)
-                .toUriString();
-
-        return new StoredFile(storedPath, publicUrl);
+        return new StoredFile(storedPath, publicPostMediaUrl(storedName));
     }
 
     public StoredFile storePostMedia(PreparedMediaPath file) throws IOException {
@@ -75,14 +61,7 @@ public class MediaStorageService {
 
         Files.copy(file.path(), storedPath, StandardCopyOption.REPLACE_EXISTING);
 
-        String publicUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
-                .path("/uploads/")
-                .path(POST_MEDIA_DIRECTORY)
-                .path("/")
-                .path(storedName)
-                .toUriString();
-
-        return new StoredFile(storedPath, publicUrl);
+        return new StoredFile(storedPath, publicPostMediaUrl(storedName));
     }
 
     public void deleteQuietly(StoredFile storedFile) {
@@ -120,6 +99,10 @@ public class MediaStorageService {
         }
 
         return originalFilename.substring(extensionIndex).toLowerCase(Locale.ROOT);
+    }
+
+    private String publicPostMediaUrl(String storedName) {
+        return UPLOADS_PUBLIC_PATH + POST_MEDIA_DIRECTORY + "/" + storedName;
     }
 
     public record StoredFile(Path path, String publicUrl) {
