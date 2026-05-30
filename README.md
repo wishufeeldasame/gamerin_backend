@@ -37,6 +37,41 @@ gamerin DB 생성
 ### 4. 서버 실행
 ./gradlew bootRun
 
+## Docker 운영 배포 메모
+
+개발 서버의 기준 경로는 `~/capstone`을 사용한다.
+
+```text
+~/capstone/
+  backend/
+  frontend/
+  docker/
+    .env
+    docker-compose.yml
+    scripts/
+  data/
+    postgres/
+    uploads/
+    tmp/
+```
+
+백엔드 컨테이너는 내부에서 `/app/uploads`, `/app/tmp`를 사용한다. Docker Compose에서는 서버의 영속 경로를 아래처럼 연결한다.
+
+```yaml
+services:
+  backend:
+    volumes:
+      - ../data/uploads:/app/uploads
+      - ../data/tmp:/app/tmp
+```
+
+서버에서 업로드/임시 파일 디렉터리는 컨테이너 실행 유저인 `10001`이 쓸 수 있게 권한을 맞춘다.
+
+```bash
+sudo mkdir -p ~/capstone/data/uploads ~/capstone/data/tmp ~/capstone/data/postgres
+sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
+```
+
 
 ### 5. 수정 일지
 
@@ -78,3 +113,14 @@ gamerin DB 생성
   > 이미지/썸네일/동영상 모두 저장 전 경량 파일 스캔을 거치도록 업로드 흐름 보강  
   > application.yaml과 프론트 연동 문서에 동영상 최적화 및 업로드 보안 기준 반영  
   > PostService, 동영상 최적화, 텍스트 보안, 경량 파일 스캔 기능 테스트 코드 추가  
+
+- **26/05/30** 서장호  
+
+  > Docker 운영 배포를 위한 백엔드 Dockerfile과 .dockerignore 추가  
+  > Java 21 빌드/런타임 이미지를 분리하고, 런타임 이미지에 FFmpeg를 설치하도록 구성  
+  > 컨테이너 내부 업로드 경로를 `/app/uploads`, 임시 파일 경로를 `/app/tmp`로 설정하고 non-root 유저로 실행하도록 변경  
+  > 운영용 `application-prod.yaml`을 추가하여 DB, JWT, OAuth, SMTP, CORS, OpenAI, PUBG 설정을 환경변수로 주입하도록 구성  
+  > refresh cookie의 Secure, SameSite 설정을 하드코딩하지 않고 환경변수로 제어하도록 AuthController와 OAuth2SuccessHandler 수정  
+  > reverse proxy 뒤에서 업로드 URL이 올바르게 생성되도록 `server.forward-headers-strategy` 설정 추가  
+  > 메인 병합 후 중복된 Flyway V5 마이그레이션 문제를 해결하기 위해 프로필 컬럼 추가 마이그레이션을 V7로 변경  
+  > Docker 관련 readme 추가  

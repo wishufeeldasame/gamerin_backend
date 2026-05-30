@@ -26,6 +26,7 @@ RUN apt-get update \
     && groupadd --system app \
     && useradd --system --gid app --uid 10001 app \
     && mkdir -p /app/uploads \
+    && mkdir -p /app/tmp \
     && chown -R app:app /app
 
 COPY --from=builder --chown=app:app /workspace/build/libs/*.jar /app/app.jar
@@ -34,7 +35,8 @@ ENV SPRING_PROFILES_ACTIVE=prod
 ENV APP_MEDIA_UPLOAD_DIR=/app/uploads
 ENV APP_MEDIA_VIDEO_OPTIMIZATION_FFMPEG_PATH=ffmpeg
 ENV OPENAI_MODERATION_FFMPEG_PATH=ffmpeg
-ENV JAVA_TOOL_OPTIONS="-Xms256m -Xmx768m"
+ENV TMPDIR=/app/tmp
+ENV JAVA_TOOL_OPTIONS="-Xms256m -Xmx768m -Djava.io.tmpdir=/app/tmp"
 
 EXPOSE 8080
 
