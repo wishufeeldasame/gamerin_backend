@@ -125,7 +125,7 @@ public class GlobalExceptionHandler {
         response.put("message", e.getMessage() != null ? e.getMessage() : "서버 처리 중 오류가 발생했습니다.");
         response.put("data", null);
         
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);}
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<Map<String, Object>> handleMaxUploadSizeExceeded(
             MaxUploadSizeExceededException e,
