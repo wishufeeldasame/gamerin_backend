@@ -18,6 +18,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.MapsId;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
@@ -68,6 +69,7 @@ public class MentorProfile implements Persistable<UUID> {
         return isNew;
     }  
 
+    @PostPersist
     @PostLoad
     protected void markNotNew() {
         this.isNew = false; // 저장된 후나 DB에서 로드된 후에는 새 데이터가 아님을 표시
@@ -75,7 +77,6 @@ public class MentorProfile implements Persistable<UUID> {
 
     @PrePersist
     protected void onPrePersist() {
-        this.isNew = false;
 
         OffsetDateTime now = OffsetDateTime.now();
         this.createdAt = now;

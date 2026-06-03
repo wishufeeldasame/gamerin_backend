@@ -48,6 +48,7 @@ public class MentoringService {
     private final MentoringApplicationRepository mentoringApplicationRepository;
     private final MentoringReviewRepository mentoringReviewRepository;
     private final MileageService mileageService;
+    private final SettlementProcessor settlementProcessor;
 
     public MentoringService(
             MentorProfileRepository mentorProfileRepository,
@@ -55,13 +56,15 @@ public class MentoringService {
             MentoringProgramRepository mentoringProgramRepository,
             MentoringApplicationRepository mentoringApplicationRepository,
             MentoringReviewRepository mentoringReviewRepository,
-            MileageService mileageService) {
+            MileageService mileageService,
+            SettlementProcessor settlementProcessor ) {
         this.mentorProfileRepository = mentorProfileRepository;
         this.userRepository = userRepository;
         this.mentoringProgramRepository = mentoringProgramRepository;
         this.mentoringApplicationRepository = mentoringApplicationRepository;
         this.mentoringReviewRepository = mentoringReviewRepository;
         this.mileageService = mileageService;
+        this.settlementProcessor = settlementProcessor;
     }
 
     @Transactional
@@ -402,28 +405,11 @@ public class MentoringService {
 
         for (MentoringApplication application : targets) {
             try {
-                // 기존 완료 로직 수행
-                application.setStatus(ApplicationStatus.COMPLETED);
-                application.setPaymentStatus(PaymentStatus.SETTLED);
-                application.setCompletedAt(OffsetDateTime.now());
-
-                // 멘토 정산
-                MentorProfile mentorProfile = application.getProgram().getMentor();
-                mileageService.addMileage(
-                    mentorProfile.getUser(),
-                    application.getAppliedMileage(),
-                    TransactionType.SETTLEMENT,
-                    "멘토링 7일 경과 자동 정산",
-                    application.getId()
-                );
-
-
-                // 통계 업데이트
-                mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
-
-                System.out.println("자동 정산 완료: " + application.getId());
+                // 개별 트랜잭션 호출
+                settlementProcessor.processSingleSettlement(application);
 
             } catch (Exception e) {
+                
                 System.err.println("자동 정산 실패 (ID: " + application.getId() + "): " + e.getMessage());
             }
         }
