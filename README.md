@@ -37,6 +37,41 @@ gamerin DB 생성
 ### 4. 서버 실행
 ./gradlew bootRun
 
+## Docker 운영 배포 메모
+
+개발 서버의 기준 경로는 `~/capstone`을 사용한다.
+
+```text
+~/capstone/
+  backend/
+  frontend/
+  docker/
+    .env
+    docker-compose.yml
+    scripts/
+  data/
+    postgres/
+    uploads/
+    tmp/
+```
+
+백엔드 컨테이너는 내부에서 `/app/uploads`, `/app/tmp`를 사용한다. Docker Compose에서는 서버의 영속 경로를 아래처럼 연결한다.
+
+```yaml
+services:
+  backend:
+    volumes:
+      - ../data/uploads:/app/uploads
+      - ../data/tmp:/app/tmp
+```
+
+서버에서 업로드/임시 파일 디렉터리는 컨테이너 실행 유저인 `10001`이 쓸 수 있게 권한을 맞춘다.
+
+```bash
+sudo mkdir -p ~/capstone/data/uploads ~/capstone/data/tmp ~/capstone/data/postgres
+sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
+```
+
 
 ### 5. 수정 일지
 
@@ -78,3 +113,32 @@ gamerin DB 생성
   > 이미지/썸네일/동영상 모두 저장 전 경량 파일 스캔을 거치도록 업로드 흐름 보강  
   > application.yaml과 프론트 연동 문서에 동영상 최적화 및 업로드 보안 기준 반영  
   > PostService, 동영상 최적화, 텍스트 보안, 경량 파일 스캔 기능 테스트 코드 추가  
+
+- **26/05/30** 서장호  
+
+  > Docker 운영 배포를 위한 백엔드 Dockerfile과 .dockerignore 추가  
+  > Java 21 빌드/런타임 이미지를 분리하고, 런타임 이미지에 FFmpeg를 설치하도록 구성  
+  > 컨테이너 내부 업로드 경로를 `/app/uploads`, 임시 파일 경로를 `/app/tmp`로 설정하고 non-root 유저로 실행하도록 변경  
+  > 운영용 `application-prod.yaml`을 추가하여 DB, JWT, OAuth, SMTP, CORS, OpenAI, PUBG 설정을 환경변수로 주입하도록 구성  
+  > refresh cookie의 Secure, SameSite 설정을 하드코딩하지 않고 환경변수로 제어하도록 AuthController와 OAuth2SuccessHandler 수정  
+  > reverse proxy 뒤에서 업로드 URL이 올바르게 생성되도록 `server.forward-headers-strategy` 설정 추가  
+  > 메인 병합 후 중복된 Flyway V5 마이그레이션 문제를 해결하기 위해 프로필 컬럼 추가 마이그레이션을 V7로 변경  
+  > Docker 관련 readme 추가  
+  > nginx/reverse proxy 전환 후 IP, 포트, 도메인 변경에 영향을 받지 않도록 게시글 미디어 URL을 절대주소 대신 `/uploads/post-media/...` 상대경로로 저장하도록 변경  
+  > 기존 DB에 저장된 `http://.../uploads/...` 형식의 게시글 미디어 URL을 `/uploads/...` 상대경로로 보정하는 V8 Flyway 마이그레이션 추가  
+
+- **26/05/31** 서장호  
+
+  > 게시글 상세 화면에서 기존 댓글 목록을 불러올 수 있도록 `GET /api/v1/posts/{postId}/comments` API 추가  
+  > 댓글 목록 조회 시 삭제되지 않은 댓글만 최신순으로 반환하고, 작성자 정보와 프로필 정보를 함께 조회하도록 PostCommentRepository 쿼리 보강  
+  > PostService에 댓글 목록 조회 로직 추가 및 CommentResponse 변환 흐름 연결  
+  > 댓글 목록 조회 기능 테스트 코드 추가  
+  > 작성자 본인 댓글을 즉시 hard delete 할 수 있도록 `DELETE /api/v1/posts/{postId}/comments/{commentId}` API 추가  
+  > 댓글 삭제 시 게시글 댓글 수를 함께 감소시키고, 댓글 목록 응답에 본인 댓글 여부를 나타내는 `mine` 필드 추가  
+  > 작성자 본인 게시물을 삭제할 수 있도록 `DELETE /api/v1/posts/{postId}` API 추가  
+  > 게시물 삭제 요청 시 즉시 `deleted_at`을 채워 soft delete 처리하고, 피드/상세 조회에서는 보이지 않도록 기존 active 조회 흐름과 연결  
+  > soft delete 후 24시간이 지난 게시물을 스케줄러가 hard delete 하도록 PostCleanupService 추가  
+  > hard delete 시 `posts` row를 실제 삭제하여 댓글, 좋아요, 북마크, 공유, 미디어 DB row가 cascade로 정리되도록 구현  
+  > hard delete 대상 게시물의 `media_url`, `thumbnail_url`을 실제 업로드 파일 경로로 변환하여 서버 파일도 함께 삭제하도록 MediaStorageService 보강  
+  > 게시물 정리 주기 설정을 `app.post.cleanup.*`으로 추가하고 운영 환경에서는 환경변수로 조정할 수 있도록 구성  
+  > 게시물 삭제 권한, soft delete, hard delete 스케줄러, 미디어 파일 삭제 경로 검증 테스트 코드 추가  

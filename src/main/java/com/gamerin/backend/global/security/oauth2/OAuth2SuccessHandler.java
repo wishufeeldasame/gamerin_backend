@@ -33,6 +33,8 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
     
     private final String frontendBaseUrl;
     private final String refreshCookieName;
+    private final boolean refreshCookieSecure;
+    private final String refreshCookieSameSite;
 
     public OAuth2SuccessHandler(
             SocialAccountRepository socialAccountRepository,
@@ -40,7 +42,9 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
             UserRepository userRepository,
             TokenService tokenService,
             @Value("${app.frontend.base-url:http://localhost:3000}") String frontendBaseUrl,
-            @Value("${app.auth.jwt.refresh-cookie-name:refresh_token}") String refreshCookieName
+            @Value("${app.auth.jwt.refresh-cookie-name:refresh_token}") String refreshCookieName,
+            @Value("${app.auth.jwt.refresh-cookie-secure:false}") boolean refreshCookieSecure,
+            @Value("${app.auth.jwt.refresh-cookie-same-site:Lax}") String refreshCookieSameSite
     ) {
         this.socialAccountRepository = socialAccountRepository;
         this.socialSignupSessionRepository = socialSignupSessionRepository;
@@ -48,6 +52,8 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         this.tokenService = tokenService;
         this.frontendBaseUrl = frontendBaseUrl;
         this.refreshCookieName = refreshCookieName;
+        this.refreshCookieSecure = refreshCookieSecure;
+        this.refreshCookieSameSite = normalizeSameSite(refreshCookieSameSite);
     }
 
     @Override
@@ -103,11 +109,18 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
     private void setRefreshTokenCookie(HttpServletResponse response, String refreshToken, long maxAgeSeconds) {
         ResponseCookie cookie = ResponseCookie.from(refreshCookieName, refreshToken)
                 .httpOnly(true)
-                .secure(false) // 배포 시 true
+                .secure(refreshCookieSecure)
                 .path("/")
-                .sameSite("Lax")
+                .sameSite(refreshCookieSameSite)
                 .maxAge(maxAgeSeconds)
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
+    private String normalizeSameSite(String sameSite) {
+        if (sameSite == null || sameSite.isBlank()) {
+            return "Lax";
+        }
+        return sameSite.trim();
     }
 }

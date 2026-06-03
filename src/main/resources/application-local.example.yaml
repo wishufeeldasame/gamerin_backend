@@ -67,6 +67,8 @@ app:
       access-token-expiration-seconds: 1800
       refresh-token-expiration-seconds: 1209600
       refresh-cookie-name: refresh_token
+      refresh-cookie-secure: false
+      refresh-cookie-same-site: Lax
     password-reset:
       expiration-minutes: 30
 

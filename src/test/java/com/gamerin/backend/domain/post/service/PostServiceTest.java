@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.file.Path;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -32,9 +33,11 @@ import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
+import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostBookmark;
+import com.gamerin.backend.domain.post.entity.PostComment;
 import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
 import com.gamerin.backend.domain.post.entity.PostShare;
@@ -339,6 +342,41 @@ class PostServiceTest {
     }
 
     @Test
+    void deleteSoftDeletesOwnPost() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        Post post = savedPost(postId, user);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+
+        postService.delete(CustomUserPrincipal.from(user), postId);
+
+        assertThat(post.getDeletedAt()).isNotNull();
+    }
+
+    @Test
+    void deleteRejectsWhenUserIsNotAuthor() {
+        UUID userId = UUID.randomUUID();
+        UUID otherUserId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        User author = savedUser(otherUserId, "author", "Author");
+        Post post = savedPost(postId, author);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+
+        assertThatThrownBy(() -> postService.delete(CustomUserPrincipal.from(user), postId))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.FORBIDDEN.value());
+
+        assertThat(post.getDeletedAt()).isNull();
+    }
+
+    @Test
     void shareStoresEventAndIncreasesShareCount() {
         UUID userId = UUID.randomUUID();
         UUID postId = UUID.randomUUID();
@@ -377,6 +415,76 @@ class PostServiceTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
 
         verify(postCommentRepository, never()).save(any());
+    }
+
+    @Test
+    void getCommentsReturnsActiveComments() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        UUID commentId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        Post post = savedPost(postId, user);
+        PostComment comment = PostComment.create(post, user, "hello");
+        CommentResponse response = new CommentResponse(
+                commentId,
+                "Tester",
+                "tester",
+                null,
+                false,
+                "hello",
+                OffsetDateTime.now(),
+                true
+        );
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        when(postCommentRepository.findActiveByPostId(postId)).thenReturn(List.of(comment));
+        when(postResponseAssembler.toCommentResponse(comment, userId)).thenReturn(response);
+
+        List<CommentResponse> comments = postService.getComments(CustomUserPrincipal.from(user), postId);
+
+        assertThat(comments).containsExactly(response);
+    }
+
+    @Test
+    void deleteCommentHardDeletesOwnCommentAndDecreasesCommentCount() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        UUID commentId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        Post post = savedPost(postId, user);
+        post.increaseCommentCount();
+        PostComment comment = PostComment.create(post, user, "hello");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postCommentRepository.findActiveByPostIdAndId(postId, commentId)).thenReturn(Optional.of(comment));
+
+        postService.deleteComment(CustomUserPrincipal.from(user), postId, commentId);
+
+        verify(postCommentRepository).delete(comment);
+        assertThat(post.getCommentCount()).isZero();
+    }
+
+    @Test
+    void deleteCommentRejectsWhenUserIsNotAuthor() {
+        UUID userId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        UUID commentId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedPost(postId, author);
+        PostComment comment = PostComment.create(post, author, "hello");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postCommentRepository.findActiveByPostIdAndId(postId, commentId)).thenReturn(Optional.of(comment));
+
+        assertThatThrownBy(() -> postService.deleteComment(CustomUserPrincipal.from(user), postId, commentId))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.FORBIDDEN.value());
+
+        assertThat(comment.getDeletedAt()).isNull();
     }
 
     private PostDetailResponse postDetailResponse(UUID postId) {
