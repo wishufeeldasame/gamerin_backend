@@ -43,7 +43,9 @@ public class PostQueryRepositoryImpl implements PostQueryRepository {
         StringBuilder sql = new StringBuilder("""
             select p.id
             from posts p
+            join users u on u.id = p.author_id
             where p.deleted_at is null
+              and u.deleted_at is null
             """);
 
         if (followingOnly) {

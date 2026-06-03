@@ -1,7 +1,8 @@
 package com.gamerin.backend.domain.auth.service;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.util.Map;
+
+import com.gamerin.backend.global.logging.JsonConsoleLogger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.mail.MailException;
@@ -12,8 +13,6 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 @Service
 public class PasswordResetMailService {
-
-    private static final Logger log = LoggerFactory.getLogger(PasswordResetMailService.class);
 
     private final JavaMailSender mailSender;
     private final String frontendBaseUrl;
@@ -43,7 +42,12 @@ public class PasswordResetMailService {
                 .toUriString();
 
         if (mailSender == null || mailHost == null || mailHost.isBlank()) {
-            log.info("Password reset link for {}: {}", recipientEmail, resetUrl);
+            JsonConsoleLogger.success("auth.password_reset_link.generated", Map.of(
+                    "delivery", "console",
+                    "reason", "mail_sender_not_configured",
+                    "recipientEmail", maskEmail(recipientEmail),
+                    "resetUrl", resetUrl
+            ));
             return;
         }
 
@@ -62,8 +66,28 @@ public class PasswordResetMailService {
 
         try {
             mailSender.send(message);
+            JsonConsoleLogger.success("auth.password_reset_mail.sent", Map.of(
+                    "recipientEmail", maskEmail(recipientEmail)
+            ));
         } catch (MailException e) {
+            JsonConsoleLogger.failure("auth.password_reset_mail.sent", "mail_send_failed", Map.of(
+                    "recipientEmail", maskEmail(recipientEmail),
+                    "exception", e.getClass().getSimpleName()
+            ));
             throw new IllegalStateException("비밀번호 재설정 메일 발송에 실패했습니다.", e);
         }
+    }
+
+    private String maskEmail(String email) {
+        if (email == null || email.isBlank()) {
+            return "";
+        }
+
+        int atIndex = email.indexOf('@');
+        if (atIndex <= 1) {
+            return "***" + (atIndex >= 0 ? email.substring(atIndex) : "");
+        }
+
+        return email.charAt(0) + "***" + email.substring(atIndex);
     }
 }

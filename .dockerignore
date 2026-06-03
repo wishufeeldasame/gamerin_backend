@@ -1,0 +1,13 @@
+.git
+.gradle
+.vscode
+.idea
+build
+out
+bin
+uploads
+*.log
+*.pem
+.env
+.env.*
+src/main/resources/application-local.yaml

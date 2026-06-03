@@ -3,12 +3,12 @@ spring:
     name: backend
 
   profiles:
-    active: local
+    active: ${SPRING_PROFILES_ACTIVE:local}
 
   jpa:
     hibernate:
       ddl-auto: validate
-    show-sql: true
+    show-sql: false
     open-in-view: false
     properties:
       hibernate:
@@ -28,6 +28,15 @@ app:
       - http://localhost:3000
   media:
     upload-dir: uploads
+    video:
+      optimization:
+        enabled: true
+        ffmpeg-path: ffmpeg
+  post:
+    cleanup:
+      hard-delete-after: 24h
+      initial-delay-ms: 60000
+      fixed-delay-ms: 3600000
   frontend:
     base-url: http://localhost:3000
     password-reset-path: /auth/reset-password
@@ -36,3 +45,11 @@ app:
   auth:
     password-reset:
       expiration-minutes: 30
+
+openai:
+  api:
+    key: ${OPENAI_API_KEY:}
+  moderation:
+    enabled: true
+    model: omni-moderation-latest
+    ffmpeg-path: ffmpeg
