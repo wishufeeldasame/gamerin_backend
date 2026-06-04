@@ -1,3 +1,4 @@
+-- Direct message schema is applied after main branch profile, media, mileage, and mentoring migrations.
 CREATE TABLE IF NOT EXISTS message_conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     type VARCHAR(20) NOT NULL DEFAULT 'DIRECT',
