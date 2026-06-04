@@ -12,6 +12,8 @@ import com.gamerin.backend.domain.post.entity.PostMedia;
 
 public interface PostMediaRepository extends JpaRepository<PostMedia, UUID> {
 
+    List<PostMedia> findByPostIdOrderBySortOrderAscIdAsc(UUID postId);
+
     @Query("""
         select pm
         from PostMedia pm

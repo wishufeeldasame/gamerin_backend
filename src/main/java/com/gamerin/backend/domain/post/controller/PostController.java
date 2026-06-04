@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.post.controller;
 
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.http.MediaType;
@@ -62,6 +63,15 @@ public class PostController {
         return ApiResponse.ok(postService.getDetail(principal, postId));
     }
 
+    @DeleteMapping("/{postId}")
+    public ApiResponse<Void> delete(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId
+    ) {
+        postService.delete(principal, postId);
+        return ApiResponse.ok(null);
+    }
+
     @PostMapping("/{postId}/likes")
     public ApiResponse<Void> like(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -114,5 +124,23 @@ public class PostController {
             @Valid @RequestBody CreateCommentRequest request
     ) {
         return ApiResponse.ok(postService.createComment(principal, postId, request));
+    }
+
+    @GetMapping("/{postId}/comments")
+    public ApiResponse<List<CommentResponse>> getComments(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId
+    ) {
+        return ApiResponse.ok(postService.getComments(principal, postId));
+    }
+
+    @DeleteMapping("/{postId}/comments/{commentId}")
+    public ApiResponse<Void> deleteComment(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId,
+            @PathVariable UUID commentId
+    ) {
+        postService.deleteComment(principal, postId, commentId);
+        return ApiResponse.ok(null);
     }
 }

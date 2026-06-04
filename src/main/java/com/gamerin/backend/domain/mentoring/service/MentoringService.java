@@ -5,13 +5,15 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
@@ -32,13 +34,14 @@ import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringReviewRepository;
-import com.gamerin.backend.domain.user.entity.MileageWallet;
+import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.entity.User;
-import com.gamerin.backend.domain.user.repository.MileageWalletRepository;
 import com.gamerin.backend.domain.user.repository.UserRepository;
+import com.gamerin.backend.domain.user.service.MileageService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class MentoringService {
@@ -47,25 +50,25 @@ public class MentoringService {
     private final UserRepository userRepository;
     private final MentoringProgramRepository mentoringProgramRepository;
     private final MentoringApplicationRepository mentoringApplicationRepository;
-    private final MileageWalletRepository mileageWalletRepository;
     private final MentoringReviewRepository mentoringReviewRepository;
-    private final ObjectMapper objectMapper;
+    private final MileageService mileageService;
+    private final SettlementProcessor settlementProcessor;
 
     public MentoringService(
             MentorProfileRepository mentorProfileRepository,
             UserRepository userRepository, 
             MentoringProgramRepository mentoringProgramRepository,
             MentoringApplicationRepository mentoringApplicationRepository,
-            MileageWalletRepository mileageWalletRepository,
             MentoringReviewRepository mentoringReviewRepository,
-            ObjectMapper objectMapper) {
+            MileageService mileageService,
+            SettlementProcessor settlementProcessor ) {
         this.mentorProfileRepository = mentorProfileRepository;
         this.userRepository = userRepository;
         this.mentoringProgramRepository = mentoringProgramRepository;
         this.mentoringApplicationRepository = mentoringApplicationRepository;
-        this.mileageWalletRepository = mileageWalletRepository;
         this.mentoringReviewRepository = mentoringReviewRepository;
-        this.objectMapper = objectMapper;
+        this.mileageService = mileageService;
+        this.settlementProcessor = settlementProcessor;
     }
 
     @Transactional
@@ -81,12 +84,7 @@ public class MentoringService {
 
         
         // 멘토 등록 시 마일리지 지갑 생성 확인
-        if (!mileageWalletRepository.existsById(user.getId())) {
-            MileageWallet wallet = new MileageWallet();
-            wallet.setUser(user);
-            wallet.setBalance(0L);
-            mileageWalletRepository.save(wallet);
-        }
+        mileageService.getOrCreateWallet(user);
         
 
         // 멘토 프로필 생성 및 저장
@@ -102,9 +100,16 @@ public class MentoringService {
 
     // 멘토 프로필 조회
     @Transactional(readOnly = true)
+    public MentorProfileResponse getMyMentorProfile(CustomUserPrincipal principal) {
+        return mentorProfileRepository.findById(principal.getUserId())
+                .map(MentorProfileResponse::from)
+                .orElse(null);
+    }
+
+    @Transactional(readOnly = true)
     public MentorProfileResponse getMentorProfile(UUID mentorId) {
         MentorProfile mentorProfile = mentorProfileRepository.findById(mentorId)
-                .orElseThrow(() -> new RuntimeException("해당 멘토를 찾을 수 없습니다."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "해당 멘토를 찾을 수 없습니다."));
 
         return MentorProfileResponse.from(mentorProfile);
     }
@@ -208,11 +213,14 @@ public class MentoringService {
                 .orElseThrow(() -> new RuntimeException("사용자 정보를 찾을 수 없습니다."));
 
 
-        // 마일리지 지갑 조회 및 잔액 확인 / 차감
-        MileageWallet wallet = mileageWalletRepository.findById(mentee.getId())
-                .orElseThrow(() -> new RuntimeException("마일리지 지갑을 찾을 수 없습니다."));
-
-        wallet.deduct(program.getPrice());
+        // 마일리지 차감 및 트랜잭션 기록
+        mileageService.useMileage(
+                mentee,
+                program.getPrice(),
+                TransactionType.MENTORING_PAY,
+                "멘토링 신청 결제: " + program.getTitle(), 
+                null // 아직 application 엔티티가 저장되기 전이므로 null 처리
+        );
 
         // 신청 엔티티 생성 및 저장
         MentoringApplication application = new MentoringApplication();
@@ -224,19 +232,51 @@ public class MentoringService {
 
         MentoringApplication savedApplication = mentoringApplicationRepository.save(application);
 
-        return MentoringApplicationResponse.from(savedApplication);
+        return toApplicationResponse(savedApplication);
+    }
+
+    //멘토링 신청 취소
+    @Transactional
+    public MentoringApplicationResponse cancelApplication(CustomUserPrincipal principal, UUID applicationId) {
+        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
+                        .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
+
+        // 권한 확인: 신청한 멘티 본인인지 확인
+        if (!application.getMentee().getId().equals(principal.getUserId())) {
+            throw new RuntimeException("해당 신청을 취소할 권한이 없습니다.");
+        }
+
+        // 상태 확인: 신청 상태(APPLIED)인 경우에만 취소 가능
+        if (application.getStatus() != ApplicationStatus.APPLIED) {
+            throw new RuntimeException("수락 전인 신청 건만 취소할 수 있습니다.");
+        }
+
+        // 상태 변경
+        application.setStatus(ApplicationStatus.CANCELLED);
+        application.setPaymentStatus(PaymentStatus.REFUNDED);
+
+        // 마일리지 환불 및 트랜잭션 기록
+        mileageService.addMileage(
+            application.getMentee(),
+            application.getAppliedMileage(),
+            TransactionType.MENTORING_REFUND,
+            "멘토링 신청 취소에 따른 환불",
+            application.getId()
+        );
+
+        return toApplicationResponse(application);
     }
 
     // 멘티가 본인 신청 내역 확인하는거
     @Transactional(readOnly = true)
     public Page<MentoringApplicationResponse> getMyApplicationsAsMentee(CustomUserPrincipal principal, Pageable pageable) {
-        return mentoringApplicationRepository.findByMenteeId(principal.getUserId(), pageable).map(MentoringApplicationResponse::from);
+        return toApplicationResponsePage(mentoringApplicationRepository.findByMenteeId(principal.getUserId(), pageable));
     }
 
     // 멘토가 신청 내역 확인하는거
     @Transactional(readOnly = true)
     public Page<MentoringApplicationResponse> getMyApplicationsAsMentor(CustomUserPrincipal principal, Pageable pageable) {
-        return mentoringApplicationRepository.findByProgramMentorId(principal.getUserId(), pageable).map(MentoringApplicationResponse::from);
+        return toApplicationResponsePage(mentoringApplicationRepository.findByProgramMentorId(principal.getUserId(), pageable));
     }
 
     // 신청 수락
@@ -255,7 +295,7 @@ public class MentoringService {
         }
 
         application.setStatus(ApplicationStatus.ACCEPTED);
-        return MentoringApplicationResponse.from(application);
+        return toApplicationResponse(application);
     
     }
 
@@ -278,11 +318,15 @@ public class MentoringService {
         application.setStatus(ApplicationStatus.REJECTED);
         application.setPaymentStatus(PaymentStatus.REFUNDED);
 
-        // 마일리지 환불
-        MileageWallet wallet = getOrCreateWallet(application.getMentee());
-        wallet.addBalance(application.getAppliedMileage());
+        // 마일리지 환불 및 트랜잭션 기록
+        mileageService.addMileage(
+            application.getMentee(),
+            application.getAppliedMileage(),
+            TransactionType.MENTORING_REFUND,
+            "멘토링 거절에 따른 환불", application.getId()
+        );
 
-        return MentoringApplicationResponse.from(application);
+        return toApplicationResponse(application);
     }
 
     // 멘토링 시작 (멘토가 수행)
@@ -302,7 +346,7 @@ public class MentoringService {
         }
 
         application.setStatus(ApplicationStatus.ONGOING);
-        return MentoringApplicationResponse.from(application);
+        return toApplicationResponse(application);
     }
 
     // 멘토가 수업 완료를 선언 (정산 대기 상태로 진입)
@@ -321,7 +365,7 @@ public class MentoringService {
 
         application.setStatus(ApplicationStatus.FINISHED);
 
-        return MentoringApplicationResponse.from(application);
+        return toApplicationResponse(application);
     }
 
     // 멘토링 완료 확정 및 정산 (멘티가 수행)
@@ -335,9 +379,9 @@ public class MentoringService {
             throw new RuntimeException("해당 멘토링을 완료 확정할 권한이 없습니다.");
         }
 
-        // 상태 확인: 진행 중(ONGOING)인 상태에서만 완료 가능
-        if (application.getStatus() != ApplicationStatus.ONGOING) {
-            throw new RuntimeException("진행 중인 멘토링만 완료 확정할 수 있습니다.");
+        // 상태 확인: 진행 중(ONGOING)이거나 멘토가 완료 보고(FINISHED)한 상태에서만 멘티가 완료 확정 가능
+        if (application.getStatus() != ApplicationStatus.ONGOING && application.getStatus() != ApplicationStatus.FINISHED) {
+            throw new RuntimeException("행 중이거나 완료 보고된 멘토링만 완료 확정할 수 있습니다.");
         }
 
         // 상태 변경
@@ -345,16 +389,21 @@ public class MentoringService {
         application.setPaymentStatus(PaymentStatus.SETTLED);
         application.setCompletedAt(java.time.OffsetDateTime.now());
 
-        // 멘토에게 마일리지 입금,정산
+        // 멘토에게 마일리지 입금 및 트랜잭션 기록
         MentorProfile mentorProfile = application.getProgram().getMentor();
-        MileageWallet mentorWallet = getOrCreateWallet(mentorProfile.getUser());
+        mileageService.addMileage(
+            mentorProfile.getUser(),
+            application.getAppliedMileage(),
+            TransactionType.SETTLEMENT,
+            "멘토링 완료 정산",
+            application.getId()
+        );
 
-        mentorWallet.addBalance(application.getAppliedMileage());
 
         // 멘토 통계 업데이트 : 누적 멘티 수 증가
         mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
 
-        return MentoringApplicationResponse.from(application);
+        return toApplicationResponse(application);
 
     }
 
@@ -367,38 +416,16 @@ public class MentoringService {
 
         for (MentoringApplication application : targets) {
             try {
-                // 기존 완료 로직 수행
-                application.setStatus(ApplicationStatus.COMPLETED);
-                application.setPaymentStatus(PaymentStatus.SETTLED);
-                application.setCompletedAt(OffsetDateTime.now());
-
-                // 멘토 정산
-                MentorProfile mentorProfile = application.getProgram().getMentor();
-                MileageWallet mentorWallet = getOrCreateWallet(mentorProfile.getUser());
-                mentorWallet.addBalance(application.getAppliedMileage());
-
-                // 통계 업데이트
-                mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
-
-                System.out.println("자동 정산 완료: " + application.getId());
+                // 개별 트랜잭션 호출
+                settlementProcessor.processSingleSettlement(application);
 
             } catch (Exception e) {
+                
                 System.err.println("자동 정산 실패 (ID: " + application.getId() + "): " + e.getMessage());
             }
         }
-
-        
     }
 
-    private MileageWallet getOrCreateWallet(User user) {
-        return mileageWalletRepository.findById(user.getId())
-                .orElseGet(() -> {
-                    MileageWallet newWallet = new MileageWallet();
-                    newWallet.setUser(user);
-                    newWallet.setBalance(0L);
-                    return mileageWalletRepository.save(newWallet);
-                });
-    }
 
     // 리뷰 생성
     @Transactional
@@ -436,6 +463,33 @@ public class MentoringService {
         updateMentorStats(application.getProgram().getMentor(), request.rating());
 
         return MentoringReviewResponse.from(savedReview);
+    }
+
+    private MentoringApplicationResponse toApplicationResponse(MentoringApplication application) {
+        return MentoringApplicationResponse.from(
+                application,
+                mentoringReviewRepository.existsByApplicationId(application.getId())
+        );
+    }
+
+    private Page<MentoringApplicationResponse> toApplicationResponsePage(Page<MentoringApplication> applications) {
+        if (applications.getContent().isEmpty()) {
+            return applications.map(application -> MentoringApplicationResponse.from(application, false));
+        }
+
+        List<UUID> applicationIds = applications.getContent().stream()
+                .map(MentoringApplication::getId)
+                .toList();
+        Set<UUID> reviewedApplicationIds = new HashSet<>(
+                mentoringReviewRepository.findReviewedApplicationIds(applicationIds)
+        );
+
+        return applications.map(application ->
+                MentoringApplicationResponse.from(
+                        application,
+                        reviewedApplicationIds.contains(application.getId())
+                )
+        );
     }
 
     // 멘토 평점 업데이트

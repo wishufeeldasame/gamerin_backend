@@ -10,6 +10,7 @@ public record CommentResponse(
         String authorProfileImageUrl,
         boolean authorVerifiedBadge,
         String content,
-        OffsetDateTime createdAt
+        OffsetDateTime createdAt,
+        boolean mine
 ) {
 }

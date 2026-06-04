@@ -42,7 +42,7 @@ class AuthControllerTest {
 
     @BeforeEach
     void setUp() {
-        authController = new AuthController(localAuthService, "refresh_token");
+        authController = new AuthController(localAuthService, "refresh_token", false, "Lax");
     }
 
     @Test

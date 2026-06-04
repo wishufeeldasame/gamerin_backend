@@ -1,4 +1,4 @@
- -- 1. 멘토 프로필 테이블
+-- 1. 멘토 프로필 테이블
 CREATE TABLE IF NOT EXISTS mentor_profiles (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE', -- ACTIVE, INACTIVE

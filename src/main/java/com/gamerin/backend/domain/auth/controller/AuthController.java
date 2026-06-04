@@ -24,13 +24,19 @@ public class AuthController {
 
     private final LocalAuthService localAuthService;
     private final String refreshCookieName;
+    private final boolean refreshCookieSecure;
+    private final String refreshCookieSameSite;
 
     public AuthController(
             LocalAuthService localAuthService,
-            @Value("${app.auth.jwt.refresh-cookie-name:refresh_token}") String refreshCookieName
+            @Value("${app.auth.jwt.refresh-cookie-name:refresh_token}") String refreshCookieName,
+            @Value("${app.auth.jwt.refresh-cookie-secure:false}") boolean refreshCookieSecure,
+            @Value("${app.auth.jwt.refresh-cookie-same-site:Lax}") String refreshCookieSameSite
     ) {
         this.localAuthService = localAuthService;
         this.refreshCookieName = refreshCookieName;
+        this.refreshCookieSecure = refreshCookieSecure;
+        this.refreshCookieSameSite = normalizeSameSite(refreshCookieSameSite);
     }
 
     @GetMapping("/availability/handle")
@@ -114,13 +120,30 @@ public class AuthController {
 
     private void setRefreshTokenCookie(HttpServletResponse response, String refreshToken, long maxAgeSeconds) {
         ResponseCookie cookie = ResponseCookie.from(refreshCookieName, refreshToken)
-                .httpOnly(true).secure(false).path("/").sameSite("Lax").maxAge(maxAgeSeconds).build();
+                .httpOnly(true)
+                .secure(refreshCookieSecure)
+                .path("/")
+                .sameSite(refreshCookieSameSite)
+                .maxAge(maxAgeSeconds)
+                .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
     }
 
     private void clearRefreshTokenCookie(HttpServletResponse response) {
         ResponseCookie cookie = ResponseCookie.from(refreshCookieName, "")
-                .httpOnly(true).secure(false).path("/").sameSite("Lax").maxAge(0).build();
+                .httpOnly(true)
+                .secure(refreshCookieSecure)
+                .path("/")
+                .sameSite(refreshCookieSameSite)
+                .maxAge(0)
+                .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
+    private String normalizeSameSite(String sameSite) {
+        if (sameSite == null || sameSite.isBlank()) {
+            return "Lax";
+        }
+        return sameSite.trim();
     }
 }
