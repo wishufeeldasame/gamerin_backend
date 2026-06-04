@@ -61,6 +61,9 @@ class MessageServiceTest {
     @Mock
     private MessageAttachmentStorageService messageAttachmentStorageService;
 
+    @Mock
+    private MessageRealtimeService messageRealtimeService;
+
     private MessageService messageService;
 
     @BeforeEach
@@ -73,7 +76,8 @@ class MessageServiceTest {
                 directMessageRepository,
                 directMessageAttachmentRepository,
                 messageAttachmentStorageService,
-                new MessageResponseAssembler()
+                new MessageResponseAssembler(),
+                messageRealtimeService
         );
     }
 
@@ -96,6 +100,8 @@ class MessageServiceTest {
                 conversation.getId()
         )).thenReturn(Optional.of(message));
         when(messageParticipantRepository.findByConversationId(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant, recipientParticipant));
+        when(messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(conversation.getId()))
                 .thenReturn(List.of(viewerParticipant, recipientParticipant));
         when(directMessageAttachmentRepository.findByMessageIds(List.of(message.getId()))).thenReturn(List.of());
 
@@ -159,6 +165,8 @@ class MessageServiceTest {
                 message.getId(),
                 conversation.getId()
         )).thenReturn(Optional.of(message));
+        when(messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant));
 
         messageService.deleteMessage(CustomUserPrincipal.from(viewer), conversation.getId(), message.getId());
 
@@ -180,6 +188,7 @@ class MessageServiceTest {
         messageService.leaveConversation(CustomUserPrincipal.from(viewer), conversation.getId());
 
         assertThat(viewerParticipant.getDeletedAt()).isNotNull();
+        assertThat(viewerParticipant.getClearedAt()).isNotNull();
     }
 
     @Test
@@ -211,6 +220,7 @@ class MessageServiceTest {
         MessageConversation conversation = conversation();
         MessageParticipant viewerParticipant = participant(conversation, viewer);
         viewerParticipant.softDelete();
+        OffsetDateTime clearedAt = viewerParticipant.getClearedAt();
         MessageParticipant recipientParticipant = participant(conversation, recipient);
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
@@ -223,7 +233,7 @@ class MessageServiceTest {
                 .thenReturn(Optional.of(recipientParticipant));
         when(messageParticipantRepository.findByConversationId(conversation.getId()))
                 .thenReturn(List.of(viewerParticipant, recipientParticipant));
-        when(directMessageRepository.findRecentActiveByConversationId(any(), any())).thenReturn(List.of());
+        when(directMessageRepository.findRecentActiveByConversationIdAfter(any(), any(), any())).thenReturn(List.of());
 
         messageService.createConversation(
                 CustomUserPrincipal.from(viewer),
@@ -231,6 +241,7 @@ class MessageServiceTest {
         );
 
         assertThat(viewerParticipant.getDeletedAt()).isNull();
+        assertThat(viewerParticipant.getClearedAt()).isEqualTo(clearedAt);
         assertThat(viewerParticipant.getLastReadAt()).isNotNull();
         verify(messageParticipantRepository, never()).save(any(MessageParticipant.class));
     }

@@ -31,10 +31,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         String bearerToken = request.getHeader("Authorization");
-        
+        String token = null;
 
         if (bearerToken != null && bearerToken.startsWith("Bearer ")) {
-            String token = bearerToken.substring(7);
+            token = bearerToken.substring(7);
+        } else if (request.getRequestURI().equals("/api/v1/messages/stream")) {
+            token = request.getParameter("accessToken");
+        }
+
+        if (token != null && !token.isBlank()) {
             if (jwtTokenProvider.validate(token)) {
                 try {
                     UUID userId = jwtTokenProvider.getUserId(token);

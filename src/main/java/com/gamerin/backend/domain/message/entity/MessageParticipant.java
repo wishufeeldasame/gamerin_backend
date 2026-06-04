@@ -41,6 +41,9 @@ public class MessageParticipant {
     @Column(name = "deleted_at")
     private OffsetDateTime deletedAt;
 
+    @Column(name = "cleared_at")
+    private OffsetDateTime clearedAt;
+
     protected MessageParticipant() {
     }
 
@@ -61,12 +64,18 @@ public class MessageParticipant {
     }
 
     public void softDelete() {
-        this.deletedAt = OffsetDateTime.now();
+        OffsetDateTime now = OffsetDateTime.now();
+        this.deletedAt = now;
+        this.clearedAt = now;
     }
 
     public void reactivate() {
         this.deletedAt = null;
         this.lastReadAt = OffsetDateTime.now();
+    }
+
+    public void reactivateForIncomingMessage() {
+        this.deletedAt = null;
     }
 
     public UUID getId() {
@@ -91,5 +100,9 @@ public class MessageParticipant {
 
     public OffsetDateTime getDeletedAt() {
         return deletedAt;
+    }
+
+    public OffsetDateTime getClearedAt() {
+        return clearedAt;
     }
 }

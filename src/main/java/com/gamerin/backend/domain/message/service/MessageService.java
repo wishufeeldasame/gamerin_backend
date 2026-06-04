@@ -23,6 +23,7 @@ import com.gamerin.backend.domain.message.dto.request.SharePostMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.UpdateMessageRequest;
 import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageRecipientResponse;
+import com.gamerin.backend.domain.message.dto.response.MessageRealtimeEvent;
 import com.gamerin.backend.domain.message.dto.response.MessageResponse;
 import com.gamerin.backend.domain.message.entity.DirectMessage;
 import com.gamerin.backend.domain.message.entity.DirectMessageAttachment;
@@ -39,6 +40,7 @@ import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.response.CursorPageResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @Service
 @Transactional
@@ -60,6 +62,7 @@ public class MessageService {
     private final DirectMessageAttachmentRepository directMessageAttachmentRepository;
     private final MessageAttachmentStorageService messageAttachmentStorageService;
     private final MessageResponseAssembler messageResponseAssembler;
+    private final MessageRealtimeService messageRealtimeService;
 
     public MessageService(
             UserRepository userRepository,
@@ -69,7 +72,8 @@ public class MessageService {
             DirectMessageRepository directMessageRepository,
             DirectMessageAttachmentRepository directMessageAttachmentRepository,
             MessageAttachmentStorageService messageAttachmentStorageService,
-            MessageResponseAssembler messageResponseAssembler
+            MessageResponseAssembler messageResponseAssembler,
+            MessageRealtimeService messageRealtimeService
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -79,6 +83,7 @@ public class MessageService {
         this.directMessageAttachmentRepository = directMessageAttachmentRepository;
         this.messageAttachmentStorageService = messageAttachmentStorageService;
         this.messageResponseAssembler = messageResponseAssembler;
+        this.messageRealtimeService = messageRealtimeService;
     }
 
     @Transactional(readOnly = true)
@@ -104,6 +109,11 @@ public class MessageService {
         return toConversationResponse(conversation, viewer.getId(), viewerParticipant);
     }
 
+    public SseEmitter streamMessages(CustomUserPrincipal principal) {
+        User viewer = getCurrentUser(principal);
+        return messageRealtimeService.subscribe(viewer.getId());
+    }
+
     @Transactional(readOnly = true)
     public CursorPageResponse<MessageResponse> getMessages(
             CustomUserPrincipal principal,
@@ -112,20 +122,16 @@ public class MessageService {
             int size
     ) {
         User viewer = getCurrentUser(principal);
-        ensureParticipant(conversationId, viewer.getId());
+        MessageParticipant viewerParticipant = getParticipant(conversationId, viewer.getId());
 
         int pageSize = clampSize(size, DEFAULT_MESSAGE_PAGE_SIZE);
         OffsetDateTime cursorCreatedAt = parseMessageCursor(cursor);
-        List<DirectMessage> loadedMessages = cursorCreatedAt == null
-                ? directMessageRepository.findActivePageByConversationId(
-                        conversationId,
-                        PageRequest.of(0, pageSize + 1)
-                )
-                : directMessageRepository.findActivePageByConversationIdBefore(
-                        conversationId,
-                        cursorCreatedAt,
-                        PageRequest.of(0, pageSize + 1)
-                );
+        List<DirectMessage> loadedMessages = loadMessagePage(
+                conversationId,
+                cursorCreatedAt,
+                viewerParticipant.getClearedAt(),
+                PageRequest.of(0, pageSize + 1)
+        );
 
         boolean hasNext = loadedMessages.size() > pageSize;
         List<DirectMessage> pageMessagesDesc = hasNext ? loadedMessages.subList(0, pageSize) : loadedMessages;
@@ -164,6 +170,7 @@ public class MessageService {
 
         DirectMessage savedMessage = saveMessage(conversation, viewer, content, sharedPost);
         viewerParticipant.markRead();
+        publishMessageCreated(savedMessage);
 
         return toMessageResponse(savedMessage, viewer.getId());
     }
@@ -211,6 +218,7 @@ public class MessageService {
 
             directMessageAttachmentRepository.saveAll(messageAttachments);
             viewerParticipant.markRead();
+            publishMessageCreated(savedMessage);
             return toMessageResponse(savedMessage, viewer.getId());
         } catch (Exception ex) {
             storedFiles.forEach(messageAttachmentStorageService::deleteQuietly);
@@ -241,6 +249,7 @@ public class MessageService {
         }
 
         message.edit(content);
+        publishMessageUpdated(message);
         return toMessageResponse(message, viewer.getId());
     }
 
@@ -258,6 +267,7 @@ public class MessageService {
         }
 
         message.softDelete();
+        publishMessageDeleted(message);
     }
 
     public void leaveConversation(CustomUserPrincipal principal, UUID conversationId) {
@@ -308,6 +318,7 @@ public class MessageService {
             MessageParticipant viewerParticipant = getOrCreateParticipant(conversation, viewer);
             DirectMessage savedMessage = saveMessage(conversation, viewer, content != null ? content : "", sharedPost);
             viewerParticipant.markRead();
+            publishMessageCreated(savedMessage);
             responses.add(toConversationResponse(conversation, viewer.getId(), viewerParticipant));
         }
         return responses;
@@ -351,6 +362,7 @@ public class MessageService {
             String content,
             Post sharedPost
     ) {
+        reactivateRecipientsForIncomingMessage(conversation, sender.getId());
         DirectMessage savedMessage = directMessageRepository.save(DirectMessage.create(
                 conversation,
                 sender,
@@ -359,6 +371,15 @@ public class MessageService {
         ));
         conversation.updateLastMessage(savedMessage.getId());
         return savedMessage;
+    }
+
+    private void reactivateRecipientsForIncomingMessage(MessageConversation conversation, UUID senderId) {
+        List<MessageParticipant> participants = messageParticipantRepository.findByConversationId(conversation.getId());
+        for (MessageParticipant participant : participants) {
+            if (!participant.getUser().getId().equals(senderId) && participant.getDeletedAt() != null) {
+                participant.reactivateForIncomingMessage();
+            }
+        }
     }
 
     private ConversationResponse toConversationResponse(
@@ -374,8 +395,9 @@ public class MessageService {
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation recipient not found."));
 
-        List<DirectMessage> recentMessages = new ArrayList<>(directMessageRepository.findRecentActiveByConversationId(
+        List<DirectMessage> recentMessages = new ArrayList<>(loadRecentMessages(
                 conversation.getId(),
+                viewerParticipant.getClearedAt(),
                 PageRequest.of(0, DEFAULT_MESSAGE_PAGE_SIZE)
         ));
         Collections.reverse(recentMessages);
@@ -387,15 +409,70 @@ public class MessageService {
                 buildAttachmentMap(recentMessages),
                 participants,
                 viewerId,
-                countUnreadMessages(conversation.getId(), viewerId, viewerParticipant.getLastReadAt())
+                countUnreadMessages(
+                        conversation.getId(),
+                        viewerId,
+                        viewerParticipant.getLastReadAt(),
+                        viewerParticipant.getClearedAt()
+                )
         );
     }
 
-    private long countUnreadMessages(UUID conversationId, UUID viewerId, OffsetDateTime lastReadAt) {
-        if (lastReadAt == null) {
+    private long countUnreadMessages(
+            UUID conversationId,
+            UUID viewerId,
+            OffsetDateTime lastReadAt,
+            OffsetDateTime clearedAt
+    ) {
+        OffsetDateTime threshold = latest(lastReadAt, clearedAt);
+        if (threshold == null) {
             return directMessageRepository.countUnreadMessagesWithoutReadAt(conversationId, viewerId);
         }
-        return directMessageRepository.countUnreadMessages(conversationId, viewerId, lastReadAt);
+        return directMessageRepository.countUnreadMessages(conversationId, viewerId, threshold);
+    }
+
+    private List<DirectMessage> loadRecentMessages(
+            UUID conversationId,
+            OffsetDateTime clearedAt,
+            PageRequest pageRequest
+    ) {
+        if (clearedAt == null) {
+            return directMessageRepository.findRecentActiveByConversationId(conversationId, pageRequest);
+        }
+        return directMessageRepository.findRecentActiveByConversationIdAfter(conversationId, clearedAt, pageRequest);
+    }
+
+    private List<DirectMessage> loadMessagePage(
+            UUID conversationId,
+            OffsetDateTime cursorCreatedAt,
+            OffsetDateTime clearedAt,
+            PageRequest pageRequest
+    ) {
+        if (cursorCreatedAt == null && clearedAt == null) {
+            return directMessageRepository.findActivePageByConversationId(conversationId, pageRequest);
+        }
+        if (cursorCreatedAt == null) {
+            return directMessageRepository.findActivePageByConversationIdAfter(conversationId, clearedAt, pageRequest);
+        }
+        if (clearedAt == null) {
+            return directMessageRepository.findActivePageByConversationIdBefore(conversationId, cursorCreatedAt, pageRequest);
+        }
+        return directMessageRepository.findActivePageByConversationIdBeforeAndAfter(
+                conversationId,
+                cursorCreatedAt,
+                clearedAt,
+                pageRequest
+        );
+    }
+
+    private OffsetDateTime latest(OffsetDateTime left, OffsetDateTime right) {
+        if (left == null) {
+            return right;
+        }
+        if (right == null) {
+            return left;
+        }
+        return left.isAfter(right) ? left : right;
     }
 
     private MessageResponse toMessageResponse(DirectMessage message, UUID viewerId) {
@@ -408,6 +485,44 @@ public class MessageService {
                 attachmentMap.getOrDefault(message.getId(), List.of()),
                 participants
         );
+    }
+
+    private void publishMessageCreated(DirectMessage message) {
+        publishMessageEvent(message, "created");
+    }
+
+    private void publishMessageUpdated(DirectMessage message) {
+        publishMessageEvent(message, "updated");
+    }
+
+    private void publishMessageDeleted(DirectMessage message) {
+        List<MessageParticipant> participants =
+                messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(message.getConversation().getId());
+        for (MessageParticipant participant : participants) {
+            messageRealtimeService.publish(
+                    participant.getUser().getId(),
+                    MessageRealtimeEvent.deleted(message.getConversation().getId(), message.getId())
+            );
+        }
+    }
+
+    private void publishMessageEvent(DirectMessage message, String type) {
+        List<MessageParticipant> participants =
+                messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(message.getConversation().getId());
+        Map<UUID, List<DirectMessageAttachment>> attachmentMap = buildAttachmentMap(List.of(message));
+        for (MessageParticipant participant : participants) {
+            UUID viewerId = participant.getUser().getId();
+            MessageResponse response = messageResponseAssembler.toMessage(
+                    message,
+                    viewerId,
+                    attachmentMap.getOrDefault(message.getId(), List.of()),
+                    participants
+            );
+            MessageRealtimeEvent event = "updated".equals(type)
+                    ? MessageRealtimeEvent.updated(message.getConversation().getId(), response)
+                    : MessageRealtimeEvent.created(message.getConversation().getId(), response);
+            messageRealtimeService.publish(viewerId, event);
+        }
     }
 
     private Map<UUID, List<DirectMessageAttachment>> buildAttachmentMap(List<DirectMessage> messages) {

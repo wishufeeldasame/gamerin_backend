@@ -41,10 +41,38 @@ public interface DirectMessageRepository extends JpaRepository<DirectMessage, UU
         from DirectMessage dm
         where dm.conversation.id = :conversationId
           and dm.deletedAt is null
+          and dm.createdAt > :clearedAt
+        order by dm.createdAt desc, dm.id desc
+        """)
+    List<DirectMessage> findRecentActiveByConversationIdAfter(
+            @Param("conversationId") UUID conversationId,
+            @Param("clearedAt") java.time.OffsetDateTime clearedAt,
+            Pageable pageable
+    );
+
+    @Query("""
+        select dm
+        from DirectMessage dm
+        where dm.conversation.id = :conversationId
+          and dm.deletedAt is null
         order by dm.createdAt desc, dm.id desc
         """)
     List<DirectMessage> findActivePageByConversationId(
             @Param("conversationId") UUID conversationId,
+            Pageable pageable
+    );
+
+    @Query("""
+        select dm
+        from DirectMessage dm
+        where dm.conversation.id = :conversationId
+          and dm.deletedAt is null
+          and dm.createdAt > :clearedAt
+        order by dm.createdAt desc, dm.id desc
+        """)
+    List<DirectMessage> findActivePageByConversationIdAfter(
+            @Param("conversationId") UUID conversationId,
+            @Param("clearedAt") java.time.OffsetDateTime clearedAt,
             Pageable pageable
     );
 
@@ -59,6 +87,22 @@ public interface DirectMessageRepository extends JpaRepository<DirectMessage, UU
     List<DirectMessage> findActivePageByConversationIdBefore(
             @Param("conversationId") UUID conversationId,
             @Param("cursorCreatedAt") java.time.OffsetDateTime cursorCreatedAt,
+            Pageable pageable
+    );
+
+    @Query("""
+        select dm
+        from DirectMessage dm
+        where dm.conversation.id = :conversationId
+          and dm.deletedAt is null
+          and dm.createdAt < :cursorCreatedAt
+          and dm.createdAt > :clearedAt
+        order by dm.createdAt desc, dm.id desc
+        """)
+    List<DirectMessage> findActivePageByConversationIdBeforeAndAfter(
+            @Param("conversationId") UUID conversationId,
+            @Param("cursorCreatedAt") java.time.OffsetDateTime cursorCreatedAt,
+            @Param("clearedAt") java.time.OffsetDateTime clearedAt,
             Pageable pageable
     );
 

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
@@ -48,6 +49,13 @@ public class MessageController {
             @AuthenticationPrincipal CustomUserPrincipal principal
     ) {
         return ApiResponse.ok(messageService.getConversations(principal));
+    }
+
+    @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamMessages(
+            @AuthenticationPrincipal CustomUserPrincipal principal
+    ) {
+        return messageService.streamMessages(principal);
     }
 
     @PostMapping("/conversations")
