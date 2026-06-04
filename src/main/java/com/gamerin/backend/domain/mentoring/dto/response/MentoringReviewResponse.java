@@ -8,6 +8,8 @@ import com.gamerin.backend.domain.mentoring.entity.MentoringReview;
 public record MentoringReviewResponse(
     UUID id,
     UUID applicationId,
+    UUID programId,
+    String programTitle,
     String menteeNickname,
     int rating,
     String content,
@@ -17,6 +19,8 @@ public record MentoringReviewResponse(
         return new MentoringReviewResponse(
             review.getId(),
             review.getApplication().getId(),
+            review.getApplication().getProgram().getId(),
+            review.getApplication().getProgram().getTitle(),
             review.getMentee().getNickname(),
             review.getRating(),
             review.getContent(),

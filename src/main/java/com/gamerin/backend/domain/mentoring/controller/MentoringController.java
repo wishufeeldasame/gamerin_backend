@@ -60,6 +60,14 @@ public class MentoringController {
         return ApiResponse.ok(mentoringService.registerMentor(principal, request));
     }
 
+    @Operation(summary = "내 멘토 프로필 조회", description = "현재 로그인한 사용자의 멘토 프로필을 조회. 멘토 등록 전이면 null 반환")
+    @GetMapping("/mentors/me")
+    public ApiResponse<MentorProfileResponse> getMyMentorProfile(
+        @AuthenticationPrincipal CustomUserPrincipal principal
+    ) {
+        return ApiResponse.ok(mentoringService.getMyMentorProfile(principal));
+    }
+
     @Operation(summary = "멘토 프로필 조회", description = "특정 멘토의 프로필(평점, 리뷰 수 등)을 조회")
     @GetMapping("/mentors/{mentorId}")
     public ApiResponse<MentorProfileResponse> getMentorProfile(

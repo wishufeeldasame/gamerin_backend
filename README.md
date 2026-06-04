@@ -142,3 +142,14 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > hard delete 대상 게시물의 `media_url`, `thumbnail_url`을 실제 업로드 파일 경로로 변환하여 서버 파일도 함께 삭제하도록 MediaStorageService 보강  
   > 게시물 정리 주기 설정을 `app.post.cleanup.*`으로 추가하고 운영 환경에서는 환경변수로 조정할 수 있도록 구성  
   > 게시물 삭제 권한, soft delete, hard delete 스케줄러, 미디어 파일 삭제 경로 검증 테스트 코드 추가  
+
+- **26/06/04** 서장호  
+
+  > 멘토 미등록 사용자의 멘토링 화면 진입을 실패 요청으로 판별하지 않도록 `GET /api/v1/mentoring/mentors/me` API 추가  
+  > `/mentors/me`는 현재 로그인 사용자가 멘토면 멘토 프로필을 반환하고, 멘토 등록 전이면 `data: null`을 정상 응답으로 반환하도록 구현  
+  > 기존 `GET /api/v1/mentoring/mentors/{mentorId}`는 특정 멘토 공개 조회 API로 유지하고, 존재하지 않는 멘토는 `404 NOT_FOUND`로 반환하도록 변경  
+  > `MentoringApplicationResponse`에 `mentorId`, `menteeId`, `reviewed` 필드를 추가하여 프론트가 채팅 상대와 리뷰 작성 여부를 서버 응답 기준으로 판단하도록 정리  
+  > `MentoringReviewResponse`에 `programId`, `programTitle` 필드를 추가하여 리뷰 화면에서 프로그램 정보를 안정적으로 표시하도록 보강  
+  > 신청 목록 조회 시 페이지 내 application id들을 기준으로 리뷰 작성 여부를 한 번에 조회하는 `findReviewedApplicationIds()` 쿼리 추가  
+  > 단건 신청 응답은 `existsByApplicationId()`로, 목록 신청 응답은 배치 조회 결과로 `reviewed` 값을 채우도록 `MentoringService` 응답 변환 흐름 정리  
+  > 멘토 미등록, 존재하지 않는 멘토 404, 신청 목록 응답의 참여자 ID 및 리뷰 여부를 검증하는 `MentoringServiceTest` 추가  

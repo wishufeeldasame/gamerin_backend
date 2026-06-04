@@ -5,11 +5,14 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
@@ -38,6 +41,7 @@ import com.gamerin.backend.domain.user.service.MileageService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class MentoringService {
@@ -96,9 +100,16 @@ public class MentoringService {
 
     // 멘토 프로필 조회
     @Transactional(readOnly = true)
+    public MentorProfileResponse getMyMentorProfile(CustomUserPrincipal principal) {
+        return mentorProfileRepository.findById(principal.getUserId())
+                .map(MentorProfileResponse::from)
+                .orElse(null);
+    }
+
+    @Transactional(readOnly = true)
     public MentorProfileResponse getMentorProfile(UUID mentorId) {
         MentorProfile mentorProfile = mentorProfileRepository.findById(mentorId)
-                .orElseThrow(() -> new RuntimeException("해당 멘토를 찾을 수 없습니다."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "해당 멘토를 찾을 수 없습니다."));
 
         return MentorProfileResponse.from(mentorProfile);
     }
@@ -221,7 +232,7 @@ public class MentoringService {
 
         MentoringApplication savedApplication = mentoringApplicationRepository.save(application);
 
-        return MentoringApplicationResponse.from(savedApplication);
+        return toApplicationResponse(savedApplication);
     }
 
     //멘토링 신청 취소
@@ -253,19 +264,19 @@ public class MentoringService {
             application.getId()
         );
 
-        return MentoringApplicationResponse.from(application);
+        return toApplicationResponse(application);
     }
 
     // 멘티가 본인 신청 내역 확인하는거
     @Transactional(readOnly = true)
     public Page<MentoringApplicationResponse> getMyApplicationsAsMentee(CustomUserPrincipal principal, Pageable pageable) {
-        return mentoringApplicationRepository.findByMenteeId(principal.getUserId(), pageable).map(MentoringApplicationResponse::from);
+        return toApplicationResponsePage(mentoringApplicationRepository.findByMenteeId(principal.getUserId(), pageable));
     }
 
     // 멘토가 신청 내역 확인하는거
     @Transactional(readOnly = true)
     public Page<MentoringApplicationResponse> getMyApplicationsAsMentor(CustomUserPrincipal principal, Pageable pageable) {
-        return mentoringApplicationRepository.findByProgramMentorId(principal.getUserId(), pageable).map(MentoringApplicationResponse::from);
+        return toApplicationResponsePage(mentoringApplicationRepository.findByProgramMentorId(principal.getUserId(), pageable));
     }
 
     // 신청 수락
@@ -284,7 +295,7 @@ public class MentoringService {
         }
 
         application.setStatus(ApplicationStatus.ACCEPTED);
-        return MentoringApplicationResponse.from(application);
+        return toApplicationResponse(application);
     
     }
 
@@ -315,7 +326,7 @@ public class MentoringService {
             "멘토링 거절에 따른 환불", application.getId()
         );
 
-        return MentoringApplicationResponse.from(application);
+        return toApplicationResponse(application);
     }
 
     // 멘토링 시작 (멘토가 수행)
@@ -335,7 +346,7 @@ public class MentoringService {
         }
 
         application.setStatus(ApplicationStatus.ONGOING);
-        return MentoringApplicationResponse.from(application);
+        return toApplicationResponse(application);
     }
 
     // 멘토가 수업 완료를 선언 (정산 대기 상태로 진입)
@@ -354,7 +365,7 @@ public class MentoringService {
 
         application.setStatus(ApplicationStatus.FINISHED);
 
-        return MentoringApplicationResponse.from(application);
+        return toApplicationResponse(application);
     }
 
     // 멘토링 완료 확정 및 정산 (멘티가 수행)
@@ -392,7 +403,7 @@ public class MentoringService {
         // 멘토 통계 업데이트 : 누적 멘티 수 증가
         mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
 
-        return MentoringApplicationResponse.from(application);
+        return toApplicationResponse(application);
 
     }
 
@@ -452,6 +463,33 @@ public class MentoringService {
         updateMentorStats(application.getProgram().getMentor(), request.rating());
 
         return MentoringReviewResponse.from(savedReview);
+    }
+
+    private MentoringApplicationResponse toApplicationResponse(MentoringApplication application) {
+        return MentoringApplicationResponse.from(
+                application,
+                mentoringReviewRepository.existsByApplicationId(application.getId())
+        );
+    }
+
+    private Page<MentoringApplicationResponse> toApplicationResponsePage(Page<MentoringApplication> applications) {
+        if (applications.getContent().isEmpty()) {
+            return applications.map(application -> MentoringApplicationResponse.from(application, false));
+        }
+
+        List<UUID> applicationIds = applications.getContent().stream()
+                .map(MentoringApplication::getId)
+                .toList();
+        Set<UUID> reviewedApplicationIds = new HashSet<>(
+                mentoringReviewRepository.findReviewedApplicationIds(applicationIds)
+        );
+
+        return applications.map(application ->
+                MentoringApplicationResponse.from(
+                        application,
+                        reviewedApplicationIds.contains(application.getId())
+                )
+        );
     }
 
     // 멘토 평점 업데이트
