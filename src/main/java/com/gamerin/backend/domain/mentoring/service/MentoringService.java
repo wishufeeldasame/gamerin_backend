@@ -30,6 +30,7 @@ import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
 import com.gamerin.backend.domain.mentoring.entity.MentoringReview;
 import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
+import com.gamerin.backend.domain.mentoring.entity.ProgramStatus;
 import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
@@ -45,6 +46,13 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class MentoringService {
+
+    private static final List<ApplicationStatus> REAPPLY_BLOCKING_STATUSES = List.of(
+            ApplicationStatus.APPLIED,
+            ApplicationStatus.ACCEPTED,
+            ApplicationStatus.ONGOING,
+            ApplicationStatus.FINISHED
+    );
 
     private final MentorProfileRepository mentorProfileRepository;
     private final UserRepository userRepository;
@@ -200,12 +208,24 @@ public class MentoringService {
     @Transactional
     public MentoringApplicationResponse applyToProgram(CustomUserPrincipal principal, MentoringApplicationRequest request) {
         // 프로그램 존재 여부 확인
-        MentoringProgram program = mentoringProgramRepository.findById(request.programId())
+        MentoringProgram program = mentoringProgramRepository.findByIdForUpdate(request.programId())
                 .orElseThrow(() -> new RuntimeException("신청하려는 프로그램을 찾을 수 없습니다."));
 
         // 본인의 프로그램인지 확인 (자신에게 신청 불가)
         if (program.getMentor().getId().equals(principal.getUserId())) {
             throw new RuntimeException("자신이 등록한 프로그램에는 신청할 수 없습니다.");
+        }
+
+        if (program.getStatus() != ProgramStatus.ACTIVE) {
+            throw new RuntimeException("마감된 프로그램에는 신청할 수 없습니다.");
+        }
+
+        if (mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(
+                principal.getUserId(),
+                program.getId(),
+                REAPPLY_BLOCKING_STATUSES
+        )) {
+            throw new RuntimeException("이미 진행 중인 신청 내역이 있습니다.");
         }
 
         // 멘티 유저 정보 조회
