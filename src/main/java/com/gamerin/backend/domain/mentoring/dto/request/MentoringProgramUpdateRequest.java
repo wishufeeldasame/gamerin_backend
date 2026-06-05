@@ -10,7 +10,7 @@ import jakarta.validation.constraints.NotNull;
 public record MentoringProgramUpdateRequest(
     @NotBlank String title,
     @NotBlank String content,
-    @NotBlank String availableTimeDesc,
+    String availableTimeDesc,
     @NotNull Long price,
     @NotNull ProgramStatus status, // 활성/비활성 상태 변경 가능
     List<String> tags
