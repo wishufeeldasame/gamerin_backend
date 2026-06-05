@@ -2,8 +2,11 @@ package com.gamerin.backend.domain.mentoring.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import java.util.List;
 import java.util.Optional;
@@ -21,13 +24,16 @@ import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
 import com.gamerin.backend.domain.mentoring.dto.response.MentorProfileResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringApplicationResponse;
+import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramDetailResponse;
 import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
 import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
+import com.gamerin.backend.domain.mentoring.entity.ProgramStatus;
 import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
@@ -126,6 +132,79 @@ class MentoringServiceTest {
         assertThat(item.mentorId()).isEqualTo(mentorId);
         assertThat(item.menteeId()).isEqualTo(menteeId);
         assertThat(item.reviewed()).isTrue();
+    }
+
+    @Test
+    void getProgramDetailIncludesStatus() {
+        MentoringApplication application = application(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID()
+        );
+        MentoringProgram program = application.getProgram();
+        program.setStatus(ProgramStatus.CLOSED);
+
+        when(mentoringProgramRepository.findById(program.getId())).thenReturn(Optional.of(program));
+
+        MentoringProgramDetailResponse response = mentoringService.getProgramDetail(program.getId());
+
+        assertThat(response.status()).isEqualTo(ProgramStatus.CLOSED);
+    }
+
+    @Test
+    void applyToProgramRejectsClosedProgramBeforeChargingMileage() {
+        UUID mentorId = UUID.randomUUID();
+        UUID menteeId = UUID.randomUUID();
+        UUID programId = UUID.randomUUID();
+        MentoringApplication application = application(mentorId, menteeId, programId, UUID.randomUUID());
+        MentoringProgram program = application.getProgram();
+        program.setStatus(ProgramStatus.CLOSED);
+
+        when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+
+        assertThatThrownBy(() -> mentoringService.applyToProgram(
+                CustomUserPrincipal.from(application.getMentee()),
+                new MentoringApplicationRequest(programId, "message")
+        ))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("마감된 프로그램에는 신청할 수 없습니다.");
+
+        verify(mileageService, never()).useMileage(any(), any(), any(), any(), any());
+        verify(mentoringApplicationRepository, never()).save(any());
+    }
+
+    @Test
+    void applyToProgramRejectsDuplicateActiveApplicationBeforeChargingMileage() {
+        UUID mentorId = UUID.randomUUID();
+        UUID menteeId = UUID.randomUUID();
+        UUID programId = UUID.randomUUID();
+        MentoringApplication application = application(mentorId, menteeId, programId, UUID.randomUUID());
+        MentoringProgram program = application.getProgram();
+        program.setStatus(ProgramStatus.ACTIVE);
+        List<ApplicationStatus> reapplyBlockingStatuses = List.of(
+                ApplicationStatus.APPLIED,
+                ApplicationStatus.ACCEPTED,
+                ApplicationStatus.ONGOING,
+                ApplicationStatus.FINISHED
+        );
+
+        when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+        when(mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(
+                menteeId,
+                programId,
+                reapplyBlockingStatuses
+        )).thenReturn(true);
+
+        assertThatThrownBy(() -> mentoringService.applyToProgram(
+                CustomUserPrincipal.from(application.getMentee()),
+                new MentoringApplicationRequest(programId, "message")
+        ))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("이미 진행 중인 신청 내역이 있습니다.");
+
+        verify(mileageService, never()).useMileage(any(), any(), any(), any(), any());
+        verify(mentoringApplicationRepository, never()).save(any());
     }
 
     private MentoringApplication application(UUID mentorId, UUID menteeId, UUID programId, UUID applicationId) {

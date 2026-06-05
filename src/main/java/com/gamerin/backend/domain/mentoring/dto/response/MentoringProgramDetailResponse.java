@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
+import com.gamerin.backend.domain.mentoring.entity.ProgramStatus;
 
 public record MentoringProgramDetailResponse(
     UUID id,
@@ -15,6 +16,7 @@ public record MentoringProgramDetailResponse(
     String title,
     String content,
     String availableTimeDesc,
+    ProgramStatus status,
     Long price,
     List<String> tags,
     OffsetDateTime createdAt
@@ -30,6 +32,7 @@ public record MentoringProgramDetailResponse(
             program.getTitle(),
             program.getContent(),
             program.getAvailableTimeDesc(),
+            program.getStatus(),
             program.getPrice(),
             program.getTags(),
             program.getCreatedAt()

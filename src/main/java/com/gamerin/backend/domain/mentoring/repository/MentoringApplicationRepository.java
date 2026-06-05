@@ -19,6 +19,8 @@ public interface MentoringApplicationRepository extends JpaRepository<MentoringA
     // 멘토 ID(program.mentor.id)로 신청 내역 조회 (페이징)
     Page<MentoringApplication> findByProgramMentorId(UUID mentorId, Pageable pageable);
 
+    boolean existsByMenteeIdAndProgramIdAndStatusIn(UUID menteeId, UUID programId, List<ApplicationStatus> statuses);
+
     List<MentoringApplication> findByStatusAndUpdatedAtBefore(ApplicationStatus status, OffsetDateTime dateTime);
     
 } 
