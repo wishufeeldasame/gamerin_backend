@@ -21,7 +21,6 @@ import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMultipartMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SharePostMessageRequest;
-import com.gamerin.backend.domain.message.dto.request.UpdateMessageRequest;
 import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageRecipientResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageResponse;
@@ -98,16 +97,6 @@ public class MessageController {
             @Valid @ModelAttribute SendMultipartMessageRequest request
     ) {
         return ApiResponse.ok(messageService.sendMultipartMessage(principal, conversationId, request));
-    }
-
-    @PatchMapping("/conversations/{conversationId}/messages/{messageId}")
-    public ApiResponse<MessageResponse> updateMessage(
-            @AuthenticationPrincipal CustomUserPrincipal principal,
-            @PathVariable UUID conversationId,
-            @PathVariable UUID messageId,
-            @Valid @RequestBody UpdateMessageRequest request
-    ) {
-        return ApiResponse.ok(messageService.updateMessage(principal, conversationId, messageId, request));
     }
 
     @DeleteMapping("/conversations/{conversationId}/messages/{messageId}")

@@ -43,9 +43,6 @@ public class DirectMessage {
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
-    @Column(name = "edited_at")
-    private OffsetDateTime editedAt;
-
     @Column(name = "deleted_at")
     private OffsetDateTime deletedAt;
 
@@ -69,11 +66,6 @@ public class DirectMessage {
     @PrePersist
     protected void onCreate() {
         this.createdAt = OffsetDateTime.now();
-    }
-
-    public void edit(String content) {
-        this.content = content;
-        this.editedAt = OffsetDateTime.now();
     }
 
     public void softDelete() {
@@ -106,10 +98,6 @@ public class DirectMessage {
 
     public OffsetDateTime getCreatedAt() {
         return createdAt;
-    }
-
-    public OffsetDateTime getEditedAt() {
-        return editedAt;
     }
 
     public OffsetDateTime getDeletedAt() {

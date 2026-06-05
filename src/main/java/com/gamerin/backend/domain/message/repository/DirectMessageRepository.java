@@ -81,12 +81,16 @@ public interface DirectMessageRepository extends JpaRepository<DirectMessage, UU
         from DirectMessage dm
         where dm.conversation.id = :conversationId
           and dm.deletedAt is null
-          and dm.createdAt < :cursorCreatedAt
+          and (
+              dm.createdAt < :cursorCreatedAt
+              or (dm.createdAt = :cursorCreatedAt and dm.id < :cursorId)
+          )
         order by dm.createdAt desc, dm.id desc
         """)
     List<DirectMessage> findActivePageByConversationIdBefore(
             @Param("conversationId") UUID conversationId,
             @Param("cursorCreatedAt") java.time.OffsetDateTime cursorCreatedAt,
+            @Param("cursorId") UUID cursorId,
             Pageable pageable
     );
 
@@ -95,13 +99,17 @@ public interface DirectMessageRepository extends JpaRepository<DirectMessage, UU
         from DirectMessage dm
         where dm.conversation.id = :conversationId
           and dm.deletedAt is null
-          and dm.createdAt < :cursorCreatedAt
+          and (
+              dm.createdAt < :cursorCreatedAt
+              or (dm.createdAt = :cursorCreatedAt and dm.id < :cursorId)
+          )
           and dm.createdAt > :clearedAt
         order by dm.createdAt desc, dm.id desc
         """)
     List<DirectMessage> findActivePageByConversationIdBeforeAndAfter(
             @Param("conversationId") UUID conversationId,
             @Param("cursorCreatedAt") java.time.OffsetDateTime cursorCreatedAt,
+            @Param("cursorId") UUID cursorId,
             @Param("clearedAt") java.time.OffsetDateTime clearedAt,
             Pageable pageable
     );

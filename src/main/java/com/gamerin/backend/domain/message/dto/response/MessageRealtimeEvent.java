@@ -12,10 +12,6 @@ public record MessageRealtimeEvent(
         return new MessageRealtimeEvent("message-created", conversationId, message, message.id());
     }
 
-    public static MessageRealtimeEvent updated(UUID conversationId, MessageResponse message) {
-        return new MessageRealtimeEvent("message-updated", conversationId, message, message.id());
-    }
-
     public static MessageRealtimeEvent deleted(UUID conversationId, UUID messageId) {
         return new MessageRealtimeEvent("message-deleted", conversationId, null, messageId);
     }

@@ -9,7 +9,6 @@ public record MessageResponse(
         String senderId,
         String text,
         OffsetDateTime createdAt,
-        OffsetDateTime editedAt,
         boolean read,
         String deliveryStatus,
         List<MessageAttachmentResponse> attachments,

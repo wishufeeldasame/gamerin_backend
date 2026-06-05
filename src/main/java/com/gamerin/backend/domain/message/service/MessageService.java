@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.message.service;
 
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -20,7 +21,6 @@ import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMultipartMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SharePostMessageRequest;
-import com.gamerin.backend.domain.message.dto.request.UpdateMessageRequest;
 import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageRecipientResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageRealtimeEvent;
@@ -125,10 +125,10 @@ public class MessageService {
         MessageParticipant viewerParticipant = getParticipant(conversationId, viewer.getId());
 
         int pageSize = clampSize(size, DEFAULT_MESSAGE_PAGE_SIZE);
-        OffsetDateTime cursorCreatedAt = parseMessageCursor(cursor);
+        MessageCursor messageCursor = parseMessageCursor(cursor);
         List<DirectMessage> loadedMessages = loadMessagePage(
                 conversationId,
-                cursorCreatedAt,
+                messageCursor,
                 viewerParticipant.getClearedAt(),
                 PageRequest.of(0, pageSize + 1)
         );
@@ -168,7 +168,12 @@ public class MessageService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message content or shared post is required.");
         }
 
-        DirectMessage savedMessage = saveMessage(conversation, viewer, content, sharedPost);
+        DirectMessage savedMessage = saveMessage(
+                conversation,
+                viewer,
+                content != null ? content : "",
+                sharedPost
+        );
         viewerParticipant.markRead();
         publishMessageCreated(savedMessage);
 
@@ -227,30 +232,6 @@ public class MessageService {
             }
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to upload message attachments.", ex);
         }
-    }
-
-    public MessageResponse updateMessage(
-            CustomUserPrincipal principal,
-            UUID conversationId,
-            UUID messageId,
-            UpdateMessageRequest request
-    ) {
-        User viewer = getCurrentUser(principal);
-        getParticipant(conversationId, viewer.getId());
-
-        DirectMessage message = getActiveMessage(conversationId, messageId);
-        if (!message.isSentBy(viewer.getId())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the sender can modify this message.");
-        }
-
-        String content = normalizeContent(request.content());
-        if (content == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message content is required.");
-        }
-
-        message.edit(content);
-        publishMessageUpdated(message);
-        return toMessageResponse(message, viewer.getId());
     }
 
     public void deleteMessage(
@@ -331,11 +312,6 @@ public class MessageService {
 
         String directKey = buildDirectKey(viewer.getId(), recipient.getId());
         return messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(directKey)
-                .map(conversation -> {
-                    getOrCreateParticipant(conversation, viewer);
-                    getOrCreateParticipant(conversation, recipient);
-                    return conversation;
-                })
                 .orElseGet(() -> {
                     MessageConversation conversation =
                             messageConversationRepository.save(MessageConversation.createDirect(directKey));
@@ -444,22 +420,28 @@ public class MessageService {
 
     private List<DirectMessage> loadMessagePage(
             UUID conversationId,
-            OffsetDateTime cursorCreatedAt,
+            MessageCursor cursor,
             OffsetDateTime clearedAt,
             PageRequest pageRequest
     ) {
-        if (cursorCreatedAt == null && clearedAt == null) {
+        if (cursor == null && clearedAt == null) {
             return directMessageRepository.findActivePageByConversationId(conversationId, pageRequest);
         }
-        if (cursorCreatedAt == null) {
+        if (cursor == null) {
             return directMessageRepository.findActivePageByConversationIdAfter(conversationId, clearedAt, pageRequest);
         }
         if (clearedAt == null) {
-            return directMessageRepository.findActivePageByConversationIdBefore(conversationId, cursorCreatedAt, pageRequest);
+            return directMessageRepository.findActivePageByConversationIdBefore(
+                    conversationId,
+                    cursor.createdAt(),
+                    cursor.id(),
+                    pageRequest
+            );
         }
         return directMessageRepository.findActivePageByConversationIdBeforeAndAfter(
                 conversationId,
-                cursorCreatedAt,
+                cursor.createdAt(),
+                cursor.id(),
                 clearedAt,
                 pageRequest
         );
@@ -488,11 +470,7 @@ public class MessageService {
     }
 
     private void publishMessageCreated(DirectMessage message) {
-        publishMessageEvent(message, "created");
-    }
-
-    private void publishMessageUpdated(DirectMessage message) {
-        publishMessageEvent(message, "updated");
+        publishMessageEvent(message);
     }
 
     private void publishMessageDeleted(DirectMessage message) {
@@ -506,7 +484,7 @@ public class MessageService {
         }
     }
 
-    private void publishMessageEvent(DirectMessage message, String type) {
+    private void publishMessageEvent(DirectMessage message) {
         List<MessageParticipant> participants =
                 messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(message.getConversation().getId());
         Map<UUID, List<DirectMessageAttachment>> attachmentMap = buildAttachmentMap(List.of(message));
@@ -518,10 +496,10 @@ public class MessageService {
                     attachmentMap.getOrDefault(message.getId(), List.of()),
                     participants
             );
-            MessageRealtimeEvent event = "updated".equals(type)
-                    ? MessageRealtimeEvent.updated(message.getConversation().getId(), response)
-                    : MessageRealtimeEvent.created(message.getConversation().getId(), response);
-            messageRealtimeService.publish(viewerId, event);
+            messageRealtimeService.publish(
+                    viewerId,
+                    MessageRealtimeEvent.created(message.getConversation().getId(), response)
+            );
         }
     }
 
@@ -646,16 +624,20 @@ public class MessageService {
         return Math.min(requested, MAX_PAGE_SIZE);
     }
 
-    private OffsetDateTime parseMessageCursor(String cursor) {
+    private MessageCursor parseMessageCursor(String cursor) {
         if (cursor == null || cursor.isBlank()) {
             return null;
         }
 
         String[] values = cursor.split("\\|");
-        if (values.length == 0) {
-            return null;
+        if (values.length != 2) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid message cursor.");
         }
-        return OffsetDateTime.parse(values[0]);
+        try {
+            return new MessageCursor(OffsetDateTime.parse(values[0]), UUID.fromString(values[1]));
+        } catch (DateTimeParseException | IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid message cursor.", ex);
+        }
     }
 
     private String buildMessageCursor(List<DirectMessage> messages, boolean hasNext) {
@@ -665,6 +647,9 @@ public class MessageService {
 
         DirectMessage oldest = messages.get(0);
         return oldest.getCreatedAt() + "|" + oldest.getId();
+    }
+
+    private record MessageCursor(OffsetDateTime createdAt, UUID id) {
     }
 
     private String normalizeHandle(String handle) {
