@@ -17,9 +17,12 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -31,11 +34,18 @@ class JwtAuthenticationFilterTest {
     @Mock
     private CustomUserDetailsService customUserDetailsService;
 
+    @Mock
+    private SseStreamTokenService sseStreamTokenService;
+
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @BeforeEach
     void setUp() {
-        jwtAuthenticationFilter = new JwtAuthenticationFilter(jwtTokenProvider, customUserDetailsService);
+        jwtAuthenticationFilter = new JwtAuthenticationFilter(
+                jwtTokenProvider,
+                customUserDetailsService,
+                sseStreamTokenService
+        );
     }
 
     @AfterEach
@@ -77,6 +87,19 @@ class JwtAuthenticationFilterTest {
         jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
 
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    void doesNotAuthenticateStreamWithAccessTokenQueryParameter() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/messages/stream");
+        request.setParameter("accessToken", "leaky-access-token");
+        when(sseStreamTokenService.resolve(request)).thenReturn(Optional.empty());
+
+        jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        verify(jwtTokenProvider, never()).validate("leaky-access-token");
+        verify(sseStreamTokenService).resolve(request);
     }
 
     private CustomUserPrincipal principal(UUID userId, String handle, String nickname) {

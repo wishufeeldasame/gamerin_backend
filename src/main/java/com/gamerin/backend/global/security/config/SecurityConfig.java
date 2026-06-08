@@ -71,8 +71,9 @@ public class SecurityConfig {
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**",
                                 "/swagger-ui.html",
-                                "/uploads/**"
+                                "/uploads/post-media/**"
                         ).permitAll()
+                        .requestMatchers("/uploads/message-attachments/**").denyAll()
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(exception -> exception

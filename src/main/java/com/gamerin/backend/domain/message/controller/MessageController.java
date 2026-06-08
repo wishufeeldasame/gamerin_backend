@@ -1,9 +1,16 @@
 package com.gamerin.backend.domain.message.controller;
 
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
+import org.springframework.core.io.Resource;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.ResponseCookie;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,12 +31,15 @@ import com.gamerin.backend.domain.message.dto.request.SharePostMessageRequest;
 import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageRecipientResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageResponse;
+import com.gamerin.backend.domain.message.dto.response.MessageStreamTokenResponse;
 import com.gamerin.backend.domain.message.service.MessageService;
 import com.gamerin.backend.global.response.ApiResponse;
 import com.gamerin.backend.global.response.CursorPageResponse;
+import com.gamerin.backend.global.security.jwt.SseStreamTokenService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 
 @RestController
@@ -38,9 +48,11 @@ import jakarta.validation.Valid;
 public class MessageController {
 
     private final MessageService messageService;
+    private final SseStreamTokenService sseStreamTokenService;
 
-    public MessageController(MessageService messageService) {
+    public MessageController(MessageService messageService, SseStreamTokenService sseStreamTokenService) {
         this.messageService = messageService;
+        this.sseStreamTokenService = sseStreamTokenService;
     }
 
     @GetMapping("/conversations")
@@ -55,6 +67,38 @@ public class MessageController {
             @AuthenticationPrincipal CustomUserPrincipal principal
     ) {
         return messageService.streamMessages(principal);
+    }
+
+    @PostMapping("/stream-token")
+    public ApiResponse<MessageStreamTokenResponse> issueStreamToken(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            HttpServletResponse response
+    ) {
+        SseStreamTokenService.IssuedToken issuedToken = messageService.issueStreamToken(principal);
+        ResponseCookie cookie = sseStreamTokenService.createCookie(issuedToken);
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+        return ApiResponse.ok(new MessageStreamTokenResponse(
+                OffsetDateTime.ofInstant(issuedToken.expiresAt(), ZoneOffset.UTC)
+        ));
+    }
+
+    @GetMapping("/attachments/{attachmentId}")
+    public ResponseEntity<Resource> downloadAttachment(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID attachmentId
+    ) {
+        MessageService.MessageAttachmentDownload download = messageService.downloadAttachment(principal, attachmentId);
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(download.contentType()))
+                .header(
+                        HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.inline()
+                                .filename(download.fileName())
+                                .build()
+                                .toString()
+                )
+                .body(download.resource());
     }
 
     @PostMapping("/conversations")

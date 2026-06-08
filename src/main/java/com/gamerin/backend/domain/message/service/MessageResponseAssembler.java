@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageAttachmentResponse;
@@ -23,6 +24,7 @@ import com.gamerin.backend.domain.user.entity.User;
 public class MessageResponseAssembler {
 
     private static final int ONLINE_WINDOW_MINUTES = 5;
+    private static final String DELETED_POST_PLACEHOLDER = "삭제된 게시글";
 
     public ConversationResponse toConversation(
             MessageConversation conversation,
@@ -85,13 +87,33 @@ public class MessageResponseAssembler {
                 attachment.getId(),
                 attachment.getAttachmentType().name().toLowerCase(),
                 attachment.getFileName(),
-                attachment.getFileUrl()
+                attachmentDownloadUrl(attachment.getId())
         );
+    }
+
+    private String attachmentDownloadUrl(UUID attachmentId) {
+        String path = "/api/v1/messages/attachments/" + attachmentId;
+        try {
+            return ServletUriComponentsBuilder.fromCurrentContextPath()
+                    .path(path)
+                    .toUriString();
+        } catch (IllegalStateException ignored) {
+            return path;
+        }
     }
 
     private SharedPostPreviewResponse toSharedPost(Post post) {
         if (post == null) {
             return null;
+        }
+        if (post.getDeletedAt() != null) {
+            return new SharedPostPreviewResponse(
+                    post.getId(),
+                    DELETED_POST_PLACEHOLDER,
+                    "",
+                    DELETED_POST_PLACEHOLDER,
+                    post.getCreatedAt()
+            );
         }
 
         return new SharedPostPreviewResponse(

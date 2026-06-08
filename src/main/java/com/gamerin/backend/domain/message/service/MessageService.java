@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.message.service;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -8,14 +10,20 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
@@ -36,11 +44,14 @@ import com.gamerin.backend.domain.message.repository.MessageConversationReposito
 import com.gamerin.backend.domain.message.repository.MessageParticipantRepository;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.repository.PostRepository;
+import com.gamerin.backend.domain.post.service.LightweightSecurityScanService;
+import com.gamerin.backend.domain.post.service.MediaStorageService;
+import com.gamerin.backend.domain.post.service.MediaUploadSecurityService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.response.CursorPageResponse;
+import com.gamerin.backend.global.security.jwt.SseStreamTokenService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @Service
 @Transactional
@@ -53,6 +64,8 @@ public class MessageService {
     private static final int MAX_VIDEO_ATTACHMENT_COUNT = 1;
     private static final long MAX_IMAGE_ATTACHMENT_SIZE_BYTES = 20L * 1024L * 1024L;
     private static final long MAX_VIDEO_ATTACHMENT_SIZE_BYTES = 100L * 1024L * 1024L;
+    private static final Set<String> IMAGE_ATTACHMENT_EXTENSIONS = Set.of(".jpg", ".jpeg", ".png");
+    private static final Set<String> VIDEO_ATTACHMENT_EXTENSIONS = Set.of(".mp4", ".mov", ".m4v");
 
     private final UserRepository userRepository;
     private final PostRepository postRepository;
@@ -63,6 +76,9 @@ public class MessageService {
     private final MessageAttachmentStorageService messageAttachmentStorageService;
     private final MessageResponseAssembler messageResponseAssembler;
     private final MessageRealtimeService messageRealtimeService;
+    private final MediaUploadSecurityService mediaUploadSecurityService;
+    private final LightweightSecurityScanService lightweightSecurityScanService;
+    private final SseStreamTokenService sseStreamTokenService;
 
     public MessageService(
             UserRepository userRepository,
@@ -73,7 +89,10 @@ public class MessageService {
             DirectMessageAttachmentRepository directMessageAttachmentRepository,
             MessageAttachmentStorageService messageAttachmentStorageService,
             MessageResponseAssembler messageResponseAssembler,
-            MessageRealtimeService messageRealtimeService
+            MessageRealtimeService messageRealtimeService,
+            MediaUploadSecurityService mediaUploadSecurityService,
+            LightweightSecurityScanService lightweightSecurityScanService,
+            SseStreamTokenService sseStreamTokenService
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -84,6 +103,9 @@ public class MessageService {
         this.messageAttachmentStorageService = messageAttachmentStorageService;
         this.messageResponseAssembler = messageResponseAssembler;
         this.messageRealtimeService = messageRealtimeService;
+        this.mediaUploadSecurityService = mediaUploadSecurityService;
+        this.lightweightSecurityScanService = lightweightSecurityScanService;
+        this.sseStreamTokenService = sseStreamTokenService;
     }
 
     @Transactional(readOnly = true)
@@ -112,6 +134,32 @@ public class MessageService {
     public SseEmitter streamMessages(CustomUserPrincipal principal) {
         User viewer = getCurrentUser(principal);
         return messageRealtimeService.subscribe(viewer.getId());
+    }
+
+    @Transactional(readOnly = true)
+    public SseStreamTokenService.IssuedToken issueStreamToken(CustomUserPrincipal principal) {
+        User viewer = getCurrentUser(principal);
+        return sseStreamTokenService.issue(viewer.getId());
+    }
+
+    @Transactional(readOnly = true)
+    public MessageAttachmentDownload downloadAttachment(CustomUserPrincipal principal, UUID attachmentId) {
+        User viewer = getCurrentUser(principal);
+        DirectMessageAttachment attachment = directMessageAttachmentRepository
+                .findAccessibleActiveById(attachmentId, viewer.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Message attachment not found."));
+
+        Path attachmentPath = messageAttachmentStorageService.resolveStoredPath(attachment.getFileUrl())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Message attachment file not found."));
+        if (!Files.isRegularFile(attachmentPath) || !Files.isReadable(attachmentPath)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Message attachment file not found.");
+        }
+
+        return new MessageAttachmentDownload(
+                new FileSystemResource(attachmentPath),
+                detectAttachmentContentType(attachmentPath, attachment.getAttachmentType()),
+                safeAttachmentFileName(attachment.getFileName())
+        );
     }
 
     @Transactional(readOnly = true)
@@ -192,9 +240,9 @@ public class MessageService {
         String content = normalizeContent(request.getContent());
         Post sharedPost = getSharedPost(request.getSharedPostId());
         List<MultipartFile> attachments = normalizeAttachmentFiles(request.getAttachments());
-        validateAttachments(attachments);
+        List<PreparedMessageAttachment> preparedAttachments = prepareAttachments(attachments);
 
-        if (content == null && sharedPost == null && attachments.isEmpty()) {
+        if (content == null && sharedPost == null && preparedAttachments.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message content, shared post, or attachment is required.");
         }
 
@@ -208,15 +256,15 @@ public class MessageService {
         List<MessageAttachmentStorageService.StoredFile> storedFiles = new ArrayList<>();
         try {
             List<DirectMessageAttachment> messageAttachments = new ArrayList<>();
-            for (int index = 0; index < attachments.size(); index++) {
-                MultipartFile attachmentFile = attachments.get(index);
-                MessageAttachmentStorageService.StoredFile storedFile = messageAttachmentStorageService.store(attachmentFile);
+            for (int index = 0; index < preparedAttachments.size(); index++) {
+                PreparedMessageAttachment preparedAttachment = preparedAttachments.get(index);
+                MessageAttachmentStorageService.StoredFile storedFile = storePreparedAttachment(preparedAttachment);
                 storedFiles.add(storedFile);
                 messageAttachments.add(DirectMessageAttachment.create(
                         savedMessage,
-                        resolveAttachmentType(attachmentFile),
-                        attachmentFile.getOriginalFilename() != null ? attachmentFile.getOriginalFilename() : "attachment",
-                        storedFile.publicUrl(),
+                        preparedAttachment.type(),
+                        preparedAttachment.originalFileName(),
+                        storedFile.storageKey(),
                         index
                 ));
             }
@@ -311,14 +359,12 @@ public class MessageService {
         }
 
         String directKey = buildDirectKey(viewer.getId(), recipient.getId());
-        return messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(directKey)
-                .orElseGet(() -> {
-                    MessageConversation conversation =
-                            messageConversationRepository.save(MessageConversation.createDirect(directKey));
-                    messageParticipantRepository.save(MessageParticipant.create(conversation, viewer));
-                    messageParticipantRepository.save(MessageParticipant.create(conversation, recipient));
-                    return conversation;
-                });
+        messageConversationRepository.insertDirectConversationIfAbsent(directKey);
+        MessageConversation conversation = messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(directKey)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Direct conversation is not available."));
+        messageParticipantRepository.insertParticipantIfAbsent(conversation.getId(), viewer.getId());
+        messageParticipantRepository.insertParticipantIfAbsent(conversation.getId(), recipient.getId());
+        return conversation;
     }
 
     private MessageParticipant getOrCreateParticipant(MessageConversation conversation, User user) {
@@ -477,7 +523,7 @@ public class MessageService {
         List<MessageParticipant> participants =
                 messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(message.getConversation().getId());
         for (MessageParticipant participant : participants) {
-            messageRealtimeService.publish(
+            publishAfterCommit(
                     participant.getUser().getId(),
                     MessageRealtimeEvent.deleted(message.getConversation().getId(), message.getId())
             );
@@ -496,11 +542,25 @@ public class MessageService {
                     attachmentMap.getOrDefault(message.getId(), List.of()),
                     participants
             );
-            messageRealtimeService.publish(
+            publishAfterCommit(
                     viewerId,
                     MessageRealtimeEvent.created(message.getConversation().getId(), response)
             );
         }
+    }
+
+    private void publishAfterCommit(UUID userId, MessageRealtimeEvent event) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            messageRealtimeService.publish(userId, event);
+            return;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                messageRealtimeService.publish(userId, event);
+            }
+        });
     }
 
     private Map<UUID, List<DirectMessageAttachment>> buildAttachmentMap(List<DirectMessage> messages) {
@@ -680,25 +740,44 @@ public class MessageService {
                 .toList();
     }
 
-    private void validateAttachments(List<MultipartFile> attachments) {
+    private List<PreparedMessageAttachment> prepareAttachments(List<MultipartFile> attachments) {
         if (attachments.isEmpty()) {
-            return;
+            return List.of();
         }
 
+        List<PreparedMessageAttachment> preparedAttachments = new ArrayList<>();
         long imageCount = 0L;
         long videoCount = 0L;
         for (MultipartFile attachment : attachments) {
-            MessageAttachmentType type = resolveAttachmentType(attachment);
+            MessageAttachmentType type = resolveDeclaredAttachmentType(attachment);
             if (type == MessageAttachmentType.IMAGE) {
                 imageCount++;
                 if (attachment.getSize() > MAX_IMAGE_ATTACHMENT_SIZE_BYTES) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Image attachment must be 20MB or smaller.");
                 }
+                lightweightSecurityScanService.assertFileClean(attachment);
+                MediaStorageService.PreparedMediaFile preparedFile = mediaUploadSecurityService.prepareImage(attachment);
+                preparedAttachments.add(new PreparedMessageAttachment(
+                        type,
+                        attachmentFileName(attachment, preparedFile.extension()),
+                        preparedFile,
+                        null,
+                        preparedFile.extension()
+                ));
             } else {
                 videoCount++;
                 if (attachment.getSize() > MAX_VIDEO_ATTACHMENT_SIZE_BYTES) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video attachment must be 100MB or smaller.");
                 }
+                mediaUploadSecurityService.assertVideoFileSafe(attachment);
+                lightweightSecurityScanService.assertFileClean(attachment);
+                preparedAttachments.add(new PreparedMessageAttachment(
+                        type,
+                        attachmentFileName(attachment, normalizedExtension(attachment)),
+                        null,
+                        attachment,
+                        normalizedExtension(attachment)
+                ));
             }
         }
 
@@ -711,33 +790,114 @@ public class MessageService {
         if (videoCount > MAX_VIDEO_ATTACHMENT_COUNT) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "You can attach only one video.");
         }
+
+        return preparedAttachments;
     }
 
-    private MessageAttachmentType resolveAttachmentType(MultipartFile file) {
-        String contentType = file.getContentType();
-        if (contentType != null) {
-            String normalized = contentType.toLowerCase(Locale.ROOT);
-            if (normalized.startsWith("image/")) {
-                return MessageAttachmentType.IMAGE;
-            }
-            if (normalized.startsWith("video/")) {
-                return MessageAttachmentType.VIDEO;
-            }
+    private MessageAttachmentStorageService.StoredFile storePreparedAttachment(
+            PreparedMessageAttachment preparedAttachment
+    ) throws java.io.IOException {
+        if (preparedAttachment.type() == MessageAttachmentType.IMAGE) {
+            return messageAttachmentStorageService.store(preparedAttachment.preparedImage());
         }
+        return messageAttachmentStorageService.store(preparedAttachment.sourceFile(), preparedAttachment.extension());
+    }
 
-        String fileName = file.getOriginalFilename();
-        if (fileName != null) {
-            String normalized = fileName.toLowerCase(Locale.ROOT);
-            if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg") || normalized.endsWith(".png")
-                    || normalized.endsWith(".gif") || normalized.endsWith(".webp")) {
-                return MessageAttachmentType.IMAGE;
-            }
-            if (normalized.endsWith(".mp4") || normalized.endsWith(".mov") || normalized.endsWith(".webm")
-                    || normalized.endsWith(".m4v")) {
-                return MessageAttachmentType.VIDEO;
-            }
+    private MessageAttachmentType resolveDeclaredAttachmentType(MultipartFile file) {
+        String extension = normalizedExtension(file);
+        if (IMAGE_ATTACHMENT_EXTENSIONS.contains(extension)) {
+            mediaUploadSecurityService.assertImageFileSafe(file);
+            return MessageAttachmentType.IMAGE;
+        }
+        if (VIDEO_ATTACHMENT_EXTENSIONS.contains(extension)) {
+            return MessageAttachmentType.VIDEO;
         }
 
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported message attachment file type.");
+    }
+
+    private String normalizedExtension(MultipartFile file) {
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null || originalFilename.isBlank()) {
+            return "";
+        }
+
+        int extensionIndex = originalFilename.lastIndexOf('.');
+        if (extensionIndex < 0 || extensionIndex == originalFilename.length() - 1) {
+            return "";
+        }
+
+        return originalFilename.substring(extensionIndex).toLowerCase(Locale.ROOT);
+    }
+
+    private String attachmentFileName(MultipartFile file, String extension) {
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null || originalFilename.isBlank()) {
+            return "attachment" + extension;
+        }
+
+        int extensionIndex = originalFilename.lastIndexOf('.');
+        String baseName = extensionIndex > 0 ? originalFilename.substring(0, extensionIndex) : originalFilename;
+        return baseName.isBlank() ? "attachment" + extension : baseName + extension;
+    }
+
+    private String detectAttachmentContentType(Path path, MessageAttachmentType type) {
+        String detectedType = probeContentType(path);
+        if (detectedType != null && detectedType.startsWith(type == MessageAttachmentType.IMAGE ? "image/" : "video/")) {
+            return detectedType;
+        }
+
+        String fileName = path.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) {
+            return MediaTypeNames.IMAGE_JPEG;
+        }
+        if (fileName.endsWith(".png")) {
+            return MediaTypeNames.IMAGE_PNG;
+        }
+        if (fileName.endsWith(".mov")) {
+            return "video/quicktime";
+        }
+        if (fileName.endsWith(".m4v")) {
+            return "video/x-m4v";
+        }
+        if (fileName.endsWith(".mp4")) {
+            return "video/mp4";
+        }
+        return type == MessageAttachmentType.IMAGE ? MediaTypeNames.IMAGE_JPEG : "video/mp4";
+    }
+
+    private String probeContentType(Path path) {
+        try {
+            return Files.probeContentType(path);
+        } catch (java.io.IOException ignored) {
+            return null;
+        }
+    }
+
+    private String safeAttachmentFileName(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            return "attachment";
+        }
+        return fileName.replaceAll("[\\\\/\\r\\n\"]", "_");
+    }
+
+    public record MessageAttachmentDownload(Resource resource, String contentType, String fileName) {
+    }
+
+    private record PreparedMessageAttachment(
+            MessageAttachmentType type,
+            String originalFileName,
+            MediaStorageService.PreparedMediaFile preparedImage,
+            MultipartFile sourceFile,
+            String extension
+    ) {
+    }
+
+    private static final class MediaTypeNames {
+        private static final String IMAGE_JPEG = "image/jpeg";
+        private static final String IMAGE_PNG = "image/png";
+
+        private MediaTypeNames() {
+        }
     }
 }

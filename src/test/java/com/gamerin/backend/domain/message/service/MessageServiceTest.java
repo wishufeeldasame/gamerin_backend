@@ -19,6 +19,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
@@ -32,8 +34,11 @@ import com.gamerin.backend.domain.message.repository.MessageConversationReposito
 import com.gamerin.backend.domain.message.repository.MessageParticipantRepository;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.repository.PostRepository;
+import com.gamerin.backend.domain.post.service.LightweightSecurityScanService;
+import com.gamerin.backend.domain.post.service.MediaUploadSecurityService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
+import com.gamerin.backend.global.security.jwt.SseStreamTokenService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
 @ExtendWith(MockitoExtension.class)
@@ -63,6 +68,15 @@ class MessageServiceTest {
     @Mock
     private MessageRealtimeService messageRealtimeService;
 
+    @Mock
+    private MediaUploadSecurityService mediaUploadSecurityService;
+
+    @Mock
+    private LightweightSecurityScanService lightweightSecurityScanService;
+
+    @Mock
+    private SseStreamTokenService sseStreamTokenService;
+
     private MessageService messageService;
 
     @BeforeEach
@@ -76,7 +90,10 @@ class MessageServiceTest {
                 directMessageAttachmentRepository,
                 messageAttachmentStorageService,
                 new MessageResponseAssembler(),
-                messageRealtimeService
+                messageRealtimeService,
+                mediaUploadSecurityService,
+                lightweightSecurityScanService,
+                sseStreamTokenService
         );
     }
 
@@ -102,6 +119,41 @@ class MessageServiceTest {
         messageService.deleteMessage(CustomUserPrincipal.from(viewer), conversation.getId(), message.getId());
 
         assertThat(message.getDeletedAt()).isNotNull();
+    }
+
+    @Test
+    void deleteMessagePublishesAfterTransactionCommit() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        DirectMessage message = message(conversation, viewer, "message");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(directMessageRepository.findByIdAndConversationIdAndDeletedAtIsNull(
+                message.getId(),
+                conversation.getId()
+        )).thenReturn(Optional.of(message));
+        when(messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            messageService.deleteMessage(CustomUserPrincipal.from(viewer), conversation.getId(), message.getId());
+
+            verify(messageRealtimeService, never()).publish(any(), any());
+            List<TransactionSynchronization> synchronizations =
+                    TransactionSynchronizationManager.getSynchronizations();
+            assertThat(synchronizations).hasSize(1);
+
+            synchronizations.getFirst().afterCommit();
+            verify(messageRealtimeService).publish(eq(viewer.getId()), any());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test
