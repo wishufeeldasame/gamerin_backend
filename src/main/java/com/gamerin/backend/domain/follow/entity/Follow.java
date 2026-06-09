@@ -53,4 +53,20 @@ public class Follow {
     protected void onCreate() {
         this.createdAt = OffsetDateTime.now();
     }
+
+    public UUID getId() {
+        return id;
+    }
+
+    public User getFollower() {
+        return follower;
+    }
+
+    public User getFollowee() {
+        return followee;
+    }
+
+    public OffsetDateTime getCreatedAt() {
+        return createdAt;
+    }
 }
