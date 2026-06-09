@@ -29,7 +29,7 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
     private final SocialAccountRepository socialAccountRepository;
     private final SocialSignupSessionRepository socialSignupSessionRepository;
     private final UserRepository userRepository;
-    private final TokenService tokenService; // TokenService 주입!
+    private final TokenService tokenService;
     
     private final String frontendBaseUrl;
     private final String refreshCookieName;
@@ -66,44 +66,72 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         String email = oAuth2User.getAttribute("email");
         String name = oAuth2User.getAttribute("name");
 
+        // 1. 소셜 계정 정보가 이미 연동되어 있는지 확인
         Optional<SocialAccount> accountOpt = socialAccountRepository.findByProviderAndProviderUserId(provider, providerUserId);
 
         String targetUrl;
         if (accountOpt.isPresent()) {
-            // [기존 유저] 토큰 공장을 통해 토큰 생성 후 로그인 처리
+            // [Case A: 이미 소셜 연동이 완료된 기존 유저] -> 바로 로그인
             SocialAccount socialAccount = accountOpt.get();
             User user = userRepository.findById(socialAccount.getUserId())
                     .orElseThrow(() -> new IllegalStateException("사용자를 찾을 수 없습니다."));
 
-            socialAccount.updateLastLoginAt();
-            socialAccountRepository.save(socialAccount);
-
-            user.updateLastLoginAt();
-            userRepository.save(user);
+            processLogin(user, socialAccount, response);
 
             TokenService.AuthResult result = tokenService.issueTokens(user);
             setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
+            targetUrl = buildLoginSuccessUrl(result.authTokenResponse().accessToken());
 
-            targetUrl = UriComponentsBuilder.fromUriString(frontendBaseUrl)
-                    .path("/home")
-                    .queryParam("accessToken", result.authTokenResponse().accessToken())
-                    .build().toUriString();
         } else {
-            // [신규 유저] 가입 세션 생성 (토큰 공장의 암호화, 랜덤생성 로직 재사용)
-            String signupToken = tokenService.generateOpaqueToken();
-            SocialSignupSession session = SocialSignupSession.create(
-                    provider, providerUserId, email, name, tokenService.sha256(signupToken), 10
-            );
-            socialSignupSessionRepository.save(session);
+            // [Case B: 소셜 연동 정보가 없음] -> 이메일 중복 체크를 통해 통합 가입 시도
+            Optional<User> existingUserOpt = userRepository.findByEmail(email);
 
-            // signupToken은 URL fragment로 전달해 서버 로그/Referer 헤더 노출을 방지함
-            targetUrl = UriComponentsBuilder.fromUriString(frontendBaseUrl)
-                    .path("/auth/social/complete")
-                    .fragment("signupToken=" + signupToken)
-                    .build().toUriString();
+            if (existingUserOpt.isPresent()) {
+                // [Case B-1: 동일한 이메일을 가진 일반 유저가 이미 존재함] -> 즉시 연동 및 로그인
+                User user = existingUserOpt.get();
+
+                SocialAccount newAccount = SocialAccount.create(
+                        user.getId(), provider, providerUserId, email, name
+                );
+                socialAccountRepository.save(newAccount);
+
+                processLogin(user, newAccount, response);
+
+                TokenService.AuthResult result = tokenService.issueTokens(user);
+                setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
+                targetUrl = buildLoginSuccessUrl(result.authTokenResponse().accessToken());
+
+            } else {
+                // [Case B-2: 서비스에 아예 처음 온 완전 신규 유저] -> 가입 세션 열고 폼 페이지로 리다이렉트
+                String signupToken = tokenService.generateOpaqueToken();
+                SocialSignupSession session = SocialSignupSession.create(
+                        provider, providerUserId, email, name, tokenService.sha256(signupToken), 10
+                );
+                socialSignupSessionRepository.save(session);
+
+                targetUrl = UriComponentsBuilder.fromUriString(frontendBaseUrl)
+                        .path("/auth/social/complete")
+                        .fragment("signupToken=" + signupToken)
+                        .build().toUriString();
+            }
         }
 
         getRedirectStrategy().sendRedirect(request, response, targetUrl);
+    }
+
+    private void processLogin(User user, SocialAccount socialAccount, HttpServletResponse response) {
+        socialAccount.updateLastLoginAt();
+        socialAccountRepository.save(socialAccount);
+
+        user.updateLastLoginAt();
+        userRepository.save(user);
+    }
+
+    private String buildLoginSuccessUrl(String accessToken) {
+        return UriComponentsBuilder.fromUriString(frontendBaseUrl)
+                .path("/home")
+                .queryParam("accessToken", accessToken)
+                .build().toUriString();
     }
 
     private void setRefreshTokenCookie(HttpServletResponse response, String refreshToken, long maxAgeSeconds) {
