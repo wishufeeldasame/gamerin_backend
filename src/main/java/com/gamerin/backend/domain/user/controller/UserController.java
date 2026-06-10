@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.user.controller;
 
+import java.util.UUID;
+
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -62,8 +64,12 @@ public class UserController {
     }
 
     @GetMapping("/{handle}")
-    public ApiResponse<DetailedUserProfileResponse> getProfile(@PathVariable String handle) {
-        return ApiResponse.ok(userService.getProfile(handle));
+    public ApiResponse<DetailedUserProfileResponse> getProfile(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable String handle
+    ) {
+        UUID viewerId = principal != null ? principal.getUserId() : null;
+        return ApiResponse.ok(userService.getProfile(viewerId, handle));
     }
 
     @GetMapping("/{handle}/posts")

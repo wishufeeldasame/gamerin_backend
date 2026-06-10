@@ -1,0 +1,73 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:gamerin_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: false
+
+  flyway:
+    enabled: false
+
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: test-google-client
+            client-secret: test-google-secret
+            scope:
+              - profile
+              - email
+
+  mail:
+    host: localhost
+    port: 2525
+
+app:
+  auth:
+    jwt:
+      secret: local-dev-jwt-secret-key-local-dev-jwt-secret-key
+      access-token-expiration-seconds: 1800
+      refresh-token-expiration-seconds: 1209600
+      refresh-cookie-name: refresh_token
+      refresh-cookie-secure: false
+      refresh-cookie-same-site: Lax
+    password-reset:
+      expiration-minutes: 30
+  media:
+    upload-dir: build/test-uploads
+    video:
+      optimization:
+        enabled: false
+        ffmpeg-path: ffmpeg
+  post:
+    cleanup:
+      hard-delete-after: 24h
+      initial-delay-ms: 60000
+      fixed-delay-ms: 3600000
+  frontend:
+    base-url: http://localhost:3000
+    password-reset-path: /auth/reset-password
+  mail:
+    from-address: no-reply@gamerin.test
+
+pubg:
+  api:
+    key: test-pubg-api-key
+
+openai:
+  api:
+    key:
+  moderation:
+    enabled: false
+    model: omni-moderation-latest
+    ffmpeg-path: ffmpeg
