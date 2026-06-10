@@ -85,13 +85,14 @@ public class MentoringController {
         return ApiResponse.ok(mentoringService.registerProgram(principal, request));
     }
     
-    @Operation(summary = "멘토링 프로그램 목록 조회", description = "전체 또는 특정 게임의 멘토링 프로그램 목록을 조회(페이징 지원)")
+    @Operation(summary = "멘토링 프로그램 목록 조회", description = "전체, 특정 게임, 특정 멘토의 멘토링 프로그램 목록을 조회(페이징 지원)")
     @GetMapping("/programs")
     public ApiResponse<Page<MentoringProgramResponse>> getPrograms(
         @RequestParam(required = false) String gameName,
+        @RequestParam(required = false) UUID mentorId,
         @ParameterObject @PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {
-        return ApiResponse.ok(mentoringService.getPrograms(gameName, pageable));
+        return ApiResponse.ok(mentoringService.getPrograms(gameName, mentorId, pageable));
     }
 
     @Operation(summary = "멘토링 프로그램 상세 조회", description = "특정 멘토링 프로그램의 상세 정보를 조회")

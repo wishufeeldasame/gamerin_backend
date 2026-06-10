@@ -19,6 +19,15 @@ public interface MentoringProgramRepository extends JpaRepository<MentoringProgr
     // 게임 이름별 필터링 조회
     Page<MentoringProgram> findByGameName(String gameName, Pageable pageable);
 
+    @Query("SELECT p FROM MentoringProgram p " +
+       "WHERE (:gameName IS NULL OR p.gameName = :gameName) " +
+       "AND (:mentorId IS NULL OR p.mentor.userId = :mentorId)")
+    Page<MentoringProgram> findByFilters(
+        @Param("gameName") String gameName, 
+        @Param("mentorId") UUID mentorId, 
+        Pageable pageable
+    );
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select program from MentoringProgram program where program.id = :id")
     Optional<MentoringProgram> findByIdForUpdate(@Param("id") UUID id);
