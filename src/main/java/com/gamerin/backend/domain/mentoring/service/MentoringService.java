@@ -147,15 +147,10 @@ public class MentoringService {
     }
 
     @Transactional(readOnly = true)
-    public Page<MentoringProgramResponse> getPrograms(String gameName, Pageable pageable) {
-        Page<MentoringProgram> programs;
-
-        if (gameName != null && !gameName.isBlank()) {
-            programs = mentoringProgramRepository.findByGameName(gameName, pageable);
-        } else {
-            programs = mentoringProgramRepository.findAll(pageable);
-        }
+    public Page<MentoringProgramResponse> getPrograms(String gameName, UUID mentorId, Pageable pageable) {
         
+        Page<MentoringProgram> programs = mentoringProgramRepository.findByFilters(gameName, mentorId, pageable);
+    
         return programs.map(MentoringProgramResponse::from);
     }
 
