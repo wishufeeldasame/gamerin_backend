@@ -41,18 +41,22 @@ public class UserService {
         User user = userRepository.findByIdAndDeletedAtIsNull(userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
-        return toProfileResponse(user);
+        return toProfileResponse(user, false);
     }
 
     @Transactional(readOnly = true)
-    public UserProfileResponse getProfile(String handle) {
+    public UserProfileResponse getProfile(UUID viewerId, String handle) {
         User user = userRepository.findByHandleAndDeletedAtIsNull(handle)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
-        return toProfileResponse(user);
+        boolean isFollowing = viewerId != null
+                && !viewerId.equals(user.getId())
+                && followRepository.existsByFollowerIdAndFolloweeId(viewerId, user.getId());
+
+        return toProfileResponse(user, isFollowing);
     }
 
-    private UserProfileResponse toProfileResponse(User user) {
+    private UserProfileResponse toProfileResponse(User user, boolean isFollowing) {
         UserProfile profile = user.getProfile();
 
         long followersCount = followRepository.countByFolloweeId(user.getId());
@@ -69,6 +73,7 @@ public class UserService {
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null ? profile.getGameStats() : null,
                 profile != null && profile.isVerifiedBadge(),
+                isFollowing,
                 followersCount,
                 followingCount,
                 postCount,

@@ -11,6 +11,7 @@ public record UserProfileResponse(
         String profileImageUrl,
         Map<String, Object> gameStats,
         boolean verifiedBadge,
+        boolean isFollowing,
         long followersCount,
         long followingCount,
         long postCount,

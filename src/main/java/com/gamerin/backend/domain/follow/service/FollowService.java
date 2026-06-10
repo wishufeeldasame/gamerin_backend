@@ -1,8 +1,10 @@
 package com.gamerin.backend.domain.follow.service;
 
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -204,7 +206,8 @@ public class FollowService {
             return null;
         }
 
-        String[] values = raw.split("\\|");
+        String decodedCursor = decodeCursor(raw.trim());
+        String[] values = decodedCursor.split("\\|");
         if (values.length != 2) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid cursor.");
         }
@@ -222,7 +225,23 @@ public class FollowService {
         }
 
         Follow last = follows.get(follows.size() - 1);
-        return last.getCreatedAt() + "|" + last.getId();
+        return encodeCursor(last.getCreatedAt() + "|" + last.getId());
+    }
+
+    private String encodeCursor(String raw) {
+        return Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String decodeCursor(String raw) {
+        try {
+            byte[] decodedBytes = Base64.getUrlDecoder().decode(raw);
+            return new String(decodedBytes, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            // Keep accepting the original raw cursor shape for backward compatibility.
+            return raw;
+        }
     }
 
     private record FollowCursor(OffsetDateTime createdAt, UUID followId) {

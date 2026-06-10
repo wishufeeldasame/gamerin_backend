@@ -7,7 +7,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
+import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -136,7 +138,8 @@ class FollowServiceTest {
 
         assertThat(response.items()).hasSize(1);
         assertThat(response.hasNext()).isTrue();
-        assertThat(response.nextCursor()).isEqualTo(firstFollow.getCreatedAt() + "|" + firstFollow.getId());
+        assertThat(response.nextCursor()).doesNotContain("|");
+        assertThat(decodeCursor(response.nextCursor())).isEqualTo(firstFollow.getCreatedAt() + "|" + firstFollow.getId());
 
         FollowUserResponse item = response.items().get(0);
         assertThat(item.userId()).isEqualTo(firstFolloweeId);
@@ -156,5 +159,9 @@ class FollowServiceTest {
         ReflectionTestUtils.setField(follow, "id", id);
         ReflectionTestUtils.setField(follow, "createdAt", createdAt);
         return follow;
+    }
+
+    private String decodeCursor(String cursor) {
+        return new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
     }
 }
