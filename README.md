@@ -194,3 +194,12 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 검증: `./gradlew test` 통과
 
   > 요약 : 프로필 이미지/커버를 data URL이 아닌 서버 업로드 파일 URL 기준으로 저장할 수 있도록 업로드 API와 URL 검증을 추가
+
+- **26/06/15** 서장호
+
+  > 메시지 수신자 응답 DTO에 `profileImageUrl` 필드 추가
+  > `MessageResponseAssembler`에서 수신자 사용자 프로필의 `profileImageUrl`을 읽어 메시지 수신자 응답에 포함하도록 변경
+  > 프론트 메시지 화면이 대화 목록, 새 대화 검색, 대화 헤더, 상대방 말풍선에서 최신 프로필 사진을 표시할 수 있도록 API 계약 보강
+  > 검증: `git diff --check`, `./gradlew compileJava`, `./gradlew test` 통과
+
+  > 요약 : 메시지 API 응답에 수신자 프로필 이미지 URL을 포함해 프로필 사진 변경이 메시지 화면에도 반영되도록 정리

@@ -7,6 +7,7 @@ public record MessageRecipientResponse(
         String name,
         String handle,
         String role,
-        boolean online
+        boolean online,
+        String profileImageUrl
 ) {
 }
