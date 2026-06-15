@@ -18,12 +18,26 @@ public interface FollowRepository extends JpaRepository<Follow, UUID> {
 
     Optional<Follow> findByFollowerIdAndFolloweeId(UUID followerId, UUID followeeId);
 
-    long countByFollowerId(UUID followerId);
+    @Query("""
+            SELECT COUNT(f)
+            FROM Follow f
+            JOIN f.follower follower
+            WHERE f.followee.id = :followeeId
+              AND follower.deletedAt IS NULL
+            """)
+    long countActiveFollowersByFolloweeId(@Param("followeeId") UUID followeeId);
 
-    long countByFolloweeId(UUID followeeId);
+    @Query("""
+            SELECT COUNT(f)
+            FROM Follow f
+            JOIN f.followee followee
+            WHERE f.follower.id = :followerId
+              AND followee.deletedAt IS NULL
+            """)
+    long countActiveFollowingByFollowerId(@Param("followerId") UUID followerId);
 
     @Query(value = """
-            SELECT f.id
+            SELECT CAST(f.id AS VARCHAR)
             FROM follows f
             JOIN users u ON u.id = f.follower_id
             WHERE f.followee_id = :followeeId
@@ -31,13 +45,13 @@ public interface FollowRepository extends JpaRepository<Follow, UUID> {
             ORDER BY f.created_at DESC, f.id DESC
             LIMIT :limit
             """, nativeQuery = true)
-    List<UUID> findFollowerPageIds(
+    List<String> findFollowerPageIds(
             @Param("followeeId") UUID followeeId,
             @Param("limit") int limit
     );
 
     @Query(value = """
-            SELECT f.id
+            SELECT CAST(f.id AS VARCHAR)
             FROM follows f
             JOIN users u ON u.id = f.follower_id
             WHERE f.followee_id = :followeeId
@@ -49,7 +63,7 @@ public interface FollowRepository extends JpaRepository<Follow, UUID> {
             ORDER BY f.created_at DESC, f.id DESC
             LIMIT :limit
             """, nativeQuery = true)
-    List<UUID> findFollowerPageIdsBefore(
+    List<String> findFollowerPageIdsBefore(
             @Param("followeeId") UUID followeeId,
             @Param("cursorCreatedAt") OffsetDateTime cursorCreatedAt,
             @Param("cursorId") UUID cursorId,
@@ -57,7 +71,7 @@ public interface FollowRepository extends JpaRepository<Follow, UUID> {
     );
 
     @Query(value = """
-            SELECT f.id
+            SELECT CAST(f.id AS VARCHAR)
             FROM follows f
             JOIN users u ON u.id = f.followee_id
             WHERE f.follower_id = :followerId
@@ -65,13 +79,13 @@ public interface FollowRepository extends JpaRepository<Follow, UUID> {
             ORDER BY f.created_at DESC, f.id DESC
             LIMIT :limit
             """, nativeQuery = true)
-    List<UUID> findFollowingPageIds(
+    List<String> findFollowingPageIds(
             @Param("followerId") UUID followerId,
             @Param("limit") int limit
     );
 
     @Query(value = """
-            SELECT f.id
+            SELECT CAST(f.id AS VARCHAR)
             FROM follows f
             JOIN users u ON u.id = f.followee_id
             WHERE f.follower_id = :followerId
@@ -83,7 +97,7 @@ public interface FollowRepository extends JpaRepository<Follow, UUID> {
             ORDER BY f.created_at DESC, f.id DESC
             LIMIT :limit
             """, nativeQuery = true)
-    List<UUID> findFollowingPageIdsBefore(
+    List<String> findFollowingPageIdsBefore(
             @Param("followerId") UUID followerId,
             @Param("cursorCreatedAt") OffsetDateTime cursorCreatedAt,
             @Param("cursorId") UUID cursorId,

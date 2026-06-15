@@ -49,7 +49,7 @@ public class FollowService {
         User followee = getTargetUser(handle);
 
         if (follower.getId().equals(followee.getId())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot follow yourself.");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "자기 자신은 팔로우할 수 없습니다.");
         }
 
         if (followRepository.existsByFollowerIdAndFolloweeId(follower.getId(), followee.getId())) {
@@ -87,13 +87,13 @@ public class FollowService {
         FollowCursor cursorValue = parseCursor(cursor);
 
         List<UUID> followIds = cursorValue == null
-                ? followRepository.findFollowerPageIds(target.getId(), pageSize + 1)
-                : followRepository.findFollowerPageIdsBefore(
+                ? toUuidList(followRepository.findFollowerPageIds(target.getId(), pageSize + 1))
+                : toUuidList(followRepository.findFollowerPageIdsBefore(
                         target.getId(),
                         cursorValue.createdAt(),
                         cursorValue.followId(),
                         pageSize + 1
-                );
+                ));
 
         return toPageResponse(followIds, pageSize, viewer.getId(), Follow::getFollower);
     }
@@ -111,13 +111,13 @@ public class FollowService {
         FollowCursor cursorValue = parseCursor(cursor);
 
         List<UUID> followIds = cursorValue == null
-                ? followRepository.findFollowingPageIds(target.getId(), pageSize + 1)
-                : followRepository.findFollowingPageIdsBefore(
+                ? toUuidList(followRepository.findFollowingPageIds(target.getId(), pageSize + 1))
+                : toUuidList(followRepository.findFollowingPageIdsBefore(
                         target.getId(),
                         cursorValue.createdAt(),
                         cursorValue.followId(),
                         pageSize + 1
-                );
+                ));
 
         return toPageResponse(followIds, pageSize, viewer.getId(), Follow::getFollowee);
     }
@@ -171,6 +171,12 @@ public class FollowService {
                 .toList();
     }
 
+    private List<UUID> toUuidList(List<String> ids) {
+        return ids.stream()
+                .map(UUID::fromString)
+                .toList();
+    }
+
     private Set<UUID> findFollowingIds(UUID viewerId, Collection<User> users) {
         Set<UUID> userIds = users.stream()
                 .map(User::getId)
@@ -208,7 +214,7 @@ public class FollowService {
 
     private User getTargetUser(String handle) {
         return userRepository.findByHandleAndDeletedAtIsNull(handle)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
     }
 
     private User getCurrentUser(CustomUserPrincipal principal) {

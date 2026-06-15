@@ -167,3 +167,15 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 검증: `./gradlew test` 통과
 
   > 요약 : DM 대화방 재활성화 정책, 공유 게시글 메시지 저장, 커서 페이징을 보정하고 메시지 수정 기능을 제거
+
+- **26/06/15** 서장호
+
+  > 프로필의 `followersCount`, `followingCount`가 팔로워/팔로잉 목록 조회와 같은 기준을 사용하도록 삭제된 사용자를 제외하는 active count 쿼리로 변경
+  > 팔로워/팔로잉 목록 native SQL에서 PostgreSQL/H2 UUID 반환 차이를 줄이기 위해 follow id를 문자열로 조회하고 서비스 내부에서 UUID로 변환하도록 보완
+  > 팔로우/언팔로우 및 프로필 도메인의 사용자-facing 에러 메시지를 한국어 기준으로 정리
+  > 삭제된 사용자를 제외한 active count, 팔로워/팔로잉 목록 native SQL의 삭제 사용자 필터, 커서 조건을 검증하는 `FollowRepositoryTest` 추가
+  > repository 반환 타입 변경에 맞춰 `FollowServiceTest` mock 데이터 수정
+  > Docker PostgreSQL에서 Flyway V14 적용과 follow list 인덱스 생성을 확인
+  > 검증: `./gradlew test` 통과
+
+  > 요약 : 팔로워/팔로잉 목록 기능의 카운트 기준, 메시지 언어, native SQL UUID 처리와 검증을 보강

@@ -113,7 +113,7 @@ class FollowServiceTest {
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewerId)).thenReturn(Optional.of(viewer));
         when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(target));
-        when(followRepository.findFollowerPageIds(targetId, 21)).thenReturn(List.of(followId));
+        when(followRepository.findFollowerPageIds(targetId, 21)).thenReturn(List.of(followId.toString()));
         when(followRepository.findAllWithUsersByIdIn(List.of(followId))).thenReturn(List.of(follow));
         when(followRepository.findFolloweeIdsByFollowerIdAndFolloweeIdIn(eq(viewerId), any()))
                 .thenReturn(List.of(followerId));
@@ -157,10 +157,11 @@ class FollowServiceTest {
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewerId)).thenReturn(Optional.of(viewer));
         when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(target));
-        when(followRepository.findFollowingPageIds(targetId, 2)).thenReturn(List.of(firstFollowId, secondFollowId));
+        when(followRepository.findFollowingPageIds(targetId, 2))
+                .thenReturn(List.of(firstFollowId.toString(), secondFollowId.toString()));
         when(followRepository.findAllWithUsersByIdIn(List.of(firstFollowId))).thenReturn(List.of(firstFollow));
         when(followRepository.findFollowingPageIdsBefore(targetId, firstFollowedAt, firstFollowId, 2))
-                .thenReturn(List.of(secondFollowId));
+                .thenReturn(List.of(secondFollowId.toString()));
         when(followRepository.findAllWithUsersByIdIn(List.of(secondFollowId))).thenReturn(List.of(secondFollow));
         when(followRepository.findFolloweeIdsByFollowerIdAndFolloweeIdIn(eq(viewerId), any()))
                 .thenReturn(List.of(), List.of());

@@ -40,7 +40,7 @@ public class UserService {
     @Transactional(readOnly = true)
     public DetailedUserProfileResponse getMyProfile(UUID userId) {
         User user = userRepository.findByIdAndDeletedAtIsNull(userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
         return toProfileResponse(user, false);
     }
@@ -48,7 +48,7 @@ public class UserService {
     @Transactional(readOnly = true)
     public DetailedUserProfileResponse getProfile(UUID viewerId, String handle) {
         User user = userRepository.findByHandleAndDeletedAtIsNull(handle)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
         boolean isFollowing = viewerId != null
                 && !viewerId.equals(user.getId())
@@ -60,8 +60,8 @@ public class UserService {
     private DetailedUserProfileResponse toProfileResponse(User user, boolean isFollowing) {
         UserProfile profile = user.getProfile();
 
-        long followersCount = followRepository.countByFolloweeId(user.getId());
-        long followingCount = followRepository.countByFollowerId(user.getId());
+        long followersCount = followRepository.countActiveFollowersByFolloweeId(user.getId());
+        long followingCount = followRepository.countActiveFollowingByFollowerId(user.getId());
         long postCount = postRepository.countByAuthorIdAndDeletedAtIsNull(user.getId());
         long mediaPostCount = postRepository.countMediaPostsByAuthorId(user.getId());
         long mediaItemCount = postMediaRepository.countActiveMediaByAuthorId(user.getId());
@@ -89,7 +89,7 @@ public class UserService {
     @Transactional
     public void updateProfile(UUID userId, UpdateProfileRequest request) {
         User user = userRepository.findByIdAndDeletedAtIsNull(userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
         if (request.getNickname() != null) {
             user.updateNickname(request.getNickname());
@@ -97,7 +97,7 @@ public class UserService {
 
         UserProfile profile = user.getProfile();
         if (profile == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "User profile not found.");
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자 프로필을 찾을 수 없습니다.");
         }
 
         if (request.getBio() != null) {
