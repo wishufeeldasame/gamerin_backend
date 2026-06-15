@@ -33,6 +33,12 @@ public class MediaUploadSecurityService {
     private static final int STORED_IMAGE_MAX_DIMENSION = 2_048;
     private static final int MIN_STORED_IMAGE_MAX_DIMENSION = 1_024;
     private static final int MAX_STORED_IMAGE_BYTES = 5 * 1024 * 1024;
+    private static final int STORED_PROFILE_AVATAR_MAX_DIMENSION = 512;
+    private static final int MIN_STORED_PROFILE_AVATAR_MAX_DIMENSION = 256;
+    private static final int MAX_STORED_PROFILE_AVATAR_BYTES = 700 * 1024;
+    private static final int STORED_PROFILE_COVER_MAX_DIMENSION = 1_920;
+    private static final int MIN_STORED_PROFILE_COVER_MAX_DIMENSION = 960;
+    private static final int MAX_STORED_PROFILE_COVER_BYTES = 2 * 1024 * 1024;
     private static final float[] JPEG_QUALITIES = {0.85f, 0.75f, 0.65f};
 
     private static final Set<String> MP4_FAMILY_EXTENSIONS = Set.of(".mp4", ".mov", ".m4v");
@@ -47,12 +53,43 @@ public class MediaUploadSecurityService {
     }
 
     public MediaStorageService.PreparedMediaFile prepareImage(MultipartFile file) {
+        return prepareImage(
+                file,
+                STORED_IMAGE_MAX_DIMENSION,
+                MIN_STORED_IMAGE_MAX_DIMENSION,
+                MAX_STORED_IMAGE_BYTES
+        );
+    }
+
+    public MediaStorageService.PreparedMediaFile prepareProfileAvatarImage(MultipartFile file) {
+        return prepareImage(
+                file,
+                STORED_PROFILE_AVATAR_MAX_DIMENSION,
+                MIN_STORED_PROFILE_AVATAR_MAX_DIMENSION,
+                MAX_STORED_PROFILE_AVATAR_BYTES
+        );
+    }
+
+    public MediaStorageService.PreparedMediaFile prepareProfileCoverImage(MultipartFile file) {
+        return prepareImage(
+                file,
+                STORED_PROFILE_COVER_MAX_DIMENSION,
+                MIN_STORED_PROFILE_COVER_MAX_DIMENSION,
+                MAX_STORED_PROFILE_COVER_BYTES
+        );
+    }
+
+    private MediaStorageService.PreparedMediaFile prepareImage(
+            MultipartFile file,
+            int maxDimension,
+            int minDimension,
+            int maxBytes
+    ) {
         ImageFormat declaredFormat = resolveDeclaredImageFormat(file);
         assertImageMagicMatches(file, declaredFormat);
 
         BufferedImage image = readImage(file, declaredFormat);
-        BufferedImage normalized = resizeAndFlatten(image, STORED_IMAGE_MAX_DIMENSION);
-        byte[] compressed = writeCompressedJpeg(normalized);
+        byte[] compressed = writeCompressedJpeg(image, maxDimension, minDimension, maxBytes);
 
         return new MediaStorageService.PreparedMediaFile(compressed, ".jpg");
     }
@@ -175,20 +212,25 @@ public class MediaUploadSecurityService {
         return target;
     }
 
-    private byte[] writeCompressedJpeg(BufferedImage source) {
-        int maxDimension = STORED_IMAGE_MAX_DIMENSION;
-        while (maxDimension >= MIN_STORED_IMAGE_MAX_DIMENSION) {
+    private byte[] writeCompressedJpeg(
+            BufferedImage source,
+            int initialMaxDimension,
+            int minimumMaxDimension,
+            int maxBytes
+    ) {
+        int maxDimension = initialMaxDimension;
+        while (maxDimension >= minimumMaxDimension) {
             BufferedImage resized = resizeAndFlatten(source, maxDimension);
             for (float quality : JPEG_QUALITIES) {
                 byte[] jpegBytes = writeJpeg(resized, quality);
-                if (jpegBytes.length <= MAX_STORED_IMAGE_BYTES) {
+                if (jpegBytes.length <= maxBytes) {
                     return jpegBytes;
                 }
             }
             maxDimension = maxDimension / 2;
         }
 
-        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Compressed image must be 5MB or smaller.");
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Compressed image is too large.");
     }
 
     private byte[] writeJpeg(BufferedImage image, float quality) {

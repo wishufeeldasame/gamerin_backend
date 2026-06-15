@@ -179,3 +179,18 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 검증: `./gradlew test` 통과
 
   > 요약 : 팔로워/팔로잉 목록 기능의 카운트 기준, 메시지 언어, native SQL UUID 처리와 검증을 보강
+
+- **26/06/15** 서장호
+
+  > `POST /api/v1/users/me/profile-images` multipart 업로드 API 추가
+  > 업로드 대상은 `target=PROFILE|COVER`로 구분하고, 응답으로 `/uploads/profile-images/{userId}/profile|cover/{uuid}.jpg` 상대경로와 저장 크기를 반환하도록 구현
+  > 업로드 API 성공 시 `UserProfile.profileImageUrl` 또는 `coverImageUrl`을 즉시 갱신하여 업로드 후 PATCH 실패로 인한 orphan 파일 위험을 줄이도록 변경
+  > 프로필 아바타 원본 업로드는 2MB 이하, 커버 원본 업로드는 5MB 이하로 제한
+  > 기존 경량 파일 스캔과 이미지 magic header 검증, JPEG 재인코딩 흐름을 프로필 이미지 업로드에도 적용
+  > 아바타는 최대 512px/700KB, 커버는 최대 1920px/2MB 기준으로 저장 이미지 크기를 줄이도록 보강
+  > `PATCH /api/v1/users/me`에서 `profileImageUrl`, `coverImageUrl`은 현재 사용자 ID가 포함된 `/uploads/profile-images/{userId}/.../{uuid}.jpg` 경로만 허용하도록 검증 추가
+  > 기존 프로필 이미지가 새 프로필 이미지로 교체되거나 비워질 때 트랜잭션 커밋 이후 현재 사용자와 target이 일치하는 `/uploads/profile-images/{userId}/profile|cover/` 하위 파일만 best-effort로 삭제하도록 정리
+  > 게시물 영상 500MB와 썸네일/멀티파트 오버헤드를 고려해 Spring multipart 전체 요청 상한을 530MB로 조정
+  > 검증: `./gradlew test` 통과
+
+  > 요약 : 프로필 이미지/커버를 data URL이 아닌 서버 업로드 파일 URL 기준으로 저장할 수 있도록 업로드 API와 URL 검증을 추가
