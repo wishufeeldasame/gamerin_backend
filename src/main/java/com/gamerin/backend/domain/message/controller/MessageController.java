@@ -1,9 +1,15 @@
 package com.gamerin.backend.domain.message.controller;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 
+import org.springframework.core.io.PathResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -25,6 +31,7 @@ import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageRecipientResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageResponse;
 import com.gamerin.backend.domain.message.service.MessageService;
+import com.gamerin.backend.domain.message.service.MessageService.MessageAttachmentFile;
 import com.gamerin.backend.global.response.ApiResponse;
 import com.gamerin.backend.global.response.CursorPageResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -55,6 +62,22 @@ public class MessageController {
             @AuthenticationPrincipal CustomUserPrincipal principal
     ) {
         return messageService.streamMessages(principal);
+    }
+
+    @GetMapping("/attachments/{attachmentId}")
+    public ResponseEntity<Resource> getMessageAttachment(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID attachmentId
+    ) {
+        MessageAttachmentFile attachmentFile = messageService.getMessageAttachmentFile(principal, attachmentId);
+        ContentDisposition contentDisposition = ContentDisposition.inline()
+                .filename(attachmentFile.fileName(), StandardCharsets.UTF_8)
+                .build();
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(attachmentFile.contentType()))
+                .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition.toString())
+                .body(new PathResource(attachmentFile.path()));
     }
 
     @PostMapping("/conversations")

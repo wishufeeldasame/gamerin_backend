@@ -44,6 +44,7 @@ class SecurityConfigTest {
 
         assertThat(patterns)
                 .contains(
+                        "/uploads/message-attachments/**",
                         "/swagger-ui",
                         "/swagger-ui/**",
                         "/swagger-ui.html",
@@ -57,7 +58,16 @@ class SecurityConfigTest {
     void buildDenyAllPatternsExcludesSwaggerPathsWhenSpringdocIsEnabled() {
         String[] patterns = SecurityConfig.buildDenyAllPatterns(true, true);
 
-        assertThat(patterns).isEmpty();
+        assertThat(patterns)
+                .contains("/uploads/message-attachments/**")
+                .doesNotContain(
+                        "/swagger-ui",
+                        "/swagger-ui/**",
+                        "/swagger-ui.html",
+                        "/v3/api-docs",
+                        "/v3/api-docs/**",
+                        "/v3/api-docs.yaml"
+                );
     }
 
     @Test
@@ -69,7 +79,7 @@ class SecurityConfigTest {
                 .doesNotContain("/swagger-ui", "/swagger-ui/**", "/swagger-ui.html")
                 .contains("/v3/api-docs", "/v3/api-docs/**", "/v3/api-docs.yaml");
         assertThat(denyAllPatterns)
-                .contains("/swagger-ui", "/swagger-ui/**", "/swagger-ui.html")
+                .contains("/uploads/message-attachments/**", "/swagger-ui", "/swagger-ui/**", "/swagger-ui.html")
                 .doesNotContain("/v3/api-docs", "/v3/api-docs/**", "/v3/api-docs.yaml");
     }
 
@@ -83,6 +93,6 @@ class SecurityConfigTest {
                 .doesNotContain("/v3/api-docs", "/v3/api-docs/**", "/v3/api-docs.yaml");
         assertThat(denyAllPatterns)
                 .doesNotContain("/swagger-ui", "/swagger-ui/**", "/swagger-ui.html")
-                .contains("/v3/api-docs", "/v3/api-docs/**", "/v3/api-docs.yaml");
+                .contains("/uploads/message-attachments/**", "/v3/api-docs", "/v3/api-docs/**", "/v3/api-docs.yaml");
     }
 }

@@ -60,6 +60,14 @@ public class ContentModerationService {
     }
 
     public void assertPostAllowed(String content, List<MultipartFile> mediaFiles) {
+        assertTextAndMediaAllowed(content, mediaFiles);
+    }
+
+    public void assertMessageAllowed(String content, List<MultipartFile> mediaFiles) {
+        assertTextAndMediaAllowed(content, mediaFiles);
+    }
+
+    private void assertTextAndMediaAllowed(String content, List<MultipartFile> mediaFiles) {
         List<ModerationInput> inputs = new ArrayList<>();
         if (content != null && !content.isBlank()) {
             inputs.add(ModerationInput.text(content));

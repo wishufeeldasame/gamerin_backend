@@ -88,7 +88,7 @@ public class MessageResponseAssembler {
                 attachment.getId(),
                 attachment.getAttachmentType().name().toLowerCase(),
                 attachment.getFileName(),
-                attachment.getFileUrl()
+                "/api/v1/messages/attachments/" + attachment.getId()
         );
     }
 

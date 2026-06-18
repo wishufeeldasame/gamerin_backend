@@ -214,3 +214,16 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 검증: `./gradlew test --tests 'com.gamerin.backend.global.security.config.*'`, `./gradlew test` 통과
 
   > 요약 : 운영 환경 Swagger/OpenAPI 공개를 차단하고, 보호 경로의 의도치 않은 Google OAuth 자동 진입을 방지
+
+- **26/06/18** 서장호
+
+  > DM 첨부 파일이 원본 `MultipartFile` 그대로 `/uploads/message-attachments/**`에 저장되지 않도록 변경
+  > DM 텍스트에는 게시글/댓글과 동일하게 `TextSecurityService`와 `ContentModerationService` 검열 흐름 적용
+  > DM 이미지 첨부는 게시글 이미지 업로드처럼 JPEG/PNG 검증, magic header 검사, 경량 파일 스캔, OpenAI moderation, JPEG 재인코딩 후 `.jpg`로 저장
+  > DM 비디오 첨부는 게시글 비디오 업로드처럼 MP4 계열 검증, 경량 파일 스캔, 2분 duration 제한, frame moderation, FFmpeg 준비 후 서버 결정 확장자로 저장
+  > `.html`, `.svg`, 조작된 `Content-Type: image/*` 파일이 공개 정적 파일로 저장되지 않도록 회귀 테스트 추가
+  > `/uploads/message-attachments/**` 직접 정적 접근을 차단하고, DM 첨부는 `GET /api/v1/messages/attachments/{attachmentId}` 인증 API에서 대화 참여자만 내려받도록 변경
+  > DM 메시지 삭제 시 연결된 첨부 파일을 즉시 best-effort 삭제해 기존 첨부 URL/API 접근이 남지 않도록 정리
+  > 검증: `./gradlew test --tests 'com.gamerin.backend.domain.message.service.MessageServiceTest' --tests 'com.gamerin.backend.domain.post.service.MediaUploadSecurityServiceTest' --tests 'com.gamerin.backend.domain.post.moderation.ContentModerationServiceTest'`, `./gradlew test --tests 'com.gamerin.backend.domain.message.service.MessageServiceTest' --tests 'com.gamerin.backend.global.security.config.SecurityConfigTest' --tests 'com.gamerin.backend.global.security.config.SecurityConfigOAuthEntryPointIntegrationTest'` 통과
+
+  > 요약 : DM 첨부 저장 전 보안 검사와 검열을 게시글/댓글 흐름에 맞춰 적용하고, DM 첨부 파일은 인증된 참여자만 접근할 수 있도록 정리

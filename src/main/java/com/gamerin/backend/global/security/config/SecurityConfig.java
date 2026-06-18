@@ -1,5 +1,6 @@
 package com.gamerin.backend.global.security.config;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -7,11 +8,14 @@ import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
@@ -19,13 +23,18 @@ import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.filter.OncePerRequestFilter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gamerin.backend.domain.user.service.CustomUserDetailsService;
 import com.gamerin.backend.global.logging.ApiRequestLoggingFilter;
 import com.gamerin.backend.global.logging.JsonLogContext;
 import com.gamerin.backend.global.security.jwt.JwtAuthenticationFilter;
+import com.gamerin.backend.global.security.jwt.JwtTokenProvider;
 import com.gamerin.backend.global.security.oauth2.OAuth2SuccessHandler;
 
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -57,8 +66,13 @@ public class SecurityConfig {
             "/v3/api-docs/**",
             "/v3/api-docs.yaml"
     };
+    private static final String[] PRIVATE_UPLOAD_PATTERNS = {
+            "/uploads/message-attachments/**"
+    };
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final JwtTokenProvider jwtTokenProvider;
+    private final CustomUserDetailsService customUserDetailsService;
     private final OAuth2SuccessHandler oAuth2SuccessHandler;
     private final ObjectMapper objectMapper;
     private final List<String> allowedOrigins;
@@ -67,6 +81,8 @@ public class SecurityConfig {
 
     public SecurityConfig(
             JwtAuthenticationFilter jwtAuthenticationFilter,
+            JwtTokenProvider jwtTokenProvider,
+            CustomUserDetailsService customUserDetailsService,
             OAuth2SuccessHandler oAuth2SuccessHandler,
             ObjectMapper objectMapper,
             @Value("${app.cors.allowed-origins:http://localhost:3000}") List<String> allowedOrigins,
@@ -74,6 +90,8 @@ public class SecurityConfig {
             @Value("${springdoc.api-docs.enabled:true}") boolean apiDocsEnabled
     ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.jwtTokenProvider = jwtTokenProvider;
+        this.customUserDetailsService = customUserDetailsService;
         this.oAuth2SuccessHandler = oAuth2SuccessHandler;
         this.objectMapper = objectMapper;
         this.allowedOrigins = allowedOrigins;
@@ -126,7 +144,11 @@ public class SecurityConfig {
                 )
                 .oauth2Login(oauth2 -> oauth2.successHandler(oAuth2SuccessHandler))
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterAfter(new ApiRequestLoggingFilter(), JwtAuthenticationFilter.class);
+                .addFilterAfter(
+                        new PrivateUploadStaticPathDenyFilter(jwtTokenProvider, customUserDetailsService),
+                        JwtAuthenticationFilter.class
+                )
+                .addFilterAfter(new ApiRequestLoggingFilter(), PrivateUploadStaticPathDenyFilter.class);
 
         return http.build();
     }
@@ -146,7 +168,7 @@ public class SecurityConfig {
     }
 
     static String[] buildDenyAllPatterns(boolean swaggerUiEnabled, boolean apiDocsEnabled) {
-        List<String> patterns = new ArrayList<>();
+        List<String> patterns = new ArrayList<>(List.of(PRIVATE_UPLOAD_PATTERNS));
 
         if (!swaggerUiEnabled) {
             addPatterns(patterns, SWAGGER_UI_PATTERNS);
@@ -198,6 +220,66 @@ public class SecurityConfig {
             return path.equals(basePath) || path.startsWith(basePath + "/");
         }
         return path.equals(pattern);
+    }
+
+    private static class PrivateUploadStaticPathDenyFilter extends OncePerRequestFilter {
+
+        private final JwtTokenProvider jwtTokenProvider;
+        private final CustomUserDetailsService customUserDetailsService;
+
+        private PrivateUploadStaticPathDenyFilter(
+                JwtTokenProvider jwtTokenProvider,
+                CustomUserDetailsService customUserDetailsService
+        ) {
+            this.jwtTokenProvider = jwtTokenProvider;
+            this.customUserDetailsService = customUserDetailsService;
+        }
+
+        @Override
+        protected void doFilterInternal(
+                HttpServletRequest request,
+                HttpServletResponse response,
+                FilterChain filterChain
+        ) throws ServletException, IOException {
+            if (!matchesAnyPattern(getRequestPath(request), PRIVATE_UPLOAD_PATTERNS)) {
+                filterChain.doFilter(request, response);
+                return;
+            }
+
+            Authentication authentication = org.springframework.security.core.context.SecurityContextHolder
+                    .getContext()
+                    .getAuthentication();
+            int status = isAuthenticated(authentication) || hasValidBearerToken(request)
+                    ? HttpServletResponse.SC_FORBIDDEN
+                    : HttpServletResponse.SC_UNAUTHORIZED;
+            response.setStatus(status);
+            response.flushBuffer();
+        }
+
+        private boolean isAuthenticated(Authentication authentication) {
+            return authentication != null
+                    && authentication.isAuthenticated()
+                    && !(authentication instanceof AnonymousAuthenticationToken);
+        }
+
+        private boolean hasValidBearerToken(HttpServletRequest request) {
+            String bearerToken = request.getHeader("Authorization");
+            if (bearerToken == null || !bearerToken.startsWith("Bearer ")) {
+                return false;
+            }
+
+            String token = bearerToken.substring(7);
+            if (token.isBlank() || !jwtTokenProvider.validate(token)) {
+                return false;
+            }
+
+            try {
+                customUserDetailsService.loadById(jwtTokenProvider.getUserId(token));
+                return true;
+            } catch (UsernameNotFoundException ignored) {
+                return false;
+            }
+        }
     }
 
     @Bean

@@ -52,6 +52,32 @@ class MediaUploadSecurityServiceTest {
     }
 
     @Test
+    void assertImageFileSafeRejectsHtmlFilenameWithImageContentType() {
+        MockMultipartFile file = new MockMultipartFile(
+                "mediaFiles",
+                "payload.html",
+                "image/jpeg",
+                "<script>alert(1)</script>".getBytes()
+        );
+
+        assertThatThrownBy(() -> mediaUploadSecurityService.assertImageFileSafe(file))
+                .isInstanceOf(ResponseStatusException.class);
+    }
+
+    @Test
+    void assertImageFileSafeRejectsSvgImage() {
+        MockMultipartFile file = new MockMultipartFile(
+                "mediaFiles",
+                "payload.svg",
+                "image/svg+xml",
+                "<svg><script>alert(1)</script></svg>".getBytes()
+        );
+
+        assertThatThrownBy(() -> mediaUploadSecurityService.assertImageFileSafe(file))
+                .isInstanceOf(ResponseStatusException.class);
+    }
+
+    @Test
     void assertImageFileSafeRejectsOversizedImage() {
         MultipartFile file = mock(MultipartFile.class);
         when(file.getSize()).thenReturn(20L * 1024L * 1024L + 1L);
