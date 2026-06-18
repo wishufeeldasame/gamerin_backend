@@ -203,3 +203,14 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 검증: `git diff --check`, `./gradlew compileJava`, `./gradlew test` 통과
 
   > 요약 : 메시지 API 응답에 수신자 프로필 이미지 URL을 포함해 프로필 사진 변경이 메시지 화면에도 반영되도록 정리
+
+- **26/06/18** 서장호
+
+  > production profile에서 `springdoc.api-docs.enabled=false`, `springdoc.swagger-ui.enabled=false`를 적용해 Swagger/OpenAPI 문서가 운영 환경에서 노출되지 않도록 변경
+  > `SecurityConfig`에서 Swagger UI, OpenAPI docs 경로를 springdoc 활성화 설정에 따라 공개/차단하도록 분리
+  > Swagger/OpenAPI 차단 경로와 일반 보호 경로가 Google OAuth 로그인으로 자동 리다이렉트되지 않도록 인증 실패 응답 흐름 보강
+  > `/api/**` 인증 실패는 기존처럼 JSON `401` 응답을 유지하고, `/oauth2/authorization/google` 직접 접근은 Google OAuth 시작 경로로 유지
+  > Swagger/OpenAPI 차단, OAuth 자동 리다이렉트 방지, API JSON 401 응답 계약을 검증하는 `SecurityConfig` 테스트 추가
+  > 검증: `./gradlew test --tests 'com.gamerin.backend.global.security.config.*'`, `./gradlew test` 통과
+
+  > 요약 : 운영 환경 Swagger/OpenAPI 공개를 차단하고, 보호 경로의 의도치 않은 Google OAuth 자동 진입을 방지
