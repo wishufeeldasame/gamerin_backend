@@ -87,8 +87,7 @@ public class SecurityConfig {
             ObjectMapper objectMapper,
             @Value("${app.cors.allowed-origins:http://localhost:3000}") List<String> allowedOrigins,
             @Value("${springdoc.swagger-ui.enabled:true}") boolean swaggerUiEnabled,
-            @Value("${springdoc.api-docs.enabled:true}") boolean apiDocsEnabled
-    ) {
+            @Value("${springdoc.api-docs.enabled:true}") boolean apiDocsEnabled) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.jwtTokenProvider = jwtTokenProvider;
         this.customUserDetailsService = customUserDetailsService;
@@ -117,9 +116,9 @@ public class SecurityConfig {
                 })
                 .exceptionHandling(exception -> exception
                         .defaultAuthenticationEntryPointFor(
-                                (request, response, authException) -> response.sendError(HttpServletResponse.SC_FORBIDDEN),
-                                swaggerRequestMatcher()
-                        )
+                                (request, response, authException) -> response
+                                        .sendError(HttpServletResponse.SC_FORBIDDEN),
+                                swaggerRequestMatcher())
                         .defaultAuthenticationEntryPointFor(
                                 (request, response, authException) -> {
                                     String message = "Authentication is required or the token has expired.";
@@ -130,24 +129,22 @@ public class SecurityConfig {
                                             "success", false,
                                             "message", "인증이 필요하거나 토큰이 만료되었습니다."
 
-                                    );
+                                );
 
                                     response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
 
                                 },
-                                new AntPathRequestMatcher("/api/**")
-                        )
+                                new AntPathRequestMatcher("/api/**"))
                         .defaultAuthenticationEntryPointFor(
-                                (request, response, authException) -> response.sendError(HttpServletResponse.SC_UNAUTHORIZED),
-                                anyRequestMatcher()
-                        )
-                )
+                                (request, response, authException) -> response
+                                        .sendError(HttpServletResponse.SC_UNAUTHORIZED),
+                                anyRequestMatcher()))
                 .oauth2Login(oauth2 -> oauth2.successHandler(oAuth2SuccessHandler))
+                .addFilterBefore(new RateLimitFilter(objectMapper), UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(
                         new PrivateUploadStaticPathDenyFilter(jwtTokenProvider, customUserDetailsService),
-                        JwtAuthenticationFilter.class
-                )
+                        JwtAuthenticationFilter.class)
                 .addFilterAfter(new ApiRequestLoggingFilter(), PrivateUploadStaticPathDenyFilter.class);
 
         return http.build();
@@ -229,8 +226,7 @@ public class SecurityConfig {
 
         private PrivateUploadStaticPathDenyFilter(
                 JwtTokenProvider jwtTokenProvider,
-                CustomUserDetailsService customUserDetailsService
-        ) {
+                CustomUserDetailsService customUserDetailsService) {
             this.jwtTokenProvider = jwtTokenProvider;
             this.customUserDetailsService = customUserDetailsService;
         }
@@ -239,8 +235,7 @@ public class SecurityConfig {
         protected void doFilterInternal(
                 HttpServletRequest request,
                 HttpServletResponse response,
-                FilterChain filterChain
-        ) throws ServletException, IOException {
+                FilterChain filterChain) throws ServletException, IOException {
             if (!matchesAnyPattern(getRequestPath(request), PRIVATE_UPLOAD_PATTERNS)) {
                 filterChain.doFilter(request, response);
                 return;
