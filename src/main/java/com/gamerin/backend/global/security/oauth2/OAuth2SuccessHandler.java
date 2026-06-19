@@ -80,7 +80,7 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
 
             TokenService.AuthResult result = tokenService.issueTokens(user);
             setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
-            targetUrl = buildLoginSuccessUrl(result.authTokenResponse().accessToken());
+            targetUrl = buildLoginSuccessUrl();
 
         } else {
             // [Case B: 소셜 연동 정보가 없음] -> 이메일 중복 체크를 통해 통합 가입 시도
@@ -99,7 +99,7 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
 
                 TokenService.AuthResult result = tokenService.issueTokens(user);
                 setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
-                targetUrl = buildLoginSuccessUrl(result.authTokenResponse().accessToken());
+                targetUrl = buildLoginSuccessUrl();
 
             } else {
                 // [Case B-2: 서비스에 아예 처음 온 완전 신규 유저] -> 가입 세션 열고 폼 페이지로 리다이렉트
@@ -127,11 +127,10 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         userRepository.save(user);
     }
 
-    private String buildLoginSuccessUrl(String accessToken) {
+    private String buildLoginSuccessUrl() {
         return UriComponentsBuilder.fromUriString(frontendBaseUrl)
-                .path("/home")
-                .queryParam("accessToken", accessToken)
-                .build().toUriString();
+            .path("/auth/oauth-success")
+            .build().toUriString();
     }
 
     private void setRefreshTokenCookie(HttpServletResponse response, String refreshToken, long maxAgeSeconds) {
