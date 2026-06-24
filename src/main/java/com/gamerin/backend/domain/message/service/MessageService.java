@@ -17,6 +17,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -49,6 +51,7 @@ import com.gamerin.backend.domain.post.service.VideoOptimizationService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.response.CursorPageResponse;
+import com.gamerin.backend.global.security.jwt.SseStreamTokenService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -80,6 +83,7 @@ public class MessageService {
     private final TextSecurityService textSecurityService;
     private final VideoMetadataService videoMetadataService;
     private final VideoOptimizationService videoOptimizationService;
+    private final SseStreamTokenService sseStreamTokenService;
 
     public MessageService(
             UserRepository userRepository,
@@ -96,7 +100,8 @@ public class MessageService {
             LightweightSecurityScanService lightweightSecurityScanService,
             TextSecurityService textSecurityService,
             VideoMetadataService videoMetadataService,
-            VideoOptimizationService videoOptimizationService
+            VideoOptimizationService videoOptimizationService,
+            SseStreamTokenService sseStreamTokenService
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -113,6 +118,7 @@ public class MessageService {
         this.textSecurityService = textSecurityService;
         this.videoMetadataService = videoMetadataService;
         this.videoOptimizationService = videoOptimizationService;
+        this.sseStreamTokenService = sseStreamTokenService;
     }
 
     @Transactional(readOnly = true)
@@ -141,6 +147,12 @@ public class MessageService {
     public SseEmitter streamMessages(CustomUserPrincipal principal) {
         User viewer = getCurrentUser(principal);
         return messageRealtimeService.subscribe(viewer.getId());
+    }
+
+    @Transactional(readOnly = true)
+    public SseStreamTokenService.IssuedToken issueStreamToken(CustomUserPrincipal principal) {
+        User viewer = getCurrentUser(principal);
+        return sseStreamTokenService.issue(viewer.getId());
     }
 
     @Transactional(readOnly = true)
@@ -281,7 +293,7 @@ public class MessageService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the sender can delete this message.");
         }
 
-        deleteMessageAttachmentFiles(message);
+        deleteMessageAttachmentFilesAfterCommit(message);
         message.softDelete();
         publishMessageDeleted(message);
     }
@@ -289,14 +301,9 @@ public class MessageService {
     @Transactional(readOnly = true)
     public MessageAttachmentFile getMessageAttachmentFile(CustomUserPrincipal principal, UUID attachmentId) {
         User viewer = getCurrentUser(principal);
-        DirectMessageAttachment attachment = directMessageAttachmentRepository.findByIdWithMessage(attachmentId)
+        DirectMessageAttachment attachment = directMessageAttachmentRepository
+                .findAccessibleActiveById(attachmentId, viewer.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Message attachment not found."));
-        DirectMessage message = attachment.getMessage();
-        if (message.getDeletedAt() != null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Message attachment not found.");
-        }
-
-        getParticipant(message.getConversation().getId(), viewer.getId());
 
         Path attachmentPath = messageAttachmentStorageService.resolvePublicUrl(attachment.getFileUrl())
                 .filter(Files::isRegularFile)
@@ -370,14 +377,12 @@ public class MessageService {
         }
 
         String directKey = buildDirectKey(viewer.getId(), recipient.getId());
-        return messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(directKey)
-                .orElseGet(() -> {
-                    MessageConversation conversation =
-                            messageConversationRepository.save(MessageConversation.createDirect(directKey));
-                    messageParticipantRepository.save(MessageParticipant.create(conversation, viewer));
-                    messageParticipantRepository.save(MessageParticipant.create(conversation, recipient));
-                    return conversation;
-                });
+        messageConversationRepository.insertDirectConversationIfAbsent(directKey);
+        MessageConversation conversation = messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(directKey)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Direct conversation is not available."));
+        messageParticipantRepository.insertParticipantIfAbsent(conversation.getId(), viewer.getId());
+        messageParticipantRepository.insertParticipantIfAbsent(conversation.getId(), recipient.getId());
+        return conversation;
     }
 
     private MessageParticipant getOrCreateParticipant(MessageConversation conversation, User user) {
@@ -417,11 +422,13 @@ public class MessageService {
         }
     }
 
-    private void deleteMessageAttachmentFiles(DirectMessage message) {
+    private void deleteMessageAttachmentFilesAfterCommit(DirectMessage message) {
         List<DirectMessageAttachment> attachments = directMessageAttachmentRepository.findByMessageIds(List.of(message.getId()));
-        for (DirectMessageAttachment attachment : attachments) {
-            messageAttachmentStorageService.deletePublicUrlQuietly(attachment.getFileUrl());
-        }
+        runAfterCommit(() -> {
+            for (DirectMessageAttachment attachment : attachments) {
+                messageAttachmentStorageService.deletePublicUrlQuietly(attachment.getFileUrl());
+            }
+        });
     }
 
     private ConversationResponse toConversationResponse(
@@ -543,7 +550,7 @@ public class MessageService {
         List<MessageParticipant> participants =
                 messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(message.getConversation().getId());
         for (MessageParticipant participant : participants) {
-            messageRealtimeService.publish(
+            publishAfterCommit(
                     participant.getUser().getId(),
                     MessageRealtimeEvent.deleted(message.getConversation().getId(), message.getId())
             );
@@ -562,11 +569,29 @@ public class MessageService {
                     attachmentMap.getOrDefault(message.getId(), List.of()),
                     participants
             );
-            messageRealtimeService.publish(
+            publishAfterCommit(
                     viewerId,
                     MessageRealtimeEvent.created(message.getConversation().getId(), response)
             );
         }
+    }
+
+    private void publishAfterCommit(UUID userId, MessageRealtimeEvent event) {
+        runAfterCommit(() -> messageRealtimeService.publish(userId, event));
+    }
+
+    private void runAfterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     private Map<UUID, List<DirectMessageAttachment>> buildAttachmentMap(List<DirectMessage> messages) {

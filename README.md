@@ -227,3 +227,18 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 검증: `./gradlew test --tests 'com.gamerin.backend.domain.message.service.MessageServiceTest' --tests 'com.gamerin.backend.domain.post.service.MediaUploadSecurityServiceTest' --tests 'com.gamerin.backend.domain.post.moderation.ContentModerationServiceTest'`, `./gradlew test --tests 'com.gamerin.backend.domain.message.service.MessageServiceTest' --tests 'com.gamerin.backend.global.security.config.SecurityConfigTest' --tests 'com.gamerin.backend.global.security.config.SecurityConfigOAuthEntryPointIntegrationTest'` 통과
 
   > 요약 : DM 첨부 저장 전 보안 검사와 검열을 게시글/댓글 흐름에 맞춰 적용하고, DM 첨부 파일은 인증된 참여자만 접근할 수 있도록 정리
+
+- **26/06/24** Codex
+
+  > `fix/deployement_risks` 브랜치를 기준으로 두고 `origin/fix/messags`의 메시지 변경 중 필요한 부분만 선별 이식
+  > `POST /api/v1/messages/stream-token` API와 `SseStreamTokenService`를 추가하여 메시지 SSE 연결용 짧은 수명 HttpOnly 쿠키를 발급하도록 변경
+  > `/api/v1/messages/stream?accessToken=...` 쿼리 토큰 인증을 제거하고, SSE 스트림은 Bearer 토큰 또는 발급된 스트림 쿠키로만 인증하도록 `JwtAuthenticationFilter` 수정
+  > 쿼리 문자열 토큰은 브라우저 히스토리, 프록시/서버 로그, referer 등에 남을 수 있어 SSE 연결 인증 전용 쿠키로 분리
+  > 1:1 DM 대화방 및 참여자 생성은 `insert ... on conflict do nothing` 기반으로 변경하여 동시 요청 시 중복 생성/unique 충돌 위험을 줄임
+  > DM 생성/삭제 실시간 이벤트 publish와 삭제 메시지의 첨부 파일 정리를 트랜잭션 commit 이후로 지연하여 롤백된 메시지가 전파되거나 커밋 전 파일이 삭제되는 문제를 방지
+  > DM 첨부 다운로드 조회 쿼리에서 메시지/대화방 삭제 여부와 요청자의 활성 참여자 여부를 함께 확인하도록 강화
+  > 공유된 게시글이 삭제된 경우 메시지 응답에 원본 내용을 노출하지 않고 `삭제된 게시글` placeholder를 내려주도록 변경
+  > `origin/fix/messags`의 오래된 `SecurityConfig`, `MediaResourceConfig`, 첨부 저장 로직은 가져오지 않음. 이유는 현재 브랜치의 Rate Limit, 운영 Swagger 차단, OAuth URL 토큰 제거, 프로필 이미지/DM 첨부 보안 검증 흐름을 되돌릴 수 있기 때문
+  > 검증: `./gradlew test --tests com.gamerin.backend.domain.message.service.MessageServiceTest --tests com.gamerin.backend.domain.message.controller.MessageControllerTest --tests com.gamerin.backend.global.security.jwt.JwtAuthenticationFilterTest`, `./gradlew test` 통과
+
+  > 요약 : 배포 리스크 보안 변경을 유지하면서 메시지 SSE 인증, 대화방 생성 동시성, 실시간 이벤트/첨부 삭제 트랜잭션 정합성을 보강

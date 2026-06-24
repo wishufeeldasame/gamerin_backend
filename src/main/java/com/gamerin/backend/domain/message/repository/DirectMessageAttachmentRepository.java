@@ -25,8 +25,20 @@ public interface DirectMessageAttachmentRepository extends JpaRepository<DirectM
         select dma
         from DirectMessageAttachment dma
         join fetch dma.message dm
-        join fetch dm.conversation
+        join fetch dm.conversation conversation
         where dma.id = :attachmentId
+          and dm.deletedAt is null
+          and conversation.deletedAt is null
+          and exists (
+              select 1
+              from MessageParticipant participant
+              where participant.conversation = conversation
+                and participant.user.id = :userId
+                and participant.deletedAt is null
+          )
         """)
-    Optional<DirectMessageAttachment> findByIdWithMessage(@Param("attachmentId") UUID attachmentId);
+    Optional<DirectMessageAttachment> findAccessibleActiveById(
+            @Param("attachmentId") UUID attachmentId,
+            @Param("userId") UUID userId
+    );
 }

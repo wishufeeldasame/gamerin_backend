@@ -25,6 +25,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
@@ -51,6 +53,7 @@ import com.gamerin.backend.domain.post.service.VideoMetadataService;
 import com.gamerin.backend.domain.post.service.VideoOptimizationService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
+import com.gamerin.backend.global.security.jwt.SseStreamTokenService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
 @ExtendWith(MockitoExtension.class)
@@ -98,6 +101,9 @@ class MessageServiceTest {
     @Mock
     private VideoOptimizationService videoOptimizationService;
 
+    @Mock
+    private SseStreamTokenService sseStreamTokenService;
+
     private MessageService messageService;
 
     @BeforeEach
@@ -117,7 +123,8 @@ class MessageServiceTest {
                 lightweightSecurityScanService,
                 textSecurityService,
                 videoMetadataService,
-                videoOptimizationService
+                videoOptimizationService,
+                sseStreamTokenService
         );
     }
 
@@ -147,7 +154,7 @@ class MessageServiceTest {
     }
 
     @Test
-    void deleteMessageImmediatelyDeletesAttachmentFiles() {
+    void deleteMessageDeletesAttachmentFilesAndPublishesEventAfterCommit() {
         User viewer = user("viewer");
         MessageConversation conversation = conversation();
         MessageParticipant viewerParticipant = participant(conversation, viewer);
@@ -172,10 +179,26 @@ class MessageServiceTest {
                 .thenReturn(List.of(viewerParticipant));
         when(directMessageAttachmentRepository.findByMessageIds(List.of(message.getId()))).thenReturn(List.of(attachment));
 
-        messageService.deleteMessage(CustomUserPrincipal.from(viewer), conversation.getId(), message.getId());
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            messageService.deleteMessage(CustomUserPrincipal.from(viewer), conversation.getId(), message.getId());
 
-        assertThat(message.getDeletedAt()).isNotNull();
-        verify(messageAttachmentStorageService).deletePublicUrlQuietly("/uploads/message-attachments/screenshot.jpg");
+            assertThat(message.getDeletedAt()).isNotNull();
+            verify(messageAttachmentStorageService, never())
+                    .deletePublicUrlQuietly("/uploads/message-attachments/screenshot.jpg");
+            verify(messageRealtimeService, never()).publish(any(), any());
+
+            List<TransactionSynchronization> synchronizations =
+                    TransactionSynchronizationManager.getSynchronizations();
+            assertThat(synchronizations).hasSize(2);
+
+            synchronizations.forEach(TransactionSynchronization::afterCommit);
+
+            verify(messageAttachmentStorageService).deletePublicUrlQuietly("/uploads/message-attachments/screenshot.jpg");
+            verify(messageRealtimeService).publish(eq(viewer.getId()), any());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test
@@ -194,6 +217,23 @@ class MessageServiceTest {
 
         assertThat(viewerParticipant.getDeletedAt()).isNotNull();
         assertThat(viewerParticipant.getClearedAt()).isNotNull();
+    }
+
+    @Test
+    void issueStreamTokenDelegatesToSseTokenServiceForAuthenticatedUser() {
+        User viewer = user("viewer");
+        SseStreamTokenService.IssuedToken issuedToken = new SseStreamTokenService.IssuedToken(
+                "stream-token",
+                java.time.Instant.now().plusSeconds(60)
+        );
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(sseStreamTokenService.issue(viewer.getId())).thenReturn(issuedToken);
+
+        SseStreamTokenService.IssuedToken response = messageService.issueStreamToken(CustomUserPrincipal.from(viewer));
+
+        assertThat(response).isEqualTo(issuedToken);
+        verify(sseStreamTokenService).issue(viewer.getId());
     }
 
     @Test
@@ -246,6 +286,10 @@ class MessageServiceTest {
         assertThat(viewerParticipant.getDeletedAt()).isNull();
         assertThat(viewerParticipant.getClearedAt()).isEqualTo(clearedAt);
         assertThat(viewerParticipant.getLastReadAt()).isNotNull();
+        verify(messageConversationRepository).insertDirectConversationIfAbsent(any());
+        verify(messageParticipantRepository).insertParticipantIfAbsent(conversation.getId(), viewer.getId());
+        verify(messageParticipantRepository).insertParticipantIfAbsent(conversation.getId(), recipient.getId());
+        verify(messageConversationRepository, never()).save(any(MessageConversation.class));
         verify(messageParticipantRepository, never()).save(any(MessageParticipant.class));
     }
 
@@ -309,15 +353,30 @@ class MessageServiceTest {
                 .thenReturn(List.of(viewerParticipant, recipientParticipant));
         when(directMessageAttachmentRepository.findByMessageIds(any())).thenReturn(List.of());
 
-        messageService.sendMessage(
-                CustomUserPrincipal.from(viewer),
-                conversation.getId(),
-                new SendMessageRequest(null, sharedPost.getId())
-        );
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            messageService.sendMessage(
+                    CustomUserPrincipal.from(viewer),
+                    conversation.getId(),
+                    new SendMessageRequest(null, sharedPost.getId())
+            );
 
-        ArgumentCaptor<DirectMessage> messageCaptor = ArgumentCaptor.forClass(DirectMessage.class);
-        verify(directMessageRepository).save(messageCaptor.capture());
-        assertThat(messageCaptor.getValue().getContent()).isEqualTo("");
+            ArgumentCaptor<DirectMessage> messageCaptor = ArgumentCaptor.forClass(DirectMessage.class);
+            verify(directMessageRepository).save(messageCaptor.capture());
+            assertThat(messageCaptor.getValue().getContent()).isEqualTo("");
+            verify(messageRealtimeService, never()).publish(any(), any());
+
+            List<TransactionSynchronization> synchronizations =
+                    TransactionSynchronizationManager.getSynchronizations();
+            assertThat(synchronizations).hasSize(2);
+
+            synchronizations.forEach(TransactionSynchronization::afterCommit);
+
+            verify(messageRealtimeService).publish(eq(viewer.getId()), any());
+            verify(messageRealtimeService).publish(eq(recipient.getId()), any());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test
@@ -542,11 +601,8 @@ class MessageServiceTest {
         Path storedPath = Path.of("build.gradle").toAbsolutePath();
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(directMessageAttachmentRepository.findByIdWithMessage(attachment.getId())).thenReturn(Optional.of(attachment));
-        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
-                conversation.getId(),
-                viewer.getId()
-        )).thenReturn(Optional.of(viewerParticipant));
+        when(directMessageAttachmentRepository.findAccessibleActiveById(attachment.getId(), viewer.getId()))
+                .thenReturn(Optional.of(attachment));
         when(messageAttachmentStorageService.resolvePublicUrl("/uploads/message-attachments/screenshot.jpg"))
                 .thenReturn(Optional.of(storedPath));
 
@@ -559,7 +615,7 @@ class MessageServiceTest {
     }
 
     @Test
-    void getMessageAttachmentFileRejectsDeletedMessage() {
+    void getMessageAttachmentFileRejectsInaccessibleOrDeletedMessage() {
         User viewer = user("viewer");
         MessageConversation conversation = conversation();
         DirectMessage message = message(conversation, viewer, "message");
@@ -572,7 +628,8 @@ class MessageServiceTest {
         );
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(directMessageAttachmentRepository.findByIdWithMessage(attachment.getId())).thenReturn(Optional.of(attachment));
+        when(directMessageAttachmentRepository.findAccessibleActiveById(attachment.getId(), viewer.getId()))
+                .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> messageService.getMessageAttachmentFile(
                 CustomUserPrincipal.from(viewer),
@@ -619,6 +676,30 @@ class MessageServiceTest {
                 eq(cursorId),
                 any()
         );
+    }
+
+    @Test
+    void messageResponseUsesPlaceholderForDeletedSharedPost() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        Post sharedPost = post(viewer);
+        sharedPost.softDelete();
+        DirectMessage message = DirectMessage.create(conversation, viewer, "", sharedPost);
+        ReflectionTestUtils.setField(message, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(message, "createdAt", OffsetDateTime.now());
+
+        var response = new MessageResponseAssembler().toMessage(
+                message,
+                viewer.getId(),
+                List.of(),
+                List.of(viewerParticipant)
+        );
+
+        assertThat(response.sharedPost()).isNotNull();
+        assertThat(response.sharedPost().author()).isEqualTo("삭제된 게시글");
+        assertThat(response.sharedPost().authorHandle()).isEmpty();
+        assertThat(response.sharedPost().content()).isEqualTo("삭제된 게시글");
     }
 
     private void stubMultipartMessageSend(
