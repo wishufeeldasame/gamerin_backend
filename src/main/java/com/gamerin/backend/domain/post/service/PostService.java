@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,7 +44,6 @@ public class PostService {
 
     private static final int MAX_IMAGE_COUNT = 4;
     private static final int MAX_VIDEO_COUNT = 1;
-    private static final long MAX_VIDEO_FILE_SIZE_BYTES = 500L * 1024L * 1024L;
     private static final double MAX_VIDEO_DURATION_SECONDS = 120.0;
 
     private final UserRepository userRepository;
@@ -61,6 +61,7 @@ public class PostService {
     private final LightweightSecurityScanService lightweightSecurityScanService;
     private final TextSecurityService textSecurityService;
     private final VideoOptimizationService videoOptimizationService;
+    private final long maxVideoFileSizeBytes;
 
     public PostService(
             UserRepository userRepository,
@@ -77,8 +78,13 @@ public class PostService {
             MediaUploadSecurityService mediaUploadSecurityService,
             LightweightSecurityScanService lightweightSecurityScanService,
             TextSecurityService textSecurityService,
-            VideoOptimizationService videoOptimizationService
+            VideoOptimizationService videoOptimizationService,
+            @Value("${app.media.video.max-file-size-bytes:104857600}") long maxVideoFileSizeBytes
     ) {
+        if (maxVideoFileSizeBytes < 1) {
+            throw new IllegalArgumentException("Video max file size must be at least 1 byte.");
+        }
+
         this.userRepository = userRepository;
         this.postRepository = postRepository;
         this.postMediaRepository = postMediaRepository;
@@ -94,6 +100,7 @@ public class PostService {
         this.lightweightSecurityScanService = lightweightSecurityScanService;
         this.textSecurityService = textSecurityService;
         this.videoOptimizationService = videoOptimizationService;
+        this.maxVideoFileSizeBytes = maxVideoFileSizeBytes;
     }
 
     public PostDetailResponse create(CustomUserPrincipal principal, CreatePostRequest request) {
@@ -374,8 +381,8 @@ public class PostService {
     }
 
     private void validateVideoConstraints(MultipartFile videoFile) {
-        if (videoFile.getSize() > MAX_VIDEO_FILE_SIZE_BYTES) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video file must be 500MB or smaller.");
+        if (videoFile.getSize() > maxVideoFileSizeBytes) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video file exceeds the configured size limit.");
         }
 
         mediaUploadSecurityService.assertVideoFileSafe(videoFile);
