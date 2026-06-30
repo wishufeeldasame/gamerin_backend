@@ -8,11 +8,8 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -23,48 +20,22 @@ import org.springframework.web.server.ResponseStatusException;
 public class VideoOptimizationService {
 
     private static final long FFMPEG_TIMEOUT_MILLIS = 60_000L;
-    private static final int MAX_LOGGED_OUTPUT_LENGTH = 4_000;
-    private static final String PROCESSING_BUSY_MESSAGE = "현재 비디오 처리 요청이 많습니다. 잠시 후 다시 시도해주세요.";
-    private static final String PROCESSING_FAILED_MESSAGE = "비디오 파일을 처리할 수 없습니다.";
-    private static final String PROCESSING_UNAVAILABLE_MESSAGE = "비디오 처리 서비스를 사용할 수 없습니다.";
-    private static final Logger log = LoggerFactory.getLogger(VideoOptimizationService.class);
 
     private final boolean enabled;
     private final String ffmpegPath;
-    private final Semaphore processingSlots;
-    private final long acquireTimeoutMillis;
 
     public VideoOptimizationService(
             @Value("${app.media.video.optimization.enabled:true}") boolean enabled,
-            @Value("${app.media.video.optimization.ffmpeg-path:ffmpeg}") String ffmpegPath,
-            @Value("${app.media.video.optimization.max-concurrency:1}") int maxConcurrency,
-            @Value("${app.media.video.optimization.acquire-timeout-ms:5000}") long acquireTimeoutMillis
+            @Value("${app.media.video.optimization.ffmpeg-path:ffmpeg}") String ffmpegPath
     ) {
-        if (maxConcurrency < 1) {
-            throw new IllegalArgumentException("Video optimization max concurrency must be at least 1.");
-        }
-        if (acquireTimeoutMillis < 0) {
-            throw new IllegalArgumentException("Video optimization acquire timeout must not be negative.");
-        }
-
         this.enabled = enabled;
         this.ffmpegPath = ffmpegPath == null || ffmpegPath.isBlank() ? "ffmpeg" : ffmpegPath;
-        this.processingSlots = new Semaphore(maxConcurrency, true);
-        this.acquireTimeoutMillis = acquireTimeoutMillis;
     }
 
     public MediaStorageService.PreparedMediaPath prepareVideo(MultipartFile file) {
         Path inputVideo = null;
         Path outputVideo = null;
-        boolean processingSlotAcquired = false;
-        boolean keepInputVideo = false;
-        boolean keepOutputVideo = false;
         try {
-            if (enabled) {
-                acquireProcessingSlot();
-                processingSlotAcquired = true;
-            }
-
             inputVideo = Files.createTempFile("gamerin-video-input-", extractExtension(file.getOriginalFilename()));
 
             try (InputStream inputStream = file.getInputStream()) {
@@ -72,7 +43,6 @@ public class VideoOptimizationService {
             }
 
             if (!enabled) {
-                keepInputVideo = true;
                 return new MediaStorageService.PreparedMediaPath(inputVideo, extractExtension(file.getOriginalFilename()));
             }
 
@@ -84,32 +54,14 @@ public class VideoOptimizationService {
             }
 
             validateOutput(outputVideo);
-            keepOutputVideo = true;
             return new MediaStorageService.PreparedMediaPath(outputVideo, ".mp4");
         } catch (IOException ex) {
-            log.error("Failed to prepare temporary video files", ex);
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, PROCESSING_FAILED_MESSAGE, ex);
+            deleteQuietly(outputVideo);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to prepare video file.", ex);
         } finally {
-            if (!keepInputVideo) {
+            if (enabled) {
                 deleteQuietly(inputVideo);
             }
-            if (!keepOutputVideo) {
-                deleteQuietly(outputVideo);
-            }
-            if (processingSlotAcquired) {
-                processingSlots.release();
-            }
-        }
-    }
-
-    private void acquireProcessingSlot() {
-        try {
-            if (!processingSlots.tryAcquire(acquireTimeoutMillis, TimeUnit.MILLISECONDS)) {
-                throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, PROCESSING_BUSY_MESSAGE);
-            }
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, PROCESSING_BUSY_MESSAGE, ex);
         }
     }
 
@@ -180,8 +132,7 @@ public class VideoOptimizationService {
                     .redirectErrorStream(true)
                     .start();
         } catch (IOException ex) {
-            log.error("Failed to start FFmpeg process", ex);
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, PROCESSING_UNAVAILABLE_MESSAGE, ex);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "ffmpeg is required for video optimization.", ex);
         }
 
         try {
@@ -189,33 +140,17 @@ public class VideoOptimizationService {
             String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             if (!finished) {
                 process.destroyForcibly();
-                log.warn("FFmpeg processing timed out");
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, PROCESSING_FAILED_MESSAGE);
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video optimization timed out.");
             }
             if (process.exitValue() != 0) {
-                log.warn("FFmpeg process failed with exit code {}: {}", process.exitValue(), loggableOutput(output));
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, PROCESSING_FAILED_MESSAGE);
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video could not be optimized. " + output.strip());
             }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            log.warn("FFmpeg processing was interrupted", ex);
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, PROCESSING_UNAVAILABLE_MESSAGE, ex);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Video optimization was interrupted.", ex);
         } catch (IOException ex) {
-            log.error("Failed to read FFmpeg process output", ex);
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, PROCESSING_FAILED_MESSAGE, ex);
-        } finally {
-            if (process.isAlive()) {
-                process.destroyForcibly();
-            }
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video optimization output could not be read.", ex);
         }
-    }
-
-    private String loggableOutput(String output) {
-        String normalized = output == null ? "" : output.replaceAll("\\s+", " ").strip();
-        if (normalized.length() <= MAX_LOGGED_OUTPUT_LENGTH) {
-            return normalized;
-        }
-        return normalized.substring(0, MAX_LOGGED_OUTPUT_LENGTH) + "...";
     }
 
     private void validateOutput(Path outputVideo) throws IOException {
