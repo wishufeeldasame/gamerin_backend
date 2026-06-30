@@ -50,10 +50,18 @@ spring:
 app:
   media:
     upload-dir: ${APP_MEDIA_UPLOAD_DIR:/app/uploads}
+    upload:
+      max-concurrency: ${APP_MEDIA_UPLOAD_MAX_CONCURRENCY:1}
+      acquire-timeout-ms: ${APP_MEDIA_UPLOAD_ACQUIRE_TIMEOUT_MS:5000}
     video:
+      max-file-size-bytes: ${APP_MEDIA_VIDEO_MAX_FILE_SIZE_BYTES:524288000}
+      temp-storage-reserve-bytes: ${APP_MEDIA_VIDEO_TEMP_STORAGE_RESERVE_BYTES:536870912}
       optimization:
         enabled: ${APP_MEDIA_VIDEO_OPTIMIZATION_ENABLED:true}
         ffmpeg-path: ${APP_MEDIA_VIDEO_OPTIMIZATION_FFMPEG_PATH:ffmpeg}
+        max-concurrency: ${APP_MEDIA_VIDEO_OPTIMIZATION_MAX_CONCURRENCY:1}
+        acquire-timeout-ms: ${APP_MEDIA_VIDEO_OPTIMIZATION_ACQUIRE_TIMEOUT_MS:5000}
+        timeout-ms: ${APP_MEDIA_VIDEO_OPTIMIZATION_TIMEOUT_MS:60000}
   post:
     cleanup:
       hard-delete-after: ${POST_CLEANUP_HARD_DELETE_AFTER:24h}

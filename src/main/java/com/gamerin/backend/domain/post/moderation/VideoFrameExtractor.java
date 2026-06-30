@@ -2,7 +2,6 @@ package com.gamerin.backend.domain.post.moderation;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -12,6 +11,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.stream.Stream;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -19,30 +20,49 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.post.service.VideoMetadataService;
+import com.gamerin.backend.domain.post.service.FfmpegProcessRunner;
+import com.gamerin.backend.domain.post.service.FfmpegProcessRunner.FailureType;
+import com.gamerin.backend.domain.post.service.FfmpegProcessRunner.FfmpegProcessException;
+import com.gamerin.backend.domain.post.service.VideoTemporaryStorageGuard;
 
 @Service
 public class VideoFrameExtractor {
 
-    private static final long FRAME_EXTRACTION_TIMEOUT_MILLIS = 15_000L;
+    private static final String FRAME_EXTRACTION_FAILED_MESSAGE = "Video moderation frame could not be extracted.";
+    private static final String FRAME_EXTRACTION_UNAVAILABLE_MESSAGE = "Video moderation is temporarily unavailable.";
+    private static final Logger log = LoggerFactory.getLogger(VideoFrameExtractor.class);
 
     private final VideoMetadataService videoMetadataService;
     private final ImageModerationPreprocessor imageModerationPreprocessor;
+    private final FfmpegProcessRunner ffmpegProcessRunner;
+    private final VideoTemporaryStorageGuard temporaryStorageGuard;
     private final String ffmpegPath;
+    private final long frameExtractionTimeoutMillis;
 
     public VideoFrameExtractor(
             VideoMetadataService videoMetadataService,
             ImageModerationPreprocessor imageModerationPreprocessor,
-            @Value("${openai.moderation.ffmpeg-path:ffmpeg}") String ffmpegPath
+            FfmpegProcessRunner ffmpegProcessRunner,
+            VideoTemporaryStorageGuard temporaryStorageGuard,
+            @Value("${openai.moderation.ffmpeg-path:ffmpeg}") String ffmpegPath,
+            @Value("${openai.moderation.ffmpeg-timeout-ms:15000}") long frameExtractionTimeoutMillis
     ) {
+        if (frameExtractionTimeoutMillis < 1) {
+            throw new IllegalArgumentException("Video moderation FFmpeg timeout must be at least 1 ms.");
+        }
         this.videoMetadataService = videoMetadataService;
         this.imageModerationPreprocessor = imageModerationPreprocessor;
+        this.ffmpegProcessRunner = ffmpegProcessRunner;
+        this.temporaryStorageGuard = temporaryStorageGuard;
         this.ffmpegPath = ffmpegPath == null || ffmpegPath.isBlank() ? "ffmpeg" : ffmpegPath;
+        this.frameExtractionTimeoutMillis = frameExtractionTimeoutMillis;
     }
 
     public List<String> extractFrameDataUrls(MultipartFile videoFile) {
         Path tempDirectory = null;
         try {
             double durationSeconds = videoMetadataService.readDurationSeconds(videoFile);
+            temporaryStorageGuard.ensureCapacity(videoFile.getSize());
             tempDirectory = Files.createTempDirectory("gamerin-video-moderation-");
             Path inputVideo = tempDirectory.resolve("input" + extractExtension(videoFile.getOriginalFilename()));
 
@@ -97,30 +117,25 @@ public class VideoFrameExtractor {
                 outputFrame.toString()
         );
 
-        Process process;
         try {
-            process = new ProcessBuilder(command)
-                    .redirectErrorStream(true)
-                    .start();
-        } catch (IOException ex) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "ffmpeg is required for video moderation.", ex);
-        }
-
-        try {
-            boolean finished = process.waitFor(FRAME_EXTRACTION_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS);
-            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            if (!finished) {
-                process.destroyForcibly();
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video frame extraction timed out.");
+            ffmpegProcessRunner.run(command, frameExtractionTimeoutMillis);
+            if (!Files.exists(outputFrame) || Files.size(outputFrame) == 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, FRAME_EXTRACTION_FAILED_MESSAGE);
             }
-            if (process.exitValue() != 0 || !Files.exists(outputFrame) || Files.size(outputFrame) == 0) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video frame could not be extracted. " + output.strip());
+        } catch (FfmpegProcessException ex) {
+            if (ex.failureType() == FailureType.COMMAND_FAILED) {
+                log.warn("Video moderation FFmpeg failed with exit code {}: {}", ex.exitCode(), ex.output());
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, FRAME_EXTRACTION_FAILED_MESSAGE, ex);
             }
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Video frame extraction was interrupted.", ex);
+            if (ex.failureType() == FailureType.TIMEOUT) {
+                log.warn("Video moderation frame extraction timed out");
+            } else {
+                log.error("Video moderation FFmpeg is unavailable: {}", ex.failureType(), ex);
+            }
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, FRAME_EXTRACTION_UNAVAILABLE_MESSAGE, ex);
         } catch (IOException ex) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video frame could not be read after extraction.", ex);
+            log.error("Failed to inspect extracted video moderation frame", ex);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, FRAME_EXTRACTION_FAILED_MESSAGE, ex);
         }
     }
 

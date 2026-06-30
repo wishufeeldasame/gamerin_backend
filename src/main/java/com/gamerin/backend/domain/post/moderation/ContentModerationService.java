@@ -13,6 +13,7 @@ import org.springframework.web.server.ResponseStatusException;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
 import com.gamerin.backend.domain.post.moderation.OpenAiModerationClient.ModerationDecision;
 import com.gamerin.backend.domain.post.moderation.OpenAiModerationClient.ModerationInput;
+import com.gamerin.backend.domain.post.service.AnimatedGifProcessor;
 
 @Service
 public class ContentModerationService {
@@ -40,15 +41,18 @@ public class ContentModerationService {
     private final OpenAiModerationClient openAiModerationClient;
     private final ImageModerationPreprocessor imageModerationPreprocessor;
     private final VideoFrameExtractor videoFrameExtractor;
+    private final AnimatedGifProcessor animatedGifProcessor;
 
     public ContentModerationService(
             OpenAiModerationClient openAiModerationClient,
             ImageModerationPreprocessor imageModerationPreprocessor,
-            VideoFrameExtractor videoFrameExtractor
+            VideoFrameExtractor videoFrameExtractor,
+            AnimatedGifProcessor animatedGifProcessor
     ) {
         this.openAiModerationClient = openAiModerationClient;
         this.imageModerationPreprocessor = imageModerationPreprocessor;
         this.videoFrameExtractor = videoFrameExtractor;
+        this.animatedGifProcessor = animatedGifProcessor;
     }
 
     public void assertTextAllowed(String content) {
@@ -73,7 +77,15 @@ public class ContentModerationService {
 
                 PostMediaType mediaType = resolveMediaType(mediaFile);
                 if (mediaType == PostMediaType.IMAGE) {
-                    inputs.add(ModerationInput.image(imageModerationPreprocessor.toDataUrl(mediaFile)));
+                    if (animatedGifProcessor.isGif(mediaFile)) {
+                        animatedGifProcessor.extractModerationFrames(mediaFile)
+                                .stream()
+                                .map(imageModerationPreprocessor::toDataUrl)
+                                .map(ModerationInput::image)
+                                .forEach(inputs::add);
+                    } else {
+                        inputs.add(ModerationInput.image(imageModerationPreprocessor.toDataUrl(mediaFile)));
+                    }
                 } else {
                     videoFrameExtractor.extractFrameDataUrls(mediaFile)
                             .stream()
@@ -148,7 +160,7 @@ public class ContentModerationService {
         if (fileName != null) {
             String normalized = fileName.toLowerCase(Locale.ROOT);
             if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg") || normalized.endsWith(".png")
-                    || normalized.endsWith(".gif") || normalized.endsWith(".webp")) {
+                    || normalized.endsWith(".gif")) {
                 return PostMediaType.IMAGE;
             }
             if (normalized.endsWith(".mp4") || normalized.endsWith(".mov")

@@ -12,6 +12,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.web.cors.CorsConfiguration;
@@ -19,6 +20,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gamerin.backend.domain.post.filter.PostUploadConcurrencyFilter;
 import com.gamerin.backend.global.logging.ApiRequestLoggingFilter;
 import com.gamerin.backend.global.logging.JsonLogContext;
 import com.gamerin.backend.global.security.jwt.JwtAuthenticationFilter;
@@ -34,16 +36,19 @@ public class SecurityConfig {
     private final OAuth2SuccessHandler oAuth2SuccessHandler;
     private final ObjectMapper objectMapper;
     private final List<String> allowedOrigins;
+    private final PostUploadConcurrencyFilter postUploadConcurrencyFilter;
 
     public SecurityConfig(
             JwtAuthenticationFilter jwtAuthenticationFilter,
             OAuth2SuccessHandler oAuth2SuccessHandler,
             ObjectMapper objectMapper,
+            PostUploadConcurrencyFilter postUploadConcurrencyFilter,
             @Value("${app.cors.allowed-origins:http://localhost:3000}") List<String> allowedOrigins
     ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.oAuth2SuccessHandler = oAuth2SuccessHandler;
         this.objectMapper = objectMapper;
+        this.postUploadConcurrencyFilter = postUploadConcurrencyFilter;
         this.allowedOrigins = allowedOrigins;
     }
 
@@ -96,7 +101,8 @@ public class SecurityConfig {
                 )
                 .oauth2Login(oauth2 -> oauth2.successHandler(oAuth2SuccessHandler))
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterAfter(new ApiRequestLoggingFilter(), JwtAuthenticationFilter.class);
+                .addFilterAfter(new ApiRequestLoggingFilter(), JwtAuthenticationFilter.class)
+                .addFilterAfter(postUploadConcurrencyFilter, AuthorizationFilter.class);
 
         return http.build();
     }

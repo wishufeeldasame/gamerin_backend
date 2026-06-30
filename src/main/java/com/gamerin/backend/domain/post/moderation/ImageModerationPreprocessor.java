@@ -57,6 +57,17 @@ public class ImageModerationPreprocessor {
         }
     }
 
+    public String toDataUrl(BufferedImage image) {
+        if (image == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Image frame could not be read for moderation.");
+        }
+        try {
+            return toJpegDataUrl(image);
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Image frame could not be prepared for moderation.", ex);
+        }
+    }
+
     private String toOriginalDataUrlIfSupported(MultipartFile file) throws IOException {
         if (!isWebp(file)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Image file could not be read.");

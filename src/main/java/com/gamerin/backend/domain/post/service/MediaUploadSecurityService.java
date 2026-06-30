@@ -41,6 +41,8 @@ public class MediaUploadSecurityService {
     private static final int MAX_STORED_PROFILE_COVER_BYTES = 2 * 1024 * 1024;
     private static final float[] JPEG_QUALITIES = {0.85f, 0.75f, 0.65f};
 
+    private final AnimatedGifProcessor animatedGifProcessor;
+
     private static final Set<String> MP4_FAMILY_EXTENSIONS = Set.of(".mp4", ".mov", ".m4v");
     private static final Set<String> MP4_FAMILY_CONTENT_TYPES = Set.of(
             "video/mp4",
@@ -52,9 +54,18 @@ public class MediaUploadSecurityService {
         ImageIO.setUseCache(false);
     }
 
+    public MediaUploadSecurityService(AnimatedGifProcessor animatedGifProcessor) {
+        this.animatedGifProcessor = animatedGifProcessor;
+    }
+
     public MediaStorageService.PreparedMediaFile prepareImage(MultipartFile file) {
-        return prepareImage(
+        ImageFormat declaredFormat = resolveDeclaredImageFormat(file);
+        if (declaredFormat == ImageFormat.GIF) {
+            return animatedGifProcessor.prepare(file);
+        }
+        return prepareStaticImage(
                 file,
+                declaredFormat,
                 STORED_IMAGE_MAX_DIMENSION,
                 MIN_STORED_IMAGE_MAX_DIMENSION,
                 MAX_STORED_IMAGE_BYTES
@@ -62,8 +73,10 @@ public class MediaUploadSecurityService {
     }
 
     public MediaStorageService.PreparedMediaFile prepareProfileAvatarImage(MultipartFile file) {
-        return prepareImage(
+        ImageFormat declaredFormat = resolveProfileImageFormat(file);
+        return prepareStaticImage(
                 file,
+                declaredFormat,
                 STORED_PROFILE_AVATAR_MAX_DIMENSION,
                 MIN_STORED_PROFILE_AVATAR_MAX_DIMENSION,
                 MAX_STORED_PROFILE_AVATAR_BYTES
@@ -71,21 +84,23 @@ public class MediaUploadSecurityService {
     }
 
     public MediaStorageService.PreparedMediaFile prepareProfileCoverImage(MultipartFile file) {
-        return prepareImage(
+        ImageFormat declaredFormat = resolveProfileImageFormat(file);
+        return prepareStaticImage(
                 file,
+                declaredFormat,
                 STORED_PROFILE_COVER_MAX_DIMENSION,
                 MIN_STORED_PROFILE_COVER_MAX_DIMENSION,
                 MAX_STORED_PROFILE_COVER_BYTES
         );
     }
 
-    private MediaStorageService.PreparedMediaFile prepareImage(
+    private MediaStorageService.PreparedMediaFile prepareStaticImage(
             MultipartFile file,
+            ImageFormat declaredFormat,
             int maxDimension,
             int minDimension,
             int maxBytes
     ) {
-        ImageFormat declaredFormat = resolveDeclaredImageFormat(file);
         assertImageMagicMatches(file, declaredFormat);
 
         BufferedImage image = readImage(file, declaredFormat);
@@ -96,8 +111,20 @@ public class MediaUploadSecurityService {
 
     public void assertImageFileSafe(MultipartFile file) {
         ImageFormat declaredFormat = resolveDeclaredImageFormat(file);
+        if (declaredFormat == ImageFormat.GIF) {
+            animatedGifProcessor.validate(file);
+            return;
+        }
         assertImageMagicMatches(file, declaredFormat);
         readImage(file, declaredFormat);
+    }
+
+    private ImageFormat resolveProfileImageFormat(MultipartFile file) {
+        ImageFormat declaredFormat = resolveDeclaredImageFormat(file);
+        if (declaredFormat == ImageFormat.GIF) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Profile image must be JPEG or PNG.");
+        }
+        return declaredFormat;
     }
 
     public void assertVideoFileSafe(MultipartFile file) {
@@ -125,7 +152,7 @@ public class MediaUploadSecurityService {
         String extension = normalizedExtension(file);
         ImageFormat extensionFormat = ImageFormat.fromExtension(extension);
         if (extensionFormat == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Image file must be JPEG or PNG.");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Image file must be JPEG, PNG, or GIF.");
         }
 
         String contentType = normalizedContentType(file);
@@ -290,7 +317,8 @@ public class MediaUploadSecurityService {
 
     private enum ImageFormat {
         JPEG(Set.of(".jpg", ".jpeg"), Set.of("image/jpeg"), "jpeg"),
-        PNG(Set.of(".png"), Set.of("image/png"), "png");
+        PNG(Set.of(".png"), Set.of("image/png"), "png"),
+        GIF(Set.of(".gif"), Set.of("image/gif"), "gif");
 
         private final Set<String> extensions;
         private final Set<String> contentTypes;
@@ -320,7 +348,10 @@ public class MediaUploadSecurityService {
         }
 
         private int magicHeaderLength() {
-            return this == JPEG ? 3 : 8;
+            if (this == JPEG) {
+                return 3;
+            }
+            return this == PNG ? 8 : 6;
         }
 
         private boolean matchesMagic(byte[] header) {
@@ -329,6 +360,16 @@ public class MediaUploadSecurityService {
                         && (header[0] & 0xff) == 0xff
                         && (header[1] & 0xff) == 0xd8
                         && (header[2] & 0xff) == 0xff;
+            }
+
+            if (this == GIF) {
+                return header.length >= 6
+                        && header[0] == 'G'
+                        && header[1] == 'I'
+                        && header[2] == 'F'
+                        && header[3] == '8'
+                        && (header[4] == '7' || header[4] == '9')
+                        && header[5] == 'a';
             }
 
             return header.length >= 8

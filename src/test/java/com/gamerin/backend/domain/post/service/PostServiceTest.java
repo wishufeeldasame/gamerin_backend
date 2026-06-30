@@ -56,6 +56,8 @@ import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 @ExtendWith(MockitoExtension.class)
 class PostServiceTest {
 
+    private static final long TEST_MAX_VIDEO_FILE_SIZE_BYTES = 500L * 1024L * 1024L;
+
     @Mock
     private UserRepository userRepository;
 
@@ -120,8 +122,33 @@ class PostServiceTest {
                 mediaUploadSecurityService,
                 lightweightSecurityScanService,
                 textSecurityService,
-                videoOptimizationService
+                videoOptimizationService,
+                TEST_MAX_VIDEO_FILE_SIZE_BYTES
         );
+    }
+
+    @Test
+    void constructorRejectsInvalidVideoSizeConfiguration() {
+        assertThatThrownBy(() -> new PostService(
+                userRepository,
+                postRepository,
+                postMediaRepository,
+                postLikeRepository,
+                postBookmarkRepository,
+                postCommentRepository,
+                postShareRepository,
+                postResponseAssembler,
+                mediaStorageService,
+                videoMetadataService,
+                contentModerationService,
+                mediaUploadSecurityService,
+                lightweightSecurityScanService,
+                textSecurityService,
+                videoOptimizationService,
+                0
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max file size");
     }
 
     @Test
@@ -177,7 +204,7 @@ class PostServiceTest {
             return post;
         });
         when(postResponseAssembler.toPostDetail(any(Post.class), any(UUID.class))).thenReturn(response);
-        when(videoMetadataService.readDurationSeconds(any())).thenReturn(119.0);
+        when(videoMetadataService.readDurationSeconds(any())).thenReturn(120.0);
         MediaStorageService.PreparedMediaPath preparedVideo = preparedVideo();
         when(videoOptimizationService.prepareVideo(any(MultipartFile.class))).thenReturn(preparedVideo);
         when(mediaStorageService.storePostMedia(any(MediaStorageService.PreparedMediaPath.class)))
@@ -204,7 +231,7 @@ class PostServiceTest {
     }
 
     @Test
-    void createMultipartRejectsVideoLargerThan500Mb() {
+    void createMultipartRejectsVideoLargerThanConfiguredLimit() {
         UUID userId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
 
@@ -213,17 +240,95 @@ class PostServiceTest {
         MultipartFile videoFile = mock(MultipartFile.class);
         when(videoFile.isEmpty()).thenReturn(false);
         when(videoFile.getContentType()).thenReturn("video/mp4");
-        when(videoFile.getSize()).thenReturn(500L * 1024L * 1024L + 1L);
+        when(videoFile.getSize()).thenReturn(TEST_MAX_VIDEO_FILE_SIZE_BYTES + 1L);
 
         CreateMultipartPostRequest request = new CreateMultipartPostRequest();
         request.setMediaFiles(List.of(videoFile));
 
         assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
                 .isInstanceOf(ResponseStatusException.class)
-                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
-                .isEqualTo(HttpStatus.BAD_REQUEST.value());
+                .satisfies(error -> {
+                    ResponseStatusException exception = (ResponseStatusException) error;
+                    assertThat(exception.getStatusCode().value()).isEqualTo(HttpStatus.BAD_REQUEST.value());
+                    assertThat(exception.getReason()).isEqualTo("Video file exceeds the configured size limit.");
+                });
 
         verify(postRepository, never()).save(any(Post.class));
+        verify(mediaUploadSecurityService, never()).assertVideoFileSafe(videoFile);
+        verify(lightweightSecurityScanService, never()).assertFileClean(videoFile);
+        verify(videoMetadataService, never()).readDurationSeconds(videoFile);
+    }
+
+    @Test
+    void createMultipartAcceptsVideoAtConfiguredSizeBoundary() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+
+        MultipartFile videoFile = mock(MultipartFile.class);
+        when(videoFile.isEmpty()).thenReturn(false);
+        when(videoFile.getContentType()).thenReturn("video/mp4");
+        when(videoFile.getSize()).thenReturn(TEST_MAX_VIDEO_FILE_SIZE_BYTES);
+        when(videoMetadataService.readDurationSeconds(videoFile)).thenReturn(120.01);
+
+        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
+        request.setMediaFiles(List.of(videoFile));
+
+        assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(error -> {
+                    ResponseStatusException exception = (ResponseStatusException) error;
+                    assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(exception.getReason()).isEqualTo("Video duration must be 2 minutes or shorter.");
+                });
+
+        verify(mediaUploadSecurityService).assertVideoFileSafe(videoFile);
+        verify(lightweightSecurityScanService).assertFileClean(videoFile);
+        verify(videoMetadataService).readDurationSeconds(videoFile);
+    }
+
+    @Test
+    void createMultipartRejectsMoreThanOneVideoBeforeMediaProcessing() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        MultipartFile firstVideo = mockVideoFile();
+        MultipartFile secondVideo = mockVideoFile();
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+
+        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
+        request.setMediaFiles(List.of(firstVideo, secondVideo));
+
+        assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("You can upload only one video");
+
+        verify(mediaUploadSecurityService, never()).assertVideoFileSafe(any(MultipartFile.class));
+        verify(videoMetadataService, never()).readDurationSeconds(any(MultipartFile.class));
+        verify(videoOptimizationService, never()).prepareVideo(any(MultipartFile.class));
+    }
+
+    @Test
+    void createMultipartRejectsMixedImageAndVideoBeforeVideoProcessing() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        MockMultipartFile image = imageFile("image.jpg");
+        MultipartFile video = mockVideoFile();
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+
+        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
+        request.setMediaFiles(List.of(image, video));
+
+        assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Images and videos cannot be uploaded together");
+
+        verify(mediaUploadSecurityService).assertImageFileSafe(image);
+        verify(mediaUploadSecurityService, never()).assertVideoFileSafe(video);
+        verify(videoMetadataService, never()).readDurationSeconds(video);
+        verify(videoOptimizationService, never()).prepareVideo(video);
     }
 
     @Test
@@ -307,6 +412,50 @@ class PostServiceTest {
         assertThat(savedMedia.get(1).getMediaUrl()).endsWith("/b.jpg");
         verify(mediaStorageService, never()).deleteQuietly(any(MediaStorageService.StoredFile.class));
         verify(mediaStorageService, never()).deleteQuietly(any(MediaStorageService.PreparedMediaPath.class));
+    }
+
+    @Test
+    void createMultipartStoresSanitizedAnimatedGifAsImage() throws Exception {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User user = savedUser(userId, "gif-user", "GIF User");
+        PostDetailResponse response = postDetailResponse(postId);
+        MockMultipartFile gif = new MockMultipartFile(
+                "mediaFiles",
+                "animation.gif",
+                "image/gif",
+                "GIF89a".getBytes()
+        );
+        MediaStorageService.PreparedMediaFile preparedGif =
+                new MediaStorageService.PreparedMediaFile("sanitized-animation".getBytes(), ".gif");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.save(any(Post.class))).thenAnswer(invocation -> {
+            Post post = invocation.getArgument(0);
+            ReflectionTestUtils.setField(post, "id", postId);
+            return post;
+        });
+        when(postResponseAssembler.toPostDetail(any(Post.class), any(UUID.class))).thenReturn(response);
+        when(mediaUploadSecurityService.prepareImage(gif)).thenReturn(preparedGif);
+        when(mediaStorageService.storePostMedia(preparedGif)).thenReturn(new MediaStorageService.StoredFile(
+                Path.of("uploads/post-media/animation.gif"),
+                "http://localhost:8080/uploads/post-media/animation.gif"
+        ));
+
+        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
+        request.setContent("animated gif post");
+        request.setMediaFiles(List.of(gif));
+
+        postService.create(CustomUserPrincipal.from(user), request);
+
+        ArgumentCaptor<List<PostMedia>> mediaCaptor = ArgumentCaptor.forClass(List.class);
+        verify(postMediaRepository).saveAll(mediaCaptor.capture());
+        assertThat(mediaCaptor.getValue()).singleElement().satisfies(media -> {
+            assertThat(media.getMediaType()).isEqualTo(PostMediaType.IMAGE);
+            assertThat(media.getMediaUrl()).endsWith("/animation.gif");
+        });
+        verify(mediaUploadSecurityService).assertImageFileSafe(gif);
+        verify(mediaUploadSecurityService).prepareImage(gif);
     }
 
     @Test
@@ -524,6 +673,13 @@ class PostServiceTest {
 
     private MockMultipartFile videoFile() {
         return new MockMultipartFile("mediaFiles", "video.mp4", "video/mp4", "video".getBytes());
+    }
+
+    private MultipartFile mockVideoFile() {
+        MultipartFile videoFile = mock(MultipartFile.class);
+        when(videoFile.isEmpty()).thenReturn(false);
+        when(videoFile.getContentType()).thenReturn("video/mp4");
+        return videoFile;
     }
 
     private MediaStorageService.PreparedMediaFile preparedImage() {
