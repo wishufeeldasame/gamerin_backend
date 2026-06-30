@@ -16,8 +16,8 @@ spring:
 
   servlet:
     multipart:
-      max-file-size: ${SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE:100MB}
-      max-request-size: ${SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE:110MB}
+      max-file-size: 500MB
+      max-request-size: 530MB
 
 server:
   port: 8080
@@ -29,12 +29,9 @@ app:
   media:
     upload-dir: uploads
     video:
-      max-file-size-bytes: ${APP_MEDIA_VIDEO_MAX_FILE_SIZE_BYTES:104857600}
       optimization:
         enabled: true
         ffmpeg-path: ffmpeg
-        max-concurrency: ${APP_MEDIA_VIDEO_OPTIMIZATION_MAX_CONCURRENCY:1}
-        acquire-timeout-ms: ${APP_MEDIA_VIDEO_OPTIMIZATION_ACQUIRE_TIMEOUT_MS:5000}
   post:
     cleanup:
       hard-delete-after: 24h
