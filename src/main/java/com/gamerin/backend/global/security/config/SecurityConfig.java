@@ -17,6 +17,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
@@ -26,6 +27,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gamerin.backend.domain.post.filter.PostUploadConcurrencyFilter;
 import com.gamerin.backend.domain.user.service.CustomUserDetailsService;
 import com.gamerin.backend.global.logging.ApiRequestLoggingFilter;
 import com.gamerin.backend.global.logging.JsonLogContext;
@@ -78,6 +80,7 @@ public class SecurityConfig {
     private final List<String> allowedOrigins;
     private final boolean swaggerUiEnabled;
     private final boolean apiDocsEnabled;
+    private final PostUploadConcurrencyFilter postUploadConcurrencyFilter;
 
     public SecurityConfig(
             JwtAuthenticationFilter jwtAuthenticationFilter,
@@ -85,14 +88,17 @@ public class SecurityConfig {
             CustomUserDetailsService customUserDetailsService,
             OAuth2SuccessHandler oAuth2SuccessHandler,
             ObjectMapper objectMapper,
+            PostUploadConcurrencyFilter postUploadConcurrencyFilter,
             @Value("${app.cors.allowed-origins:http://localhost:3000}") List<String> allowedOrigins,
             @Value("${springdoc.swagger-ui.enabled:true}") boolean swaggerUiEnabled,
-            @Value("${springdoc.api-docs.enabled:true}") boolean apiDocsEnabled) {
+            @Value("${springdoc.api-docs.enabled:true}") boolean apiDocsEnabled
+    ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.jwtTokenProvider = jwtTokenProvider;
         this.customUserDetailsService = customUserDetailsService;
         this.oAuth2SuccessHandler = oAuth2SuccessHandler;
         this.objectMapper = objectMapper;
+        this.postUploadConcurrencyFilter = postUploadConcurrencyFilter;
         this.allowedOrigins = allowedOrigins;
         this.swaggerUiEnabled = swaggerUiEnabled;
         this.apiDocsEnabled = apiDocsEnabled;
@@ -145,7 +151,8 @@ public class SecurityConfig {
                 .addFilterAfter(
                         new PrivateUploadStaticPathDenyFilter(jwtTokenProvider, customUserDetailsService),
                         JwtAuthenticationFilter.class)
-                .addFilterAfter(new ApiRequestLoggingFilter(), PrivateUploadStaticPathDenyFilter.class);
+                .addFilterAfter(new ApiRequestLoggingFilter(), PrivateUploadStaticPathDenyFilter.class)
+                .addFilterAfter(postUploadConcurrencyFilter, AuthorizationFilter.class);
 
         return http.build();
     }
