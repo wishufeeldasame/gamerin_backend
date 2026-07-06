@@ -3,6 +3,7 @@ package com.gamerin.backend.domain.post.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.awt.Color;
@@ -20,7 +21,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 class MediaUploadSecurityServiceTest {
 
-    private final MediaUploadSecurityService mediaUploadSecurityService = new MediaUploadSecurityService();
+    private final MediaUploadSecurityService mediaUploadSecurityService =
+            new MediaUploadSecurityService(new AnimatedGifProcessor());
 
     @Test
     void prepareImageCompressesPngToJpeg() throws Exception {
@@ -85,6 +87,68 @@ class MediaUploadSecurityServiceTest {
 
         assertThatThrownBy(() -> mediaUploadSecurityService.assertVideoFileSafe(file))
                 .isInstanceOf(ResponseStatusException.class);
+    }
+
+    @Test
+    void prepareImageDelegatesAnimatedGifWithoutFlatteningToJpeg() {
+        AnimatedGifProcessor gifProcessor = mock(AnimatedGifProcessor.class);
+        MediaUploadSecurityService service = new MediaUploadSecurityService(gifProcessor);
+        MockMultipartFile file = new MockMultipartFile(
+                "mediaFiles",
+                "animation.gif",
+                "image/gif",
+                "GIF89a".getBytes()
+        );
+        MediaStorageService.PreparedMediaFile expected =
+                new MediaStorageService.PreparedMediaFile("sanitized-gif".getBytes(), ".gif");
+        when(gifProcessor.prepare(file)).thenReturn(expected);
+
+        assertThat(service.prepareImage(file)).isSameAs(expected);
+        verify(gifProcessor).prepare(file);
+    }
+
+    @Test
+    void profileImageStillRejectsGif() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "animation.gif",
+                "image/gif",
+                "GIF89a".getBytes()
+        );
+
+        assertThatThrownBy(() -> mediaUploadSecurityService.prepareProfileAvatarImage(file))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Profile image must be JPEG or PNG");
+    }
+
+    @Test
+    void assertImageFileSafeDelegatesCompleteGifValidation() {
+        AnimatedGifProcessor gifProcessor = mock(AnimatedGifProcessor.class);
+        MediaUploadSecurityService service = new MediaUploadSecurityService(gifProcessor);
+        MockMultipartFile file = new MockMultipartFile(
+                "mediaFiles",
+                "animation.gif",
+                "image/gif",
+                "GIF89a".getBytes()
+        );
+
+        service.assertImageFileSafe(file);
+
+        verify(gifProcessor).validate(file);
+    }
+
+    @Test
+    void rejectsWebpBecauseItIsNotPartOfTheUploadPolicy() {
+        MockMultipartFile file = new MockMultipartFile(
+                "mediaFiles",
+                "image.webp",
+                "image/webp",
+                "RIFF-not-real-webp".getBytes()
+        );
+
+        assertThatThrownBy(() -> mediaUploadSecurityService.assertImageFileSafe(file))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("JPEG, PNG, or GIF");
     }
 
     private byte[] imageBytes(String format, int width, int height) throws IOException {

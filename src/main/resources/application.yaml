@@ -16,8 +16,8 @@ spring:
 
   servlet:
     multipart:
-      max-file-size: 500MB
-      max-request-size: 530MB
+      max-file-size: ${SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE:500MB}
+      max-request-size: ${SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE:530MB}
 
 server:
   port: 8080
@@ -28,10 +28,18 @@ app:
       - http://localhost:3000
   media:
     upload-dir: uploads
+    upload:
+      max-concurrency: ${APP_MEDIA_UPLOAD_MAX_CONCURRENCY:1}
+      acquire-timeout-ms: ${APP_MEDIA_UPLOAD_ACQUIRE_TIMEOUT_MS:5000}
     video:
+      max-file-size-bytes: ${APP_MEDIA_VIDEO_MAX_FILE_SIZE_BYTES:524288000}
+      temp-storage-reserve-bytes: ${APP_MEDIA_VIDEO_TEMP_STORAGE_RESERVE_BYTES:536870912}
       optimization:
         enabled: true
         ffmpeg-path: ffmpeg
+        max-concurrency: ${APP_MEDIA_VIDEO_OPTIMIZATION_MAX_CONCURRENCY:1}
+        acquire-timeout-ms: ${APP_MEDIA_VIDEO_OPTIMIZATION_ACQUIRE_TIMEOUT_MS:5000}
+        timeout-ms: ${APP_MEDIA_VIDEO_OPTIMIZATION_TIMEOUT_MS:60000}
   post:
     cleanup:
       hard-delete-after: 24h
@@ -51,5 +59,6 @@ openai:
     key: ${OPENAI_API_KEY:}
   moderation:
     enabled: true
+    ffmpeg-timeout-ms: ${OPENAI_MODERATION_FFMPEG_TIMEOUT_MS:15000}
     model: omni-moderation-latest
     ffmpeg-path: ffmpeg
