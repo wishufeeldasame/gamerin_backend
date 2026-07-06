@@ -1,5 +1,8 @@
 package com.gamerin.backend.domain.message.service;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -14,6 +17,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -35,10 +40,18 @@ import com.gamerin.backend.domain.message.repository.DirectMessageRepository;
 import com.gamerin.backend.domain.message.repository.MessageConversationRepository;
 import com.gamerin.backend.domain.message.repository.MessageParticipantRepository;
 import com.gamerin.backend.domain.post.entity.Post;
+import com.gamerin.backend.domain.post.moderation.ContentModerationService;
 import com.gamerin.backend.domain.post.repository.PostRepository;
+import com.gamerin.backend.domain.post.service.LightweightSecurityScanService;
+import com.gamerin.backend.domain.post.service.MediaStorageService;
+import com.gamerin.backend.domain.post.service.MediaUploadSecurityService;
+import com.gamerin.backend.domain.post.service.TextSecurityService;
+import com.gamerin.backend.domain.post.service.VideoMetadataService;
+import com.gamerin.backend.domain.post.service.VideoOptimizationService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.response.CursorPageResponse;
+import com.gamerin.backend.global.security.jwt.SseStreamTokenService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -53,6 +66,7 @@ public class MessageService {
     private static final int MAX_VIDEO_ATTACHMENT_COUNT = 1;
     private static final long MAX_IMAGE_ATTACHMENT_SIZE_BYTES = 20L * 1024L * 1024L;
     private static final long MAX_VIDEO_ATTACHMENT_SIZE_BYTES = 100L * 1024L * 1024L;
+    private static final double MAX_VIDEO_ATTACHMENT_DURATION_SECONDS = 120.0;
 
     private final UserRepository userRepository;
     private final PostRepository postRepository;
@@ -63,6 +77,13 @@ public class MessageService {
     private final MessageAttachmentStorageService messageAttachmentStorageService;
     private final MessageResponseAssembler messageResponseAssembler;
     private final MessageRealtimeService messageRealtimeService;
+    private final ContentModerationService contentModerationService;
+    private final MediaUploadSecurityService mediaUploadSecurityService;
+    private final LightweightSecurityScanService lightweightSecurityScanService;
+    private final TextSecurityService textSecurityService;
+    private final VideoMetadataService videoMetadataService;
+    private final VideoOptimizationService videoOptimizationService;
+    private final SseStreamTokenService sseStreamTokenService;
 
     public MessageService(
             UserRepository userRepository,
@@ -73,7 +94,14 @@ public class MessageService {
             DirectMessageAttachmentRepository directMessageAttachmentRepository,
             MessageAttachmentStorageService messageAttachmentStorageService,
             MessageResponseAssembler messageResponseAssembler,
-            MessageRealtimeService messageRealtimeService
+            MessageRealtimeService messageRealtimeService,
+            ContentModerationService contentModerationService,
+            MediaUploadSecurityService mediaUploadSecurityService,
+            LightweightSecurityScanService lightweightSecurityScanService,
+            TextSecurityService textSecurityService,
+            VideoMetadataService videoMetadataService,
+            VideoOptimizationService videoOptimizationService,
+            SseStreamTokenService sseStreamTokenService
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -84,6 +112,13 @@ public class MessageService {
         this.messageAttachmentStorageService = messageAttachmentStorageService;
         this.messageResponseAssembler = messageResponseAssembler;
         this.messageRealtimeService = messageRealtimeService;
+        this.contentModerationService = contentModerationService;
+        this.mediaUploadSecurityService = mediaUploadSecurityService;
+        this.lightweightSecurityScanService = lightweightSecurityScanService;
+        this.textSecurityService = textSecurityService;
+        this.videoMetadataService = videoMetadataService;
+        this.videoOptimizationService = videoOptimizationService;
+        this.sseStreamTokenService = sseStreamTokenService;
     }
 
     @Transactional(readOnly = true)
@@ -112,6 +147,12 @@ public class MessageService {
     public SseEmitter streamMessages(CustomUserPrincipal principal) {
         User viewer = getCurrentUser(principal);
         return messageRealtimeService.subscribe(viewer.getId());
+    }
+
+    @Transactional(readOnly = true)
+    public SseStreamTokenService.IssuedToken issueStreamToken(CustomUserPrincipal principal) {
+        User viewer = getCurrentUser(principal);
+        return sseStreamTokenService.issue(viewer.getId());
     }
 
     @Transactional(readOnly = true)
@@ -167,6 +208,7 @@ public class MessageService {
         if (content == null && sharedPost == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message content or shared post is required.");
         }
+        validateMessageContent(content);
 
         DirectMessage savedMessage = saveMessage(
                 conversation,
@@ -197,25 +239,27 @@ public class MessageService {
         if (content == null && sharedPost == null && attachments.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message content, shared post, or attachment is required.");
         }
-
-        DirectMessage savedMessage = saveMessage(
-                conversation,
-                viewer,
-                content != null ? content : "",
-                sharedPost
-        );
+        validateMultipartMessageContent(content, attachments);
+        List<PreparedMessageAttachment> preparedAttachments = prepareAttachments(attachments);
 
         List<MessageAttachmentStorageService.StoredFile> storedFiles = new ArrayList<>();
         try {
+            DirectMessage savedMessage = saveMessage(
+                    conversation,
+                    viewer,
+                    content != null ? content : "",
+                    sharedPost
+            );
+
             List<DirectMessageAttachment> messageAttachments = new ArrayList<>();
-            for (int index = 0; index < attachments.size(); index++) {
-                MultipartFile attachmentFile = attachments.get(index);
-                MessageAttachmentStorageService.StoredFile storedFile = messageAttachmentStorageService.store(attachmentFile);
+            for (int index = 0; index < preparedAttachments.size(); index++) {
+                PreparedMessageAttachment preparedAttachment = preparedAttachments.get(index);
+                MessageAttachmentStorageService.StoredFile storedFile = storePreparedAttachment(preparedAttachment);
                 storedFiles.add(storedFile);
                 messageAttachments.add(DirectMessageAttachment.create(
                         savedMessage,
-                        resolveAttachmentType(attachmentFile),
-                        attachmentFile.getOriginalFilename() != null ? attachmentFile.getOriginalFilename() : "attachment",
+                        preparedAttachment.type(),
+                        preparedAttachment.displayName(),
                         storedFile.publicUrl(),
                         index
                 ));
@@ -231,6 +275,8 @@ public class MessageService {
                 throw responseStatusException;
             }
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to upload message attachments.", ex);
+        } finally {
+            preparedAttachments.forEach(this::deleteTemporaryPreparedAttachment);
         }
     }
 
@@ -247,8 +293,26 @@ public class MessageService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the sender can delete this message.");
         }
 
+        deleteMessageAttachmentFilesAfterCommit(message);
         message.softDelete();
         publishMessageDeleted(message);
+    }
+
+    @Transactional(readOnly = true)
+    public MessageAttachmentFile getMessageAttachmentFile(CustomUserPrincipal principal, UUID attachmentId) {
+        User viewer = getCurrentUser(principal);
+        DirectMessageAttachment attachment = directMessageAttachmentRepository
+                .findAccessibleActiveById(attachmentId, viewer.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Message attachment not found."));
+
+        Path attachmentPath = messageAttachmentStorageService.resolvePublicUrl(attachment.getFileUrl())
+                .filter(Files::isRegularFile)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Message attachment file not found."));
+        return new MessageAttachmentFile(
+                attachmentPath,
+                attachment.getFileName(),
+                resolveAttachmentContentType(attachment)
+        );
     }
 
     public void leaveConversation(CustomUserPrincipal principal, UUID conversationId) {
@@ -293,6 +357,8 @@ public class MessageService {
         String content = normalizeContent(request.content());
         List<User> recipients = getShareRecipients(request, viewer.getId());
 
+        validateMessageContent(content);
+
         List<ConversationResponse> responses = new ArrayList<>();
         for (User recipient : recipients) {
             MessageConversation conversation = getOrCreateDirectConversation(viewer, recipient);
@@ -311,14 +377,12 @@ public class MessageService {
         }
 
         String directKey = buildDirectKey(viewer.getId(), recipient.getId());
-        return messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(directKey)
-                .orElseGet(() -> {
-                    MessageConversation conversation =
-                            messageConversationRepository.save(MessageConversation.createDirect(directKey));
-                    messageParticipantRepository.save(MessageParticipant.create(conversation, viewer));
-                    messageParticipantRepository.save(MessageParticipant.create(conversation, recipient));
-                    return conversation;
-                });
+        messageConversationRepository.insertDirectConversationIfAbsent(directKey);
+        MessageConversation conversation = messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(directKey)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Direct conversation is not available."));
+        messageParticipantRepository.insertParticipantIfAbsent(conversation.getId(), viewer.getId());
+        messageParticipantRepository.insertParticipantIfAbsent(conversation.getId(), recipient.getId());
+        return conversation;
     }
 
     private MessageParticipant getOrCreateParticipant(MessageConversation conversation, User user) {
@@ -356,6 +420,15 @@ public class MessageService {
                 participant.reactivateForIncomingMessage();
             }
         }
+    }
+
+    private void deleteMessageAttachmentFilesAfterCommit(DirectMessage message) {
+        List<DirectMessageAttachment> attachments = directMessageAttachmentRepository.findByMessageIds(List.of(message.getId()));
+        runAfterCommit(() -> {
+            for (DirectMessageAttachment attachment : attachments) {
+                messageAttachmentStorageService.deletePublicUrlQuietly(attachment.getFileUrl());
+            }
+        });
     }
 
     private ConversationResponse toConversationResponse(
@@ -477,7 +550,7 @@ public class MessageService {
         List<MessageParticipant> participants =
                 messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(message.getConversation().getId());
         for (MessageParticipant participant : participants) {
-            messageRealtimeService.publish(
+            publishAfterCommit(
                     participant.getUser().getId(),
                     MessageRealtimeEvent.deleted(message.getConversation().getId(), message.getId())
             );
@@ -496,11 +569,29 @@ public class MessageService {
                     attachmentMap.getOrDefault(message.getId(), List.of()),
                     participants
             );
-            messageRealtimeService.publish(
+            publishAfterCommit(
                     viewerId,
                     MessageRealtimeEvent.created(message.getConversation().getId(), response)
             );
         }
+    }
+
+    private void publishAfterCommit(UUID userId, MessageRealtimeEvent event) {
+        runAfterCommit(() -> messageRealtimeService.publish(userId, event));
+    }
+
+    private void runAfterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     private Map<UUID, List<DirectMessageAttachment>> buildAttachmentMap(List<DirectMessage> messages) {
@@ -694,11 +785,14 @@ public class MessageService {
                 if (attachment.getSize() > MAX_IMAGE_ATTACHMENT_SIZE_BYTES) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Image attachment must be 20MB or smaller.");
                 }
+                mediaUploadSecurityService.assertImageFileSafe(attachment);
+                lightweightSecurityScanService.assertFileClean(attachment);
             } else {
                 videoCount++;
                 if (attachment.getSize() > MAX_VIDEO_ATTACHMENT_SIZE_BYTES) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video attachment must be 100MB or smaller.");
                 }
+                validateVideoAttachment(attachment);
             }
         }
 
@@ -711,6 +805,84 @@ public class MessageService {
         if (videoCount > MAX_VIDEO_ATTACHMENT_COUNT) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "You can attach only one video.");
         }
+    }
+
+    private void validateVideoAttachment(MultipartFile videoFile) {
+        mediaUploadSecurityService.assertVideoFileSafe(videoFile);
+        lightweightSecurityScanService.assertFileClean(videoFile);
+
+        double videoLengthSeconds = videoMetadataService.readDurationSeconds(videoFile);
+        if (videoLengthSeconds > MAX_VIDEO_ATTACHMENT_DURATION_SECONDS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video attachment duration must be 2 minutes or shorter.");
+        }
+    }
+
+    private void validateMessageContent(String content) {
+        textSecurityService.assertTextSafe(content);
+        contentModerationService.assertTextAllowed(content);
+    }
+
+    private void validateMultipartMessageContent(String content, List<MultipartFile> attachments) {
+        textSecurityService.assertTextSafe(content);
+        contentModerationService.assertMessageAllowed(content, attachments);
+    }
+
+    private List<PreparedMessageAttachment> prepareAttachments(List<MultipartFile> attachments) {
+        if (attachments.isEmpty()) {
+            return List.of();
+        }
+
+        return attachments.stream()
+                .map(this::prepareAttachment)
+                .toList();
+    }
+
+    private PreparedMessageAttachment prepareAttachment(MultipartFile attachment) {
+        MessageAttachmentType type = resolveAttachmentType(attachment);
+        String displayName = attachment.getOriginalFilename() != null ? attachment.getOriginalFilename() : "attachment";
+        if (type == MessageAttachmentType.IMAGE) {
+            return PreparedMessageAttachment.image(
+                    displayName,
+                    mediaUploadSecurityService.prepareImage(attachment)
+            );
+        }
+        return PreparedMessageAttachment.video(
+                displayName,
+                videoOptimizationService.prepareVideo(attachment)
+        );
+    }
+
+    private MessageAttachmentStorageService.StoredFile storePreparedAttachment(
+            PreparedMessageAttachment preparedAttachment
+    ) throws IOException {
+        if (preparedAttachment.type() == MessageAttachmentType.IMAGE) {
+            return messageAttachmentStorageService.store(preparedAttachment.imageFile());
+        }
+        return messageAttachmentStorageService.store(preparedAttachment.videoFile());
+    }
+
+    private void deleteTemporaryPreparedAttachment(PreparedMessageAttachment preparedAttachment) {
+        if (preparedAttachment.type() == MessageAttachmentType.VIDEO) {
+            messageAttachmentStorageService.deleteQuietly(preparedAttachment.videoFile());
+        }
+    }
+
+    private String resolveAttachmentContentType(DirectMessageAttachment attachment) {
+        if (attachment.getAttachmentType() == MessageAttachmentType.IMAGE) {
+            return "image/jpeg";
+        }
+
+        String fileUrl = attachment.getFileUrl() != null ? attachment.getFileUrl().toLowerCase(Locale.ROOT) : "";
+        if (fileUrl.endsWith(".mov")) {
+            return "video/quicktime";
+        }
+        if (fileUrl.endsWith(".m4v")) {
+            return "video/x-m4v";
+        }
+        if (fileUrl.endsWith(".webm")) {
+            return "video/webm";
+        }
+        return "video/mp4";
     }
 
     private MessageAttachmentType resolveAttachmentType(MultipartFile file) {
@@ -739,5 +911,30 @@ public class MessageService {
         }
 
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported message attachment file type.");
+    }
+
+    private record PreparedMessageAttachment(
+            MessageAttachmentType type,
+            String displayName,
+            MediaStorageService.PreparedMediaFile imageFile,
+            MediaStorageService.PreparedMediaPath videoFile
+    ) {
+
+        private static PreparedMessageAttachment image(
+                String displayName,
+                MediaStorageService.PreparedMediaFile imageFile
+        ) {
+            return new PreparedMessageAttachment(MessageAttachmentType.IMAGE, displayName, imageFile, null);
+        }
+
+        private static PreparedMessageAttachment video(
+                String displayName,
+                MediaStorageService.PreparedMediaPath videoFile
+        ) {
+            return new PreparedMessageAttachment(MessageAttachmentType.VIDEO, displayName, null, videoFile);
+        }
+    }
+
+    public record MessageAttachmentFile(Path path, String fileName, String contentType) {
     }
 }

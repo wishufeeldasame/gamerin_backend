@@ -5,6 +5,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -32,4 +33,18 @@ public interface MessageParticipantRepository extends JpaRepository<MessageParti
         order by mp.conversation.updatedAt desc, mp.conversation.id desc
         """)
     List<MessageParticipant> findActiveByUserIdWithConversation(@Param("userId") UUID userId);
+
+    @Modifying
+    @Query(
+            value = """
+                insert into message_participants (conversation_id, user_id)
+                values (:conversationId, :userId)
+                on conflict (conversation_id, user_id) do nothing
+                """,
+            nativeQuery = true
+    )
+    int insertParticipantIfAbsent(
+            @Param("conversationId") UUID conversationId,
+            @Param("userId") UUID userId
+    );
 }

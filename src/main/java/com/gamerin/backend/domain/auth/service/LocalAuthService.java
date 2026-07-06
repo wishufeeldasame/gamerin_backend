@@ -38,6 +38,7 @@ public class LocalAuthService {
     private final TokenService tokenService;
     private final PasswordResetMailService passwordResetMailService;
     private final long passwordResetExpirationMinutes;
+    private final LoginFailureTracker loginFailureTracker = new LoginFailureTracker();
 
     public LocalAuthService(
             UserRepository userRepository,
@@ -119,16 +120,29 @@ public class LocalAuthService {
 
     public TokenService.AuthResult login(LoginRequest request) {
         String handle = normalizeHandle(request.handle());
+        
+        loginFailureTracker.checkLockout(handle);
+
         User user = userRepository.findByHandle(handle)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "아이디 또는 비밀번호가 올바르지 않습니다."));
+                .orElseThrow(() -> {
+                    loginFailureTracker.recordFailure(handle);
+                    int remaining = loginFailureTracker.getRemainingAttempts(handle);
+                    return new ResponseStatusException(HttpStatus.UNAUTHORIZED, 
+                            "아이디 또는 비밀번호가 올바르지 않습니다. (5회 연속 실패 시 잠금, 남은 횟수: " + remaining + "회)");
+                });
 
         if (user.getStatus() != UserStatus.ACTIVE) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "활성 상태 계정이 아닙니다.");
         }
 
         if (user.getPasswordHash() == null || !passwordEncoder.matches(request.password(), user.getPasswordHash())) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "아이디 또는 비밀번호가 올바르지 않습니다.");
+            loginFailureTracker.recordFailure(handle);
+            int remaining = loginFailureTracker.getRemainingAttempts(handle);
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, 
+                    "아이디 또는 비밀번호가 올바르지 않습니다. (5회 연속 실패 시 잠금, 남은 횟수: " + remaining + "회)");
         }
+
+        loginFailureTracker.resetFailures(handle);
 
         user.updateLastLoginAt();
         return tokenService.issueTokens(user);
@@ -258,5 +272,58 @@ public class LocalAuthService {
     private String maskHandle(String handle) {
         if (handle == null || handle.length() <= 3) return handle;
         return handle.substring(0, 3) + "*".repeat(handle.length() - 3);
+    }
+
+    private static class LoginFailureTracker {
+        private static final int MAX_ATTEMPTS = 5;
+        private static final int LOCKOUT_DURATION_MINUTES = 15;
+
+        private static class FailureInfo {
+            int count;
+            java.time.Instant lockoutUntil;
+
+            FailureInfo() {
+                this.count = 0;
+                this.lockoutUntil = null;
+            }
+        }
+
+        private final java.util.concurrent.ConcurrentHashMap<String, FailureInfo> failureMap = 
+                new java.util.concurrent.ConcurrentHashMap<>();
+
+        public void checkLockout(String handle) {
+            FailureInfo info = failureMap.get(handle);
+            if (info != null && info.lockoutUntil != null) {
+                if (info.lockoutUntil.isAfter(java.time.Instant.now())) {
+                    long minutesLeft = java.time.Duration.between(java.time.Instant.now(), info.lockoutUntil).toMinutes() + 1;
+                    throw new org.springframework.web.server.ResponseStatusException(
+                            org.springframework.http.HttpStatus.FORBIDDEN,
+                            "반복된 로그인 실패로 계정이 임시 잠금되었습니다. " + minutesLeft + "분 후 다시 시도해 주세요."
+                    );
+                } else {
+                    failureMap.remove(handle);
+                }
+            }
+        }
+
+        public void recordFailure(String handle) {
+            FailureInfo info = failureMap.computeIfAbsent(handle, k -> new FailureInfo());
+            info.count++;
+            if (info.count >= MAX_ATTEMPTS) {
+                info.lockoutUntil = java.time.Instant.now().plusSeconds(LOCKOUT_DURATION_MINUTES * 60L);
+            }
+        }
+
+        public int getRemainingAttempts(String handle) {
+            FailureInfo info = failureMap.get(handle);
+            if (info == null) {
+                return MAX_ATTEMPTS;
+            }
+            return Math.max(0, MAX_ATTEMPTS - info.count);
+        }
+
+        public void resetFailures(String handle) {
+            failureMap.remove(handle);
+        }
     }
 }

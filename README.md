@@ -203,3 +203,42 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 검증: `git diff --check`, `./gradlew compileJava`, `./gradlew test` 통과
 
   > 요약 : 메시지 API 응답에 수신자 프로필 이미지 URL을 포함해 프로필 사진 변경이 메시지 화면에도 반영되도록 정리
+
+- **26/06/18** 서장호
+
+  > production profile에서 `springdoc.api-docs.enabled=false`, `springdoc.swagger-ui.enabled=false`를 적용해 Swagger/OpenAPI 문서가 운영 환경에서 노출되지 않도록 변경
+  > `SecurityConfig`에서 Swagger UI, OpenAPI docs 경로를 springdoc 활성화 설정에 따라 공개/차단하도록 분리
+  > Swagger/OpenAPI 차단 경로와 일반 보호 경로가 Google OAuth 로그인으로 자동 리다이렉트되지 않도록 인증 실패 응답 흐름 보강
+  > `/api/**` 인증 실패는 기존처럼 JSON `401` 응답을 유지하고, `/oauth2/authorization/google` 직접 접근은 Google OAuth 시작 경로로 유지
+  > Swagger/OpenAPI 차단, OAuth 자동 리다이렉트 방지, API JSON 401 응답 계약을 검증하는 `SecurityConfig` 테스트 추가
+  > 검증: `./gradlew test --tests 'com.gamerin.backend.global.security.config.*'`, `./gradlew test` 통과
+
+  > 요약 : 운영 환경 Swagger/OpenAPI 공개를 차단하고, 보호 경로의 의도치 않은 Google OAuth 자동 진입을 방지
+
+- **26/06/18** 서장호
+
+  > DM 첨부 파일이 원본 `MultipartFile` 그대로 `/uploads/message-attachments/**`에 저장되지 않도록 변경
+  > DM 텍스트에는 게시글/댓글과 동일하게 `TextSecurityService`와 `ContentModerationService` 검열 흐름 적용
+  > DM 이미지 첨부는 게시글 이미지 업로드처럼 JPEG/PNG 검증, magic header 검사, 경량 파일 스캔, OpenAI moderation, JPEG 재인코딩 후 `.jpg`로 저장
+  > DM 비디오 첨부는 게시글 비디오 업로드처럼 MP4 계열 검증, 경량 파일 스캔, 2분 duration 제한, frame moderation, FFmpeg 준비 후 서버 결정 확장자로 저장
+  > `.html`, `.svg`, 조작된 `Content-Type: image/*` 파일이 공개 정적 파일로 저장되지 않도록 회귀 테스트 추가
+  > `/uploads/message-attachments/**` 직접 정적 접근을 차단하고, DM 첨부는 `GET /api/v1/messages/attachments/{attachmentId}` 인증 API에서 대화 참여자만 내려받도록 변경
+  > DM 메시지 삭제 시 연결된 첨부 파일을 즉시 best-effort 삭제해 기존 첨부 URL/API 접근이 남지 않도록 정리
+  > 검증: `./gradlew test --tests 'com.gamerin.backend.domain.message.service.MessageServiceTest' --tests 'com.gamerin.backend.domain.post.service.MediaUploadSecurityServiceTest' --tests 'com.gamerin.backend.domain.post.moderation.ContentModerationServiceTest'`, `./gradlew test --tests 'com.gamerin.backend.domain.message.service.MessageServiceTest' --tests 'com.gamerin.backend.global.security.config.SecurityConfigTest' --tests 'com.gamerin.backend.global.security.config.SecurityConfigOAuthEntryPointIntegrationTest'` 통과
+
+  > 요약 : DM 첨부 저장 전 보안 검사와 검열을 게시글/댓글 흐름에 맞춰 적용하고, DM 첨부 파일은 인증된 참여자만 접근할 수 있도록 정리
+
+- **26/06/24** Codex
+
+  > `fix/deployement_risks` 브랜치를 기준으로 두고 `origin/fix/messags`의 메시지 변경 중 필요한 부분만 선별 이식
+  > `POST /api/v1/messages/stream-token` API와 `SseStreamTokenService`를 추가하여 메시지 SSE 연결용 짧은 수명 HttpOnly 쿠키를 발급하도록 변경
+  > `/api/v1/messages/stream?accessToken=...` 쿼리 토큰 인증을 제거하고, SSE 스트림은 Bearer 토큰 또는 발급된 스트림 쿠키로만 인증하도록 `JwtAuthenticationFilter` 수정
+  > 쿼리 문자열 토큰은 브라우저 히스토리, 프록시/서버 로그, referer 등에 남을 수 있어 SSE 연결 인증 전용 쿠키로 분리
+  > 1:1 DM 대화방 및 참여자 생성은 `insert ... on conflict do nothing` 기반으로 변경하여 동시 요청 시 중복 생성/unique 충돌 위험을 줄임
+  > DM 생성/삭제 실시간 이벤트 publish와 삭제 메시지의 첨부 파일 정리를 트랜잭션 commit 이후로 지연하여 롤백된 메시지가 전파되거나 커밋 전 파일이 삭제되는 문제를 방지
+  > DM 첨부 다운로드 조회 쿼리에서 메시지/대화방 삭제 여부와 요청자의 활성 참여자 여부를 함께 확인하도록 강화
+  > 공유된 게시글이 삭제된 경우 메시지 응답에 원본 내용을 노출하지 않고 `삭제된 게시글` placeholder를 내려주도록 변경
+  > `origin/fix/messags`의 오래된 `SecurityConfig`, `MediaResourceConfig`, 첨부 저장 로직은 가져오지 않음. 이유는 현재 브랜치의 Rate Limit, 운영 Swagger 차단, OAuth URL 토큰 제거, 프로필 이미지/DM 첨부 보안 검증 흐름을 되돌릴 수 있기 때문
+  > 검증: `./gradlew test --tests com.gamerin.backend.domain.message.service.MessageServiceTest --tests com.gamerin.backend.domain.message.controller.MessageControllerTest --tests com.gamerin.backend.global.security.jwt.JwtAuthenticationFilterTest`, `./gradlew test` 통과
+
+  > 요약 : 배포 리스크 보안 변경을 유지하면서 메시지 SSE 인증, 대화방 생성 동시성, 실시간 이벤트/첨부 삭제 트랜잭션 정합성을 보강

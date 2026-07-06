@@ -17,9 +17,13 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -31,11 +35,18 @@ class JwtAuthenticationFilterTest {
     @Mock
     private CustomUserDetailsService customUserDetailsService;
 
+    @Mock
+    private SseStreamTokenService sseStreamTokenService;
+
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @BeforeEach
     void setUp() {
-        jwtAuthenticationFilter = new JwtAuthenticationFilter(jwtTokenProvider, customUserDetailsService);
+        jwtAuthenticationFilter = new JwtAuthenticationFilter(
+                jwtTokenProvider,
+                customUserDetailsService,
+                sseStreamTokenService
+        );
     }
 
     @AfterEach
@@ -58,6 +69,35 @@ class JwtAuthenticationFilterTest {
 
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isInstanceOf(UsernamePasswordAuthenticationToken.class);
         assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal()).isEqualTo(principal);
+    }
+
+    @Test
+    void authenticatesMessageStreamWithSseCookieToken() throws Exception {
+        UUID userId = UUID.randomUUID();
+        CustomUserPrincipal principal = principal(userId, "tester", "Tester");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/messages/stream");
+
+        when(sseStreamTokenService.resolve(request)).thenReturn(Optional.of(userId));
+        when(customUserDetailsService.loadById(userId)).thenReturn(principal);
+
+        jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isInstanceOf(UsernamePasswordAuthenticationToken.class);
+        assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal()).isEqualTo(principal);
+        verifyNoInteractions(jwtTokenProvider);
+    }
+
+    @Test
+    void ignoresMessageStreamAccessTokenQueryParameter() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/messages/stream");
+        request.setParameter("accessToken", "query-token");
+
+        when(sseStreamTokenService.resolve(request)).thenReturn(Optional.empty());
+
+        jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        verify(jwtTokenProvider, never()).validate("query-token");
     }
 
     @Test
