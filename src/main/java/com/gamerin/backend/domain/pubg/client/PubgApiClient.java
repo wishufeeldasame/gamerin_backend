@@ -137,6 +137,10 @@ public class PubgApiClient {
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to load PUBG normal stats.");
             }
 
+            if (response.data().attributes() == null || response.data().attributes().gameModeStats() == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No normal stats found.");
+            }
+
             NormalGameModeStats modeStats = response.data()
                     .attributes()
                     .gameModeStats()
@@ -173,6 +177,15 @@ public class PubgApiClient {
         }
 
         Integer kills = modeStats.kills();
+        Integer deaths = modeStats.deaths();
+
+        if (kills != null && deaths != null) {
+            if (deaths == 0) {
+                return kills.doubleValue();
+            }
+            return kills.doubleValue() / deaths;
+        }
+
         Integer losses = modeStats.losses();
 
         if (kills != null && losses != null) {

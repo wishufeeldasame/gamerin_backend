@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.pubg.service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.pubg.client.PubgApiClient;
@@ -123,6 +125,12 @@ public class PubgService {
         return tier + " " + subTier;
     }
 
+    private double truncate2(double value) {
+        return BigDecimal.valueOf(value)
+                .setScale(2, RoundingMode.DOWN)
+                .doubleValue();
+    }
+
     private PubgSummaryResponse toRankedSummary(RankedStats stats) {
         int games = stats.roundsPlayed();
         int wins = stats.wins();
@@ -131,7 +139,7 @@ public class PubgService {
         return new PubgSummaryResponse(
                 GAME_NAME,
                 toTierLabel(stats.currentTier(), stats.currentSubTier()),
-                stats.kda(),
+                truncate2(stats.kda()),
                 winRate,
                 games,
                 true
@@ -146,7 +154,7 @@ public class PubgService {
         return new PubgSummaryResponse(
                 GAME_NAME,
                 null,
-                stats.kda(),
+                truncate2(stats.kda()),
                 winRate,
                 games,
                 true

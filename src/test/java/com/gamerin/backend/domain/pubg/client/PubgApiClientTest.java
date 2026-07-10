@@ -102,11 +102,30 @@ class PubgApiClientTest {
     }
 
     @Test
+    void hasRankedRecordReturnsTrueWhenRoundsPlayedExists() {
+        RankedGameModeStats stats = new RankedGameModeStats(
+                1,
+                0,
+                0.0,
+                0.0,
+                null,
+                0,
+                0,
+                0
+        );
+
+        Boolean hasRankedRecord = ReflectionTestUtils.invokeMethod(pubgApiClient, "hasRankedRecord", stats);
+
+        assertThat(hasRankedRecord).isTrue();
+    }
+
+    @Test
     void resolveNormalKdaUsesPositiveApiKdaWhenAvailable() {
         NormalGameModeStats stats = new NormalGameModeStats(
                 10,
                 2,
                 1.25,
+                null,
                 null,
                 null
         );
@@ -123,6 +142,23 @@ class PubgApiClientTest {
                 2,
                 0.0,
                 18,
+                6,
+                9
+        );
+
+        Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveNormalKda", stats);
+
+        assertThat(kda).isEqualTo(3.0);
+    }
+
+    @Test
+    void resolveNormalKdaFallsBackToLossesWhenDeathsAreMissing() {
+        NormalGameModeStats stats = new NormalGameModeStats(
+                10,
+                2,
+                0.0,
+                18,
+                null,
                 9
         );
 
@@ -132,11 +168,12 @@ class PubgApiClientTest {
     }
 
     @Test
-    void resolveNormalKdaPreservesZeroWhenNoKillLossFieldsExist() {
+    void resolveNormalKdaPreservesZeroWhenNoKillDeathOrLossFieldsExist() {
         NormalGameModeStats stats = new NormalGameModeStats(
                 10,
                 2,
                 0.0,
+                null,
                 null,
                 null
         );
