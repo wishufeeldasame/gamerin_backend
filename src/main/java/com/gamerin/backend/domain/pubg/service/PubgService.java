@@ -22,7 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class PubgService {
 
     private static final String GAME_NAME = "PUBG";
-    private static final String RANKED_MODE = "squad-tpp";
+    private static final String RANKED_MODE = "squad";
     private static final String NORMAL_MODE = "squad";
 
     private final UserRepository userRepository;
@@ -123,10 +123,6 @@ public class PubgService {
         return tier + " " + subTier;
     }
 
-    private double round1(double value) {
-        return Math.round(value * 10.0) / 10.0;
-    }
-
     private PubgSummaryResponse toRankedSummary(RankedStats stats) {
         int games = stats.roundsPlayed();
         int wins = stats.wins();
@@ -135,7 +131,7 @@ public class PubgService {
         return new PubgSummaryResponse(
                 GAME_NAME,
                 toTierLabel(stats.currentTier(), stats.currentSubTier()),
-                round1(stats.kda()),
+                stats.kda(),
                 winRate,
                 games,
                 true
@@ -150,7 +146,7 @@ public class PubgService {
         return new PubgSummaryResponse(
                 GAME_NAME,
                 null,
-                round1(stats.kda()),
+                stats.kda(),
                 winRate,
                 games,
                 true
