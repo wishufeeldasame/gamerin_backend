@@ -80,12 +80,90 @@ class UserServiceTest {
 
         when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(profileUser));
         when(followRepository.existsByFollowerIdAndFolloweeId(viewerId, profileUserId)).thenReturn(true);
+        when(followRepository.existsByFollowerIdAndFolloweeId(profileUserId, viewerId)).thenReturn(false);
 
         var response = userService.getProfile(viewerId, "target");
 
         assertThat(response.id()).isEqualTo(profileUserId);
         assertThat(response.handle()).isEqualTo("target");
         assertThat(response.isFollowing()).isTrue();
+        assertThat(response.followsViewer()).isFalse();
+    }
+
+    @Test
+    void getProfileReturnsFollowsViewerStateWhenProfileUserFollowsViewer() {
+        UUID viewerId = UUID.randomUUID();
+        UUID profileUserId = UUID.randomUUID();
+        User profileUser = savedUser(profileUserId, "target", "Target");
+
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(profileUser));
+        when(followRepository.existsByFollowerIdAndFolloweeId(viewerId, profileUserId)).thenReturn(false);
+        when(followRepository.existsByFollowerIdAndFolloweeId(profileUserId, viewerId)).thenReturn(true);
+
+        var response = userService.getProfile(viewerId, "target");
+
+        assertThat(response.isFollowing()).isFalse();
+        assertThat(response.followsViewer()).isTrue();
+    }
+
+    @Test
+    void getProfileReturnsBothFollowingStatesForMutualFollow() {
+        UUID viewerId = UUID.randomUUID();
+        UUID profileUserId = UUID.randomUUID();
+        User profileUser = savedUser(profileUserId, "target", "Target");
+
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(profileUser));
+        when(followRepository.existsByFollowerIdAndFolloweeId(viewerId, profileUserId)).thenReturn(true);
+        when(followRepository.existsByFollowerIdAndFolloweeId(profileUserId, viewerId)).thenReturn(true);
+
+        var response = userService.getProfile(viewerId, "target");
+
+        assertThat(response.isFollowing()).isTrue();
+        assertThat(response.followsViewer()).isTrue();
+    }
+
+    @Test
+    void getProfileReturnsNoFollowingStatesWhenUsersDoNotFollowEachOther() {
+        UUID viewerId = UUID.randomUUID();
+        UUID profileUserId = UUID.randomUUID();
+        User profileUser = savedUser(profileUserId, "target", "Target");
+
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(profileUser));
+        when(followRepository.existsByFollowerIdAndFolloweeId(viewerId, profileUserId)).thenReturn(false);
+        when(followRepository.existsByFollowerIdAndFolloweeId(profileUserId, viewerId)).thenReturn(false);
+
+        var response = userService.getProfile(viewerId, "target");
+
+        assertThat(response.isFollowing()).isFalse();
+        assertThat(response.followsViewer()).isFalse();
+    }
+
+    @Test
+    void getProfileDoesNotCalculateFollowingStatesForSelf() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "me", "Me");
+
+        when(userRepository.findByHandleAndDeletedAtIsNull("me")).thenReturn(Optional.of(user));
+
+        var response = userService.getProfile(userId, "me");
+
+        assertThat(response.isFollowing()).isFalse();
+        assertThat(response.followsViewer()).isFalse();
+        verify(followRepository, never()).existsByFollowerIdAndFolloweeId(any(), any());
+    }
+
+    @Test
+    void getProfileDoesNotCalculateFollowingStatesWithoutViewer() {
+        UUID profileUserId = UUID.randomUUID();
+        User profileUser = savedUser(profileUserId, "target", "Target");
+
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(profileUser));
+
+        var response = userService.getProfile(null, "target");
+
+        assertThat(response.isFollowing()).isFalse();
+        assertThat(response.followsViewer()).isFalse();
+        verify(followRepository, never()).existsByFollowerIdAndFolloweeId(any(), any());
     }
 
     @Test
@@ -99,6 +177,7 @@ class UserServiceTest {
 
         assertThat(response.id()).isEqualTo(userId);
         assertThat(response.isFollowing()).isFalse();
+        assertThat(response.followsViewer()).isFalse();
         verify(followRepository, never()).existsByFollowerIdAndFolloweeId(userId, userId);
     }
 
