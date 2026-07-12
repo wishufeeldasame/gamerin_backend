@@ -6,6 +6,7 @@ import com.gamerin.backend.domain.pubg.dto.external.PubgRankedStatsResponse;
 import com.gamerin.backend.domain.pubg.dto.external.PubgSeasonListResponse;
 import com.gamerin.backend.domain.pubg.dto.external.NormalGameModeStats;
 import com.gamerin.backend.domain.pubg.dto.external.RankedGameModeStats;
+import com.gamerin.backend.domain.pubg.dto.external.TierInfo;
 import com.gamerin.backend.domain.pubg.model.NormalStats;
 import com.gamerin.backend.domain.pubg.model.RankedStats;
 import org.springframework.beans.factory.annotation.Value;
@@ -93,21 +94,26 @@ public class PubgApiClient {
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to load PUBG ranked stats.");
             }
 
+            if (response.data().attributes() == null || response.data().attributes().rankedGameModeStats() == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No ranked stats found.");
+            }
+
             RankedGameModeStats modeStats = response.data()
                     .attributes()
                     .rankedGameModeStats()
                     .get(mode);
 
-            if (modeStats == null) {
+            if (modeStats == null || !hasRankedRecord(modeStats)) {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No ranked stats found for the selected mode.");
             }
 
+            TierInfo tier = modeStats.currentTier();
             return new RankedStats(
-                    modeStats.kda(),
-                    modeStats.roundsPlayed(),
-                    modeStats.wins(),
-                    modeStats.currentTier().tier(),
-                    modeStats.currentTier().subTier()
+                    resolveRankedKda(modeStats),
+                    nullSafe(modeStats.roundsPlayed()),
+                    nullSafe(modeStats.wins()),
+                    tier == null ? null : tier.tier(),
+                    tier == null ? null : tier.subTier()
             );
         } catch (HttpClientErrorException.NotFound e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "PUBG ranked season record not found.");
@@ -129,6 +135,10 @@ public class PubgApiClient {
 
             if (response == null || response.data() == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to load PUBG normal stats.");
+            }
+
+            if (response.data().attributes() == null || response.data().attributes().gameModeStats() == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No normal stats found.");
             }
 
             NormalGameModeStats modeStats = response.data()
@@ -161,22 +171,55 @@ public class PubgApiClient {
     }
 
     private double resolveNormalKda(NormalGameModeStats modeStats) {
-        if (modeStats.kda() != null) {
-            return modeStats.kda();
+        Double apiKda = modeStats.kda();
+        if (apiKda != null && apiKda > 0.0) {
+            return apiKda;
         }
 
         Integer kills = modeStats.kills();
+        Integer deaths = modeStats.deaths();
+
+        if (kills != null && deaths != null) {
+            if (deaths == 0) {
+                return kills.doubleValue();
+            }
+            return kills.doubleValue() / deaths;
+        }
+
         Integer losses = modeStats.losses();
 
-        if (kills == null || losses == null) {
-            return 0.0;
+        if (kills != null && losses != null) {
+            if (losses == 0) {
+                return kills.doubleValue();
+            }
+            return kills.doubleValue() / losses;
         }
 
-        if (losses == 0) {
-            return kills.doubleValue();
+        return apiKda == null ? 0.0 : apiKda;
+    }
+
+    private double resolveRankedKda(RankedGameModeStats modeStats) {
+        Double apiKdr = modeStats.kdr();
+        if (apiKdr != null && apiKdr > 0.0) {
+            return apiKdr;
         }
 
-        return kills.doubleValue() / losses;
+        Integer kills = modeStats.kills();
+        Integer deaths = modeStats.deaths();
+
+        if (kills != null && deaths != null) {
+            if (deaths == 0) {
+                return kills.doubleValue();
+            }
+            return kills.doubleValue() / deaths;
+        }
+
+        Double apiKda = modeStats.kda();
+        return apiKda == null ? 0.0 : apiKda;
+    }
+
+    private boolean hasRankedRecord(RankedGameModeStats modeStats) {
+        return nullSafe(modeStats.roundsPlayed()) > 0;
     }
 
     private int nullSafe(Integer value) {

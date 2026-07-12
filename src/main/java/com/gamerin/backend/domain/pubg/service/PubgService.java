@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.pubg.service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.pubg.client.PubgApiClient;
@@ -22,7 +24,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class PubgService {
 
     private static final String GAME_NAME = "PUBG";
-    private static final String RANKED_MODE = "squad-tpp";
+    private static final String RANKED_MODE = "squad";
     private static final String NORMAL_MODE = "squad";
 
     private final UserRepository userRepository;
@@ -123,8 +125,10 @@ public class PubgService {
         return tier + " " + subTier;
     }
 
-    private double round1(double value) {
-        return Math.round(value * 10.0) / 10.0;
+    private double truncate2(double value) {
+        return BigDecimal.valueOf(value)
+                .setScale(2, RoundingMode.DOWN)
+                .doubleValue();
     }
 
     private PubgSummaryResponse toRankedSummary(RankedStats stats) {
@@ -135,7 +139,7 @@ public class PubgService {
         return new PubgSummaryResponse(
                 GAME_NAME,
                 toTierLabel(stats.currentTier(), stats.currentSubTier()),
-                round1(stats.kda()),
+                truncate2(stats.kda()),
                 winRate,
                 games,
                 true
@@ -150,7 +154,7 @@ public class PubgService {
         return new PubgSummaryResponse(
                 GAME_NAME,
                 null,
-                round1(stats.kda()),
+                truncate2(stats.kda()),
                 winRate,
                 games,
                 true
