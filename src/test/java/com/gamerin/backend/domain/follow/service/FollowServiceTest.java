@@ -182,6 +182,30 @@ class FollowServiceTest {
         assertThat(secondPage.nextCursor()).isNull();
     }
 
+    @Test
+    void getFollowingClampsFrontendRequestedPageSizeToMaximum() {
+        UUID viewerId = UUID.randomUUID();
+        UUID targetId = UUID.randomUUID();
+        User viewer = savedUser(viewerId, "viewer", "Viewer");
+        User target = savedUser(targetId, "target", "Target");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewerId)).thenReturn(Optional.of(viewer));
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(target));
+        when(followRepository.findFollowingPageIds(targetId, 51)).thenReturn(List.of());
+
+        var response = followService.getFollowing(
+                CustomUserPrincipal.from(viewer),
+                "target",
+                null,
+                100
+        );
+
+        assertThat(response.items()).isEmpty();
+        assertThat(response.hasNext()).isFalse();
+        assertThat(response.nextCursor()).isNull();
+        verify(followRepository).findFollowingPageIds(targetId, 51);
+    }
+
     private User savedUser(UUID id, String handle, String nickname) {
         User user = User.createLocal(handle + "@example.com", handle, nickname, "encoded-password");
         ReflectionTestUtils.setField(user, "id", id);
