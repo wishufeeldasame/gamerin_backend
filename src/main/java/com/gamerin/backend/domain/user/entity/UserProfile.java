@@ -33,6 +33,12 @@ public class UserProfile {
     private static final String WIN_RATE_KEY = "winRate";
     private static final String GAMES_KEY = "games";
 
+    private static final String RIOT_KEY = "RIOT";
+    private static final String LOL_KEY = "LOL";
+    private static final String VALORANT_KEY = "VALORANT";
+    private static final String PUUID_KEY = "puuid";
+    private static final String RIOT_ID_KEY = "riotId";
+
     @Id
     @Column
     private UUID userId;
@@ -41,7 +47,7 @@ public class UserProfile {
     @MapsId // User 엔티티의 ID를 공유
     @JoinColumn(name = "user_id")
     private User user;
-    
+
     @Column(columnDefinition = "TEXT")
     private String bio;
 
@@ -152,7 +158,6 @@ public class UserProfile {
         this.coverImageUrl = coverImageUrl;
     }
 
-
     public void updateProfileImageUrl(String profileImageUrl) {
         this.profileImageUrl = profileImageUrl;
     }
@@ -205,6 +210,84 @@ public class UserProfile {
         this.gameStats = nextGameStats;
     }
 
+    public boolean hasConnectedRiot() {
+        Object connected = getRiotStats().get(CONNECTED_KEY);
+        return connected instanceof Boolean value && value;
+    }
+
+    public String getRiotPuuid() {
+        Object puuid = getRiotStats().get(PUUID_KEY);
+        return puuid instanceof String value && !value.isBlank() ? value : null;
+    }
+
+    public String getRiotId() {
+        Object riotId = getRiotStats().get(RIOT_ID_KEY);
+        return riotId instanceof String value && !value.isBlank() ? value : null;
+    }
+
+    public void connectRiot(String riotId, String puuid) {
+        Map<String, Object> riotStats = new HashMap<>(getRiotStats());
+        riotStats.put(PUUID_KEY, puuid);
+        riotStats.put(RIOT_ID_KEY, riotId);
+        riotStats.put(CONNECTED_KEY, true);
+
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.put(RIOT_KEY, riotStats);
+        this.gameStats = nextGameStats;
+    }
+
+    public void updateLolSummary(String tierLabel, double kda, int winRate, int games) {
+        Map<String, Object> lolStats = new HashMap<>(getGameStatsFor(LOL_KEY));
+        lolStats.put(CONNECTED_KEY, true);
+        lolStats.put(TIER_LABEL_KEY, tierLabel);
+        lolStats.put(KDA_KEY, kda);
+        lolStats.put(WIN_RATE_KEY, winRate);
+        lolStats.put(GAMES_KEY, games);
+
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.put(LOL_KEY, lolStats);
+        this.gameStats = nextGameStats;
+    }
+
+    public void updateValorantSummary(String tierLabel, double kda, int winRate, int games) {
+        Map<String, Object> valorantStats = new HashMap<>(getGameStatsFor(VALORANT_KEY));
+        valorantStats.put(CONNECTED_KEY, true);
+        valorantStats.put(TIER_LABEL_KEY, tierLabel);
+        valorantStats.put(KDA_KEY, kda);
+        valorantStats.put(WIN_RATE_KEY, winRate);
+        valorantStats.put(GAMES_KEY, games);
+
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.put(VALORANT_KEY, valorantStats);
+        this.gameStats = nextGameStats;
+    }
+
+    public void disconnectRiot() {
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.remove(RIOT_KEY);
+        nextGameStats.remove(LOL_KEY);
+        nextGameStats.remove(VALORANT_KEY);
+        this.gameStats = nextGameStats;
+    }
+
+    private Map<String, Object> getRiotStats() {
+        return getGameStatsFor(RIOT_KEY);
+    }
+
+    private Map<String, Object> getGameStatsFor(String key) {
+        Object stats = getSafeGameStats().get(key);
+        if (stats instanceof Map<?, ?> map) {
+            Map<String, Object> casted = new HashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() instanceof String k) {
+                    casted.put(k, entry.getValue());
+                }
+            }
+            return casted;
+        }
+        return new HashMap<>();
+    }
+
     private Map<String, Object> getPubgStats() {
         Object pubgStats = getSafeGameStats().get(PUBG_KEY);
         if (pubgStats instanceof Map<?, ?> map) {
@@ -222,4 +305,4 @@ public class UserProfile {
     private Map<String, Object> getSafeGameStats() {
         return Objects.requireNonNullElseGet(this.gameStats, HashMap::new);
     }
-}  
+}

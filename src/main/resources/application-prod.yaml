@@ -95,6 +95,10 @@ pubg:
   api:
     key: ${PUBG_API_KEY:}
 
+riot:
+  api:
+    key: ${RIOT_API_KEY:}    
+
 openai:
   api:
     key: ${OPENAI_API_KEY:}
