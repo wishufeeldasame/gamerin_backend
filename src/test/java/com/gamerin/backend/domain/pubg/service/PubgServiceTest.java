@@ -11,6 +11,7 @@ import java.util.UUID;
 
 import com.gamerin.backend.domain.pubg.client.PubgApiClient;
 import com.gamerin.backend.domain.pubg.dto.response.PubgSummaryResponse;
+import com.gamerin.backend.domain.pubg.exception.NoRankedRecordException;
 import com.gamerin.backend.domain.pubg.model.NormalStats;
 import com.gamerin.backend.domain.pubg.model.RankedStats;
 import com.gamerin.backend.domain.user.entity.User;
@@ -50,7 +51,7 @@ class PubgServiceTest {
         when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
         when(pubgApiClient.findCurrentSeasonId()).thenReturn("season-1");
         when(pubgApiClient.getRankedStats("account-1", "season-1", "squad"))
-                .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "No ranked stats found."));
+                .thenThrow(new NoRankedRecordException());
         when(pubgApiClient.getNormalStats("account-1", "season-1", "squad"))
                 .thenReturn(new NormalStats(1.26, 10, 2));
 
@@ -67,6 +68,11 @@ class PubgServiceTest {
     @Test
     void getMySummaryDoesNotFallBackToNormalStatsWhenRankedStatsRateLimited() {
         assertRankedFailureDoesNotFallBackToNormalStats(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    @Test
+    void getMySummaryDoesNotFallBackToNormalStatsForUnclassifiedNotFound() {
+        assertRankedFailureDoesNotFallBackToNormalStats(HttpStatus.NOT_FOUND);
     }
 
     @Test

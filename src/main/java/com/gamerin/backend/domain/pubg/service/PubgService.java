@@ -8,6 +8,7 @@ import com.gamerin.backend.domain.pubg.client.PubgApiClient;
 import com.gamerin.backend.domain.pubg.dto.request.PubgConnectRequest;
 import com.gamerin.backend.domain.pubg.dto.response.PubgConnectionResponse;
 import com.gamerin.backend.domain.pubg.dto.response.PubgSummaryResponse;
+import com.gamerin.backend.domain.pubg.exception.NoRankedRecordException;
 import com.gamerin.backend.domain.pubg.model.NormalStats;
 import com.gamerin.backend.domain.pubg.model.RankedStats;
 import com.gamerin.backend.domain.user.entity.User;
@@ -75,19 +76,17 @@ public class PubgService {
 
         String seasonId = pubgApiClient.findCurrentSeasonId();
 
+        RankedStats rankedStats;
         try {
-            RankedStats rankedStats = pubgApiClient.getRankedStats(accountId, seasonId, RANKED_MODE);
-            PubgSummaryResponse response = toRankedSummary(rankedStats);
+            rankedStats = pubgApiClient.getRankedStats(accountId, seasonId, RANKED_MODE);
+        } catch (NoRankedRecordException e) {
+            NormalStats normalStats = pubgApiClient.getNormalStats(accountId, seasonId, NORMAL_MODE);
+            PubgSummaryResponse response = toNormalSummary(normalStats);
             profile.updatePubgSummary(response.tierLabel(), response.kda(), response.winRate(), response.games());
             return response;
-        } catch (ResponseStatusException e) {
-            if (e.getStatusCode().value() != HttpStatus.NOT_FOUND.value()) {
-                throw e;
-            }
         }
 
-        NormalStats normalStats = pubgApiClient.getNormalStats(accountId, seasonId, NORMAL_MODE);
-        PubgSummaryResponse response = toNormalSummary(normalStats);
+        PubgSummaryResponse response = toRankedSummary(rankedStats);
         profile.updatePubgSummary(response.tierLabel(), response.kda(), response.winRate(), response.games());
         return response;
     }
