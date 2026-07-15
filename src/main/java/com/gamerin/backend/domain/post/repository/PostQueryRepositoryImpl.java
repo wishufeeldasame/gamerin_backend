@@ -1,14 +1,19 @@
 package com.gamerin.backend.domain.post.repository;
 
+import java.nio.ByteBuffer;
 import java.sql.Timestamp;
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Repository;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostBookmark;
@@ -127,25 +132,72 @@ public class PostQueryRepositoryImpl implements PostQueryRepository {
     }
 
     @Override
-    public List<PostBookmark> findBookmarkedPosts(UUID userId, String cursor, int limit) {
+    public List<PostBookmark> findBookmarkedPosts(
+            UUID userId,
+            String cursor,
+            int limit,
+            String keyword,
+            boolean mediaOnly
+    ) {
         BookmarkCursor bookmarkCursor = BookmarkCursor.parse(cursor);
         StringBuilder sql = new StringBuilder("""
             select pb.id
             from post_bookmarks pb
             join posts p on p.id = pb.post_id
+            join users author on author.id = p.author_id
             where pb.user_id = :userId
               and p.deleted_at is null
+              and author.deleted_at is null
             """);
 
+        appendBookmarkFilters(sql, keyword, mediaOnly);
         appendBookmarkCursor(sql, bookmarkCursor);
         sql.append(" order by pb.created_at desc, pb.id desc limit :limit");
 
         Query query = entityManager.createNativeQuery(sql.toString());
         query.setParameter("userId", userId);
+        bindBookmarkFilters(query, keyword);
         bindBookmarkCursor(query, bookmarkCursor);
         query.setParameter("limit", limit);
 
         return reorderBookmarks(castUuidList(query.getResultList()));
+    }
+
+    private void appendBookmarkFilters(StringBuilder sql, String keyword, boolean mediaOnly) {
+        if (keyword != null && !keyword.isBlank()) {
+            sql.append("""
+                and (
+                    lower(coalesce(p.content, '')) like :bookmarkKeyword escape '\\'
+                    or lower(author.nickname) like :bookmarkKeyword escape '\\'
+                    or lower(author.handle) like :bookmarkKeyword escape '\\'
+                )
+                """);
+        }
+        if (mediaOnly) {
+            sql.append("""
+                and exists (
+                    select 1
+                    from post_media bookmark_media
+                    where bookmark_media.post_id = p.id
+                      and bookmark_media.deleted_at is null
+                )
+                """);
+        }
+    }
+
+    private void bindBookmarkFilters(Query query, String keyword) {
+        if (keyword != null && !keyword.isBlank()) {
+            query.setParameter(
+                    "bookmarkKeyword",
+                    "%" + escapeLike(keyword.strip().toLowerCase(Locale.ROOT)) + "%"
+            );
+        }
+    }
+
+    private String escapeLike(String value) {
+        return value.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
     }
 
     private void appendPostCursor(StringBuilder sql, PostCursor cursor) {
@@ -255,7 +307,9 @@ public class PostQueryRepositoryImpl implements PostQueryRepository {
             order.put(ids.get(index), index);
         }
 
-        List<PostBookmark> bookmarks = new ArrayList<>(postBookmarkRepository.findAllById(ids));
+        List<PostBookmark> bookmarks = new ArrayList<>(
+                postBookmarkRepository.findAllByIdsWithPostAuthor(ids)
+        );
         bookmarks.sort((left, right) -> Integer.compare(order.get(left.getId()), order.get(right.getId())));
         return bookmarks;
     }
@@ -265,6 +319,10 @@ public class PostQueryRepositoryImpl implements PostQueryRepository {
                 .map(value -> {
                     if (value instanceof UUID uuid) {
                         return uuid;
+                    }
+                    if (value instanceof byte[] bytes && bytes.length == 16) {
+                        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+                        return new UUID(buffer.getLong(), buffer.getLong());
                     }
                     return UUID.fromString(String.valueOf(value));
                 })
@@ -312,12 +370,20 @@ public class PostQueryRepositoryImpl implements PostQueryRepository {
                 return null;
             }
 
-            String[] values = raw.split("\\|");
+            String[] values = raw.split("\\|", -1);
             if (values.length != 2) {
-                return null;
+                throw invalidBookmarkCursor();
             }
 
-            return new BookmarkCursor(OffsetDateTime.parse(values[0]), UUID.fromString(values[1]));
+            try {
+                return new BookmarkCursor(OffsetDateTime.parse(values[0]), UUID.fromString(values[1]));
+            } catch (DateTimeParseException | IllegalArgumentException ex) {
+                throw invalidBookmarkCursor();
+            }
         }
+    }
+
+    private static ResponseStatusException invalidBookmarkCursor() {
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid bookmark cursor.");
     }
 }
