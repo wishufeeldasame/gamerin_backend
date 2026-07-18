@@ -20,7 +20,6 @@ import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
 import com.gamerin.backend.domain.post.dto.response.ShareResponse;
 import com.gamerin.backend.domain.post.entity.Post;
-import com.gamerin.backend.domain.post.entity.PostBookmark;
 import com.gamerin.backend.domain.post.entity.PostComment;
 import com.gamerin.backend.domain.post.entity.PostLike;
 import com.gamerin.backend.domain.post.entity.PostMedia;
@@ -28,7 +27,6 @@ import com.gamerin.backend.domain.post.entity.PostShare;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
 import com.gamerin.backend.domain.post.entity.ShareTarget;
 import com.gamerin.backend.domain.post.moderation.ContentModerationService;
-import com.gamerin.backend.domain.post.repository.PostBookmarkRepository;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostLikeRepository;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
@@ -50,7 +48,7 @@ public class PostService {
     private final PostRepository postRepository;
     private final PostMediaRepository postMediaRepository;
     private final PostLikeRepository postLikeRepository;
-    private final PostBookmarkRepository postBookmarkRepository;
+    private final PostBookmarkCommandService postBookmarkCommandService;
     private final PostCommentRepository postCommentRepository;
     private final PostShareRepository postShareRepository;
     private final PostResponseAssembler postResponseAssembler;
@@ -68,7 +66,7 @@ public class PostService {
             PostRepository postRepository,
             PostMediaRepository postMediaRepository,
             PostLikeRepository postLikeRepository,
-            PostBookmarkRepository postBookmarkRepository,
+            PostBookmarkCommandService postBookmarkCommandService,
             PostCommentRepository postCommentRepository,
             PostShareRepository postShareRepository,
             PostResponseAssembler postResponseAssembler,
@@ -89,7 +87,7 @@ public class PostService {
         this.postRepository = postRepository;
         this.postMediaRepository = postMediaRepository;
         this.postLikeRepository = postLikeRepository;
-        this.postBookmarkRepository = postBookmarkRepository;
+        this.postBookmarkCommandService = postBookmarkCommandService;
         this.postCommentRepository = postCommentRepository;
         this.postShareRepository = postShareRepository;
         this.postResponseAssembler = postResponseAssembler;
@@ -185,22 +183,11 @@ public class PostService {
     }
 
     public void bookmark(CustomUserPrincipal principal, UUID postId) {
-        User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
-
-        if (postBookmarkRepository.existsByPostIdAndUserId(postId, user.getId())) {
-            return;
-        }
-
-        postBookmarkRepository.save(PostBookmark.create(post, user));
+        postBookmarkCommandService.bookmark(principal, postId);
     }
 
     public void unbookmark(CustomUserPrincipal principal, UUID postId) {
-        User user = getCurrentUser(principal);
-        getActivePost(postId);
-
-        postBookmarkRepository.findByPostIdAndUserId(postId, user.getId())
-                .ifPresent(postBookmarkRepository::delete);
+        postBookmarkCommandService.unbookmark(principal, postId);
     }
 
     public ShareResponse share(CustomUserPrincipal principal, UUID postId, CreateShareRequest request) {

@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.post.service;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
@@ -8,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.bookmark.repository.BookmarkCollectionQueryRepository;
 import com.gamerin.backend.domain.post.dto.response.PostCardResponse;
 import com.gamerin.backend.domain.post.dto.response.ProfileMediaItemResponse;
 import com.gamerin.backend.domain.post.entity.Post;
@@ -28,15 +30,18 @@ public class FeedService {
 
     private final UserRepository userRepository;
     private final PostQueryRepository postQueryRepository;
+    private final BookmarkCollectionQueryRepository bookmarkCollectionQueryRepository;
     private final PostResponseAssembler postResponseAssembler;
 
     public FeedService(
             UserRepository userRepository,
             PostQueryRepository postQueryRepository,
+            BookmarkCollectionQueryRepository bookmarkCollectionQueryRepository,
             PostResponseAssembler postResponseAssembler
     ) {
         this.userRepository = userRepository;
         this.postQueryRepository = postQueryRepository;
+        this.bookmarkCollectionQueryRepository = bookmarkCollectionQueryRepository;
         this.postResponseAssembler = postResponseAssembler;
     }
 
@@ -103,9 +108,35 @@ public class FeedService {
             String cursor,
             int size
     ) {
+        return getMyBookmarks(principal, "all", cursor, size, null, false);
+    }
+
+    public CursorPageResponse<PostCardResponse> getMyBookmarks(
+            CustomUserPrincipal principal,
+            String scope,
+            String cursor,
+            int size,
+            String keyword,
+            boolean mediaOnly
+    ) {
         UUID viewerId = getCurrentUserId(principal);
         int pageSize = clampSize(size, DEFAULT_PAGE_SIZE);
-        List<PostBookmark> loadedBookmarks = postQueryRepository.findBookmarkedPosts(viewerId, cursor, pageSize + 1);
+        String normalizedScope = normalizeBookmarkScope(scope);
+        List<PostBookmark> loadedBookmarks = "unclassified".equals(normalizedScope)
+                ? bookmarkCollectionQueryRepository.findUnclassifiedBookmarks(
+                        viewerId,
+                        cursor,
+                        pageSize + 1,
+                        keyword,
+                        mediaOnly
+                )
+                : postQueryRepository.findBookmarkedPosts(
+                        viewerId,
+                        cursor,
+                        pageSize + 1,
+                        keyword,
+                        mediaOnly
+                );
         boolean hasNext = loadedBookmarks.size() > pageSize;
         List<PostBookmark> pageBookmarks = hasNext ? loadedBookmarks.subList(0, pageSize) : loadedBookmarks;
         List<Post> posts = pageBookmarks.stream()
@@ -117,6 +148,17 @@ public class FeedService {
                 buildBookmarkCursor(pageBookmarks, hasNext),
                 hasNext
         );
+    }
+
+    private String normalizeBookmarkScope(String scope) {
+        if (scope == null || scope.isBlank()) {
+            return "all";
+        }
+        String normalized = scope.strip().toLowerCase(Locale.ROOT);
+        if (!normalized.equals("all") && !normalized.equals("unclassified")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid bookmark scope.");
+        }
+        return normalized;
     }
 
     private UUID getCurrentUserId(CustomUserPrincipal principal) {
