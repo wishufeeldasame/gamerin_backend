@@ -36,14 +36,12 @@ import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
 import com.gamerin.backend.domain.post.entity.Post;
-import com.gamerin.backend.domain.post.entity.PostBookmark;
 import com.gamerin.backend.domain.post.entity.PostComment;
 import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
 import com.gamerin.backend.domain.post.entity.PostShare;
 import com.gamerin.backend.domain.post.entity.ShareTarget;
 import com.gamerin.backend.domain.post.moderation.ContentModerationService;
-import com.gamerin.backend.domain.post.repository.PostBookmarkRepository;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostLikeRepository;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
@@ -71,7 +69,7 @@ class PostServiceTest {
     private PostLikeRepository postLikeRepository;
 
     @Mock
-    private PostBookmarkRepository postBookmarkRepository;
+    private PostBookmarkCommandService postBookmarkCommandService;
 
     @Mock
     private PostCommentRepository postCommentRepository;
@@ -112,7 +110,7 @@ class PostServiceTest {
                 postRepository,
                 postMediaRepository,
                 postLikeRepository,
-                postBookmarkRepository,
+                postBookmarkCommandService,
                 postCommentRepository,
                 postShareRepository,
                 postResponseAssembler,
@@ -134,7 +132,7 @@ class PostServiceTest {
                 postRepository,
                 postMediaRepository,
                 postLikeRepository,
-                postBookmarkRepository,
+                postBookmarkCommandService,
                 postCommentRepository,
                 postShareRepository,
                 postResponseAssembler,
@@ -459,35 +457,25 @@ class PostServiceTest {
     }
 
     @Test
-    void bookmarkDoesNothingWhenAlreadyBookmarked() {
-        UUID userId = UUID.randomUUID();
+    void bookmarkDelegatesToBookmarkCommandService() {
         UUID postId = UUID.randomUUID();
-        User user = savedUser(userId, "tester", "Tester");
-        Post post = savedPost(postId, user);
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        CustomUserPrincipal principal = CustomUserPrincipal.from(user);
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
-        when(postBookmarkRepository.existsByPostIdAndUserId(postId, userId)).thenReturn(true);
+        postService.bookmark(principal, postId);
 
-        postService.bookmark(CustomUserPrincipal.from(user), postId);
-
-        verify(postBookmarkRepository, never()).save(any(PostBookmark.class));
+        verify(postBookmarkCommandService).bookmark(principal, postId);
     }
 
     @Test
-    void bookmarkStoresWhenMissing() {
-        UUID userId = UUID.randomUUID();
+    void unbookmarkDelegatesToBookmarkCommandService() {
         UUID postId = UUID.randomUUID();
-        User user = savedUser(userId, "tester", "Tester");
-        Post post = savedPost(postId, user);
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        CustomUserPrincipal principal = CustomUserPrincipal.from(user);
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
-        when(postBookmarkRepository.existsByPostIdAndUserId(postId, userId)).thenReturn(false);
+        postService.unbookmark(principal, postId);
 
-        postService.bookmark(CustomUserPrincipal.from(user), postId);
-
-        verify(postBookmarkRepository).save(any(PostBookmark.class));
+        verify(postBookmarkCommandService).unbookmark(principal, postId);
     }
 
     @Test
