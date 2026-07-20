@@ -44,6 +44,7 @@ class BookmarkCollectionMigrationTest {
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
                 .baselineVersion("14")
+                .target("15")
                 .load();
 
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);

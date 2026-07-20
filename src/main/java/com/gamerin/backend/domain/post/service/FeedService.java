@@ -16,6 +16,9 @@ import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostBookmark;
 import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.repository.PostQueryRepository;
+import com.gamerin.backend.domain.repost.model.PostTimelineItem;
+import com.gamerin.backend.domain.repost.model.TimelineCursor;
+import com.gamerin.backend.domain.repost.repository.PostTimelineQueryRepository;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.response.CursorPageResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -31,17 +34,20 @@ public class FeedService {
     private final UserRepository userRepository;
     private final PostQueryRepository postQueryRepository;
     private final BookmarkCollectionQueryRepository bookmarkCollectionQueryRepository;
+    private final PostTimelineQueryRepository postTimelineQueryRepository;
     private final PostResponseAssembler postResponseAssembler;
 
     public FeedService(
             UserRepository userRepository,
             PostQueryRepository postQueryRepository,
             BookmarkCollectionQueryRepository bookmarkCollectionQueryRepository,
+            PostTimelineQueryRepository postTimelineQueryRepository,
             PostResponseAssembler postResponseAssembler
     ) {
         this.userRepository = userRepository;
         this.postQueryRepository = postQueryRepository;
         this.bookmarkCollectionQueryRepository = bookmarkCollectionQueryRepository;
+        this.postTimelineQueryRepository = postTimelineQueryRepository;
         this.postResponseAssembler = postResponseAssembler;
     }
 
@@ -55,13 +61,19 @@ public class FeedService {
         String normalizedTab = normalizeTab(tab);
         int pageSize = clampSize(size, DEFAULT_PAGE_SIZE);
         boolean followingOnly = "following".equals(normalizedTab);
+        TimelineCursor timelineCursor = TimelineCursor.parseOrStart(cursor);
 
-        List<Post> loadedPosts = postQueryRepository.findFeedPosts(viewerId, followingOnly, cursor, pageSize + 1);
-        boolean hasNext = loadedPosts.size() > pageSize;
-        List<Post> pagePosts = hasNext ? loadedPosts.subList(0, pageSize) : loadedPosts;
-        List<PostCardResponse> items = postResponseAssembler.toPostCards(pagePosts, viewerId);
+        List<PostTimelineItem> loadedItems = postTimelineQueryRepository.findFeedItems(
+                viewerId,
+                followingOnly,
+                timelineCursor,
+                pageSize + 1
+        );
+        boolean hasNext = loadedItems.size() > pageSize;
+        List<PostTimelineItem> pageItems = hasNext ? loadedItems.subList(0, pageSize) : loadedItems;
+        List<PostCardResponse> items = postResponseAssembler.toTimelinePostCards(pageItems, viewerId);
 
-        return new CursorPageResponse<>(items, buildPostCursor(pagePosts, hasNext), hasNext);
+        return new CursorPageResponse<>(items, buildTimelineCursor(pageItems, timelineCursor, hasNext), hasNext);
     }
 
     public CursorPageResponse<PostCardResponse> getUserPosts(
@@ -71,15 +83,20 @@ public class FeedService {
             int size
     ) {
         UUID viewerId = getCurrentUserId(principal);
-        ensureTargetUserExists(handle);
+        UUID targetUserId = getTargetUserId(handle);
 
         int pageSize = clampSize(size, DEFAULT_PAGE_SIZE);
-        List<Post> loadedPosts = postQueryRepository.findUserPosts(handle, cursor, pageSize + 1);
-        boolean hasNext = loadedPosts.size() > pageSize;
-        List<Post> pagePosts = hasNext ? loadedPosts.subList(0, pageSize) : loadedPosts;
-        List<PostCardResponse> items = postResponseAssembler.toPostCards(pagePosts, viewerId);
+        TimelineCursor timelineCursor = TimelineCursor.parseOrStart(cursor);
+        List<PostTimelineItem> loadedItems = postTimelineQueryRepository.findUserItems(
+                targetUserId,
+                timelineCursor,
+                pageSize + 1
+        );
+        boolean hasNext = loadedItems.size() > pageSize;
+        List<PostTimelineItem> pageItems = hasNext ? loadedItems.subList(0, pageSize) : loadedItems;
+        List<PostCardResponse> items = postResponseAssembler.toTimelinePostCards(pageItems, viewerId);
 
-        return new CursorPageResponse<>(items, buildPostCursor(pagePosts, hasNext), hasNext);
+        return new CursorPageResponse<>(items, buildTimelineCursor(pageItems, timelineCursor, hasNext), hasNext);
     }
 
     public CursorPageResponse<ProfileMediaItemResponse> getUserMedia(
@@ -89,7 +106,7 @@ public class FeedService {
             int size
     ) {
         getCurrentUserId(principal);
-        ensureTargetUserExists(handle);
+        getTargetUserId(handle);
 
         int pageSize = clampSize(size, DEFAULT_MEDIA_PAGE_SIZE);
         List<PostMedia> loadedMedia = postQueryRepository.findUserMedia(handle, cursor, pageSize + 1);
@@ -171,9 +188,10 @@ public class FeedService {
                 .getId();
     }
 
-    private void ensureTargetUserExists(String handle) {
-        userRepository.findByHandleAndDeletedAtIsNull(handle)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
+    private UUID getTargetUserId(String handle) {
+        return userRepository.findByHandleAndDeletedAtIsNull(handle)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."))
+                .getId();
     }
 
     private String normalizeTab(String tab) {
@@ -195,13 +213,17 @@ public class FeedService {
         return Math.min(requested, MAX_PAGE_SIZE);
     }
 
-    private String buildPostCursor(List<Post> posts, boolean hasNext) {
-        if (!hasNext || posts.isEmpty()) {
+    private String buildTimelineCursor(
+            List<PostTimelineItem> items,
+            TimelineCursor cursor,
+            boolean hasNext
+    ) {
+        if (!hasNext || items.isEmpty()) {
             return null;
         }
 
-        Post last = posts.get(posts.size() - 1);
-        return last.getCreatedAt() + "|" + last.getId();
+        PostTimelineItem last = items.get(items.size() - 1);
+        return cursor.next(last.activityAt(), last.post().getId());
     }
 
     private String buildMediaCursor(List<PostMedia> mediaItems, boolean hasNext) {
