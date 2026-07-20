@@ -7,6 +7,7 @@ import com.gamerin.backend.domain.pubg.dto.external.PubgSeasonListResponse;
 import com.gamerin.backend.domain.pubg.dto.external.NormalGameModeStats;
 import com.gamerin.backend.domain.pubg.dto.external.RankedGameModeStats;
 import com.gamerin.backend.domain.pubg.dto.external.TierInfo;
+import com.gamerin.backend.domain.pubg.exception.NoRankedRecordException;
 import com.gamerin.backend.domain.pubg.model.NormalStats;
 import com.gamerin.backend.domain.pubg.model.RankedStats;
 import org.springframework.beans.factory.annotation.Value;
@@ -95,7 +96,11 @@ public class PubgApiClient {
             }
 
             if (response.data().attributes() == null || response.data().attributes().rankedGameModeStats() == null) {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No ranked stats found.");
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to load PUBG ranked stats.");
+            }
+
+            if (!response.data().attributes().rankedGameModeStats().containsKey(mode)) {
+                throw new NoRankedRecordException();
             }
 
             RankedGameModeStats modeStats = response.data()
@@ -103,8 +108,17 @@ public class PubgApiClient {
                     .rankedGameModeStats()
                     .get(mode);
 
-            if (modeStats == null || !hasRankedRecord(modeStats)) {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No ranked stats found for the selected mode.");
+            if (modeStats == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to load PUBG ranked stats.");
+            }
+
+            Integer roundsPlayed = modeStats.roundsPlayed();
+            if (roundsPlayed == null || roundsPlayed < 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to load PUBG ranked stats.");
+            }
+
+            if (!hasRankedRecord(modeStats)) {
+                throw new NoRankedRecordException();
             }
 
             TierInfo tier = modeStats.currentTier();
@@ -116,7 +130,7 @@ public class PubgApiClient {
                     tier == null ? null : tier.subTier()
             );
         } catch (HttpClientErrorException.NotFound e) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "PUBG ranked season record not found.");
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to fetch PUBG ranked stats.", e);
         } catch (HttpClientErrorException.TooManyRequests e) {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "PUBG API rate limit exceeded.");
         } catch (RestClientException e) {
@@ -199,23 +213,27 @@ public class PubgApiClient {
     }
 
     private double resolveRankedKda(RankedGameModeStats modeStats) {
-        Double apiKdr = modeStats.kdr();
-        if (apiKdr != null && apiKdr > 0.0) {
-            return apiKdr;
+        Double apiKda = modeStats.kda();
+        if (apiKda != null && apiKda >= 0.0) {
+            return apiKda;
         }
 
         Integer kills = modeStats.kills();
+        Integer assists = modeStats.assists();
         Integer deaths = modeStats.deaths();
 
-        if (kills != null && deaths != null) {
-            if (deaths == 0) {
-                return kills.doubleValue();
-            }
-            return kills.doubleValue() / deaths;
+        if (kills == null || kills < 0
+                || assists == null || assists < 0
+                || deaths == null || deaths < 0) {
+            return 0.0;
         }
 
-        Double apiKda = modeStats.kda();
-        return apiKda == null ? 0.0 : apiKda;
+        double killsAndAssists = kills.doubleValue() + assists;
+        if (deaths == 0) {
+            return killsAndAssists;
+        }
+
+        return killsAndAssists / deaths;
     }
 
     private boolean hasRankedRecord(RankedGameModeStats modeStats) {

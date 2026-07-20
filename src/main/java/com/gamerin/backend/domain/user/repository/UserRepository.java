@@ -32,33 +32,44 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     boolean existsByEmail(String email);
 
     @Query(value = """
-        SELECT EXISTS (
-            SELECT 1
-            FROM user_profiles up
-            WHERE up.user_id <> :userId
-              AND up.game_stats -> 'PUBG' ->> 'playerName' = :playerName
-              AND COALESCE((up.game_stats -> 'PUBG' ->> 'connected')::boolean, false) = true
-        )
-        """, nativeQuery = true)
+            SELECT EXISTS (
+                SELECT 1
+                FROM user_profiles up
+                WHERE up.user_id <> :userId
+                  AND up.game_stats -> 'PUBG' ->> 'playerName' = :playerName
+                  AND COALESCE((up.game_stats -> 'PUBG' ->> 'connected')::boolean, false) = true
+            )
+            """, nativeQuery = true)
     boolean existsConnectedPubgPlayerNameByOtherUser(
             @Param("userId") UUID userId,
-            @Param("playerName") String playerName
-    );
+            @Param("playerName") String playerName);
+
+    @Query(value = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM user_profiles up
+                WHERE up.user_id <> :userId
+                AND up.game_stats -> 'RIOT' ->> 'puuid' = :puuid
+                AND COALESCE((up.game_stats -> 'RIOT' ->> 'connected')::boolean, false) = true
+            )
+            """, nativeQuery = true)
+    boolean existsConnectedRiotPuuidByOtherUser(
+            @Param("userId") UUID userId,
+            @Param("puuid") String puuid);
 
     @Query("""
-        select u
-        from User u
-        where u.deletedAt is null
-          and u.id <> :viewerId
-          and (
-              lower(u.handle) like lower(concat('%', :keyword, '%'))
-              or lower(u.nickname) like lower(concat('%', :keyword, '%'))
-          )
-        order by u.nickname asc, u.handle asc
-        """)
+            select u
+            from User u
+            where u.deletedAt is null
+              and u.id <> :viewerId
+              and (
+                  lower(u.handle) like lower(concat('%', :keyword, '%'))
+                  or lower(u.nickname) like lower(concat('%', :keyword, '%'))
+              )
+            order by u.nickname asc, u.handle asc
+            """)
     java.util.List<User> searchMessageRecipients(
             @Param("viewerId") UUID viewerId,
             @Param("keyword") String keyword,
-            Pageable pageable
-    );
+            Pageable pageable);
 }
