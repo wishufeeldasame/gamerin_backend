@@ -35,7 +35,6 @@ public class UserProfile {
 
     private static final String RIOT_KEY = "RIOT";
     private static final String LOL_KEY = "LOL";
-    private static final String VALORANT_KEY = "VALORANT";
     private static final String PUUID_KEY = "puuid";
     private static final String RIOT_ID_KEY = "riotId";
 
@@ -249,24 +248,10 @@ public class UserProfile {
         this.gameStats = nextGameStats;
     }
 
-    public void updateValorantSummary(String tierLabel, double kda, int winRate, int games) {
-        Map<String, Object> valorantStats = new HashMap<>(getGameStatsFor(VALORANT_KEY));
-        valorantStats.put(CONNECTED_KEY, true);
-        valorantStats.put(TIER_LABEL_KEY, tierLabel);
-        valorantStats.put(KDA_KEY, kda);
-        valorantStats.put(WIN_RATE_KEY, winRate);
-        valorantStats.put(GAMES_KEY, games);
-
-        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
-        nextGameStats.put(VALORANT_KEY, valorantStats);
-        this.gameStats = nextGameStats;
-    }
-
     public void disconnectRiot() {
         Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
         nextGameStats.remove(RIOT_KEY);
         nextGameStats.remove(LOL_KEY);
-        nextGameStats.remove(VALORANT_KEY);
         this.gameStats = nextGameStats;
     }
 

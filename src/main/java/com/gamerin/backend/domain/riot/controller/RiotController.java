@@ -53,17 +53,6 @@ package com.gamerin.backend.domain.riot.controller;
             return ApiResponse.ok(riotService.getLolSummary(principal));
         }
 
-        @GetMapping("/valorant/me")
-        @Operation(
-                summary = "Valorant 요약 전적 조회",
-                description = "연동된 Riot 계정의 발로란트 랭크 티어, 승률, KDA 등의 요약 전적을 조회합니다. (현재는 심사 제출용 가상 데이터를 리턴합니다.)"
-        )
-        public ApiResponse<RiotSummaryResponse> getMyValorantSummary(
-                @AuthenticationPrincipal CustomUserPrincipal principal
-        ) {
-            return ApiResponse.ok(riotService.getValorantSummary(principal));
-        }
-
         @DeleteMapping("/disconnect")
         @Operation(
                 summary = "Riot 계정 연동 해제",

@@ -151,23 +151,7 @@ package com.gamerin.backend.domain.riot.service;
             return truncate2((double) (totalKills + totalAssists) / totalDeaths);
         }
     
-        // 3. 발로란트(Valorant) 요약 전적 가져오기 (가상 데이터 지원)
-        public RiotSummaryResponse getValorantSummary(CustomUserPrincipal principal) {
-            User user = getCurrentUser(principal);
-            UserProfile profile = getCurrentProfile(user);
-    
-            if (!profile.hasConnectedRiot()) {
-                return new RiotSummaryResponse("Valorant", null, 0.0, 0, 0, false);
-            }
 
-            String dummyTier = "DIAMOND II";
-            double dummyKda = 1.18;
-            int dummyWinRate = 54;
-            int dummyGames = 38;
-
-            profile.updateValorantSummary(dummyTier, dummyKda, dummyWinRate, dummyGames);
-            return new RiotSummaryResponse("Valorant", dummyTier, dummyKda, dummyWinRate, dummyGames, true);
-        }
 
         // 4. Riot 연동 해제
         public void disconnect(CustomUserPrincipal principal) {
