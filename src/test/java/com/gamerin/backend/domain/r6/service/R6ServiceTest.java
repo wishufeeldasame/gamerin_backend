@@ -269,6 +269,11 @@ class R6ServiceTest {
     }
 
     @Test
+    void getMySummaryPropagatesAccountMismatchAndPreservesStoredStats() {
+        assertSummaryFailurePreservesStats(HttpStatus.CONFLICT);
+    }
+
+    @Test
     void r6ResponsesDoNotExposeInternalIdentifiers() {
         assertThat(recordComponentNames(R6ConnectionResponse.class))
                 .doesNotContain("accountId");
