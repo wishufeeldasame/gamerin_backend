@@ -2,7 +2,7 @@
 
 ## 1. 범위와 원칙
 
-이 문서는 현재 PR1에 구현된 Rainbow Six Siege 전적 연동 계약을 정의한다.
+이 문서는 PR2까지 구현된 Rainbow Six Siege 전적 연동 계약을 정의한다.
 
 | 항목 | 정책 |
 | --- | --- |
@@ -13,18 +13,18 @@
 | 저장 방식 | `UserProfile.gameStats` JSON의 `R6` 항목 |
 | DB 스키마 변경 | 없음 |
 
-- 기존 R6 연결·조회·해제 주소와 응답 DTO를 유지한다.
+- R6 연결·저장 전적 조회·명시적 갱신·해제 API를 제공한다.
 - 외부 연동은 `R6StatsClient` 뒤에 격리하고 구현체는 `R6DataStatsClient`를 사용한다.
 - PUBG 등 다른 게임 데이터와 사용자·인증 정책은 변경하지 않는다.
 - 모든 GamerIN R6 API는 Bearer 인증이 필요하다.
 
 ## 2. 처리 구조
 
-호출 흐름은 `R6Controller -> R6Service -> R6StatsClient -> R6DataStatsClient -> R6Data API`이며,
-받은 응답의 전적 선택과 변환은 `R6DataStatsParser`가 담당한다.
+저장 전적 조회 흐름은 `R6Controller -> R6Service -> UserProfile`이며 외부 API를 거치지 않는다.
+연결·갱신 흐름은 `R6Controller -> R6Service -> R6StatsClient -> R6DataStatsClient -> R6Data API`이고, 받은 응답의 전적 선택과 변환은 `R6DataStatsParser`가 담당한다.
 
-- `R6Controller`: 세 HTTP API와 공통 응답 형식을 제공한다.
-- `R6Service`: 인증 사용자 확인, 입력 정규화, 계정 연결·갱신·해제를 담당한다.
+- `R6Controller`: 네 HTTP API와 공통 응답 형식을 제공한다.
+- `R6Service`: 인증 사용자 확인, 입력 정규화, 저장 전적 조회, 계정 연결·갱신·해제를 담당한다.
 - `R6DataStatsClient`: URI 인코딩, 외부 호출, 계정 ID 검증, 외부 오류 변환을 담당한다.
 - `R6DataStatsParser`: 현재 시즌 경쟁전 선택, 일반전 fallback, 티어·K/D·승률·경기 수 변환을 담당한다.
 - `UserProfile`: 다른 게임 값을 복사해 보존한 뒤 `R6` 항목만 변경한다.
@@ -48,7 +48,7 @@
 `GET /api/stats?type=seasonalStats&nameOnPlatform={playerName}&platformType=uplay`를 추가한다.
 
 `data.history.data`에서 날짜가 가장 최신인 항목의 `metadata.rank`를 티어로 사용한다.
-따라서 한 번의 연결 또는 조회는 보통 `fullStats` 1회, 필요할 때만 총 2회 호출한다.
+따라서 한 번의 연결 또는 명시적 갱신은 보통 `fullStats` 1회, 필요할 때만 총 2회 호출한다.
 
 ## 4. 전적 선택과 값 변환
 
@@ -112,20 +112,27 @@
 - 저장 닉네임은 요청값을 정리한 값이고, 검색용 값은 소문자로 별도 저장한다.
 - 성공 응답 데이터는 `connected`, `playerName`, `platform`만 포함한다.
 
-### 5.2 내 전적 조회 및 갱신
+### 5.2 내 저장 전적 조회
 
 ```http
 GET /api/v1/r6/me
 ```
 
-- 연결되지 않았으면 외부 호출 없이 `connected: false`와 나머지 nullable 필드를 반환한다.
-- 연결됐으면 저장된 닉네임으로 R6Data를 호출하고 최신 전적을 저장한 뒤 반환한다.
-- 조회한 `platformUserId`가 저장된 `accountId`와 다르면 갱신하지 않고 `409`를 반환한다.
-- 저장된 `accountId`가 없으면 연결되지 않은 응답을 반환한다.
+- 연결되지 않았거나 저장된 `accountId`가 없으면 외부 호출 없이 연결되지 않은 응답을 반환한다.
+- 연결됐으면 `UserProfile.gameStats.R6`에 저장된 전적을 즉시 반환하며, R6Data를 호출하지 않고 DB 값과 `updatedAt`도 변경하지 않는다.
 - 성공 응답 필드는 `game`, `connected`, `playerName`, `platform`, `tierLabel`, `kd`,
   `winRate`, `matches`, `updatedAt`이다.
 
-### 5.3 계정 연결 해제
+### 5.3 내 전적 갱신
+
+`POST /api/v1/r6/me/refresh`는 요청 본문을 사용하지 않는다.
+
+- 연결되지 않았거나 저장된 `accountId`가 없으면 외부 호출 없이 연결되지 않은 응답을 반환한다.
+- 저장된 닉네임으로 R6Data를 호출하고 응답의 `platformUserId`를 저장된 `accountId`와 비교한다.
+- 계정 ID가 일치할 때만 전적과 `updatedAt`을 한 번에 저장하고 5.2와 같은 응답 DTO를 반환한다.
+- 계정 ID가 다르면 `409`를 반환하며, 외부 호출·파싱·타임아웃 등 다른 실패도 기존 저장값을 변경하지 않는다.
+
+### 5.4 계정 연결 해제
 
 ```http
 DELETE /api/v1/r6/disconnect
@@ -155,7 +162,7 @@ DELETE /api/v1/r6/disconnect
 ```
 
 - nullable 값은 JSON에 `null`로 쓰지 않고 해당 키를 제거한다.
-- 연결 및 조회가 성공할 때 `updatedAt`을 서버 현재 시각으로 기록한다.
+- 연결 및 명시적 갱신이 성공할 때 `updatedAt`을 서버 현재 시각으로 기록한다.
 - 연결·갱신·해제 시 다른 게임 항목은 보존한다.
 - 외부 호출 또는 파싱이 실패하면 R6 저장값을 부분 갱신하지 않는다.
 - 이전 `trackerProfileId`는 성공적인 연결 또는 갱신 시 제거한다.
@@ -169,14 +176,15 @@ DELETE /api/v1/r6/disconnect
 | 사용자 프로필 미초기화 | `409 Conflict` | 변경 없음 |
 | 닉네임 누락·공백·100자 초과 | `400 Bad Request` | 외부 호출 없음 |
 | R6Data 계정 없음 (`404`) | `404 Not Found` | 변경 없음 |
-| 저장 계정과 조회 계정 ID 불일치 | `409 Conflict` | 변경 없음 |
+| 저장 계정과 갱신 계정 ID 불일치 | `409 Conflict` | 변경 없음 |
 | R6Data 요청 제한 (`429`) | `429 Too Many Requests` | 변경 없음 |
 | API 키·기본 URL 누락 | `503 Service Unavailable` | 변경 없음 |
 | R6Data 인증 실패 (`401`, `403`) | `503 Service Unavailable` | 변경 없음 |
+| 연결·응답 읽기 타임아웃 | `502 Bad Gateway` | 변경 없음 |
 | 네트워크 오류, 외부 `5xx`, 기타 호출 실패 | `502 Bad Gateway` | 변경 없음 |
 | 필수 accountId 누락 또는 잘못된 숫자 | `502 Bad Gateway` | 변경 없음 |
 
-오류 응답에는 API 키나 R6Data 원문 응답 전체를 포함하지 않는다.
+오류 응답에는 API 키나 R6Data 원문 응답 전체를 포함하지 않는다. `GET /api/v1/r6/me`는 R6Data 상태와 무관하게 저장값을 반환하며, 갱신 오류가 발생해도 이후 조회에서 기존 값을 사용할 수 있다.
 
 ## 8. 환경 설정과 보안
 
@@ -185,20 +193,22 @@ DELETE /api/v1/r6/disconnect
 ```text
 R6DATA_API_KEY={R6Data API key}
 R6DATA_API_BASE_URL=https://api.r6data.com
+R6DATA_API_CONNECT_TIMEOUT=3s
+R6DATA_API_READ_TIMEOUT=10s
 ```
 
-`R6DATA_API_BASE_URL`을 생략하면 기본 URL을 사용한다. API 키가 비어 있으면 R6 호출은 `503`이다.
-로컬 예시는 `application-local.example.yaml`의 `r6.api.key`, `r6.api.base-url`을 따른다.
+`R6DATA_API_BASE_URL`을 생략하면 기본 URL을 사용하며 API 키가 비어 있으면 R6 호출은 `503`이다.
+연결 타임아웃은 `r6.api.connect-timeout`, 응답 읽기 타임아웃은 `r6.api.read-timeout`이며 환경 변수를 생략하면 각각 3초와 10초를 사용한다. 타임아웃은 `502`로 변환하고, 로컬 예시는 `application-local.example.yaml`의 `r6.api` 설정을 따른다.
 
 - 실제 키는 Git, 예제 파일, 로그, Swagger 요청 본문, 프론트 코드에 넣지 않는다.
 - 키는 백엔드 실행 환경에만 주입하고 R6Data 요청 헤더에만 사용한다.
-- Docker 배포 시 백엔드 컨테이너에도 두 환경 변수를 전달한다.
+- Docker 배포 시 백엔드 컨테이너에도 네 환경 변수를 전달한다.
 - 사용자 입력은 URI 구성기를 통해 인코딩하며 문자열로 URL을 조립하지 않는다.
 
 ## 9. 검증 범위와 운영 제한
 
-자동 테스트는 API 계약, 입력 검증, 경쟁전 선택, 일반전 fallback, 통계 계산,
-외부 오류 매핑, 계정 ID 불일치, 실패 시 저장값 보존, 다른 게임 데이터 보존을 검증한다.
+자동 테스트는 API 계약, 입력 검증, 경쟁전 선택, 일반전 fallback, 통계 계산, 외부 오류·타임아웃 매핑,
+계정 ID 불일치, 실패 시 저장값 보존, 다른 게임 데이터 보존, `GET /me`와 `POST /me/refresh`의 책임 분리를 검증한다.
 
 ```powershell
 .\gradlew.bat test
@@ -212,8 +222,6 @@ git diff --check
 
 - PC Ubisoft Connect 외 콘솔·Steam 직접 조회와 플랫폼 선택은 지원하지 않는다.
 - 티어 이미지 URL은 GamerIN 응답에 포함하지 않는다.
-- 캐시, 재시도, 별도 GamerIN rate limit은 구현하지 않았다.
-- `GET /api/v1/r6/me`는 연결된 계정마다 외부 API를 호출하므로 호출량과 `429`를 고려해야 한다.
-- 외부 장애 시 저장값은 보존하지만 조회 요청은 오류를 반환하며 저장값으로 성공 응답하지 않는다.
+- `GET /api/v1/r6/me`는 저장값만 조회하므로 R6Data 장애나 지연의 영향을 받지 않으며, 외부 장애나 타임아웃 시 연결·갱신 요청은 오류를 반환하지만 이전 R6 저장값은 보존한다.
 - R6Data 장애 시 다른 공급자로 대체하거나 일반전 값으로 오류를 숨기지 않는다.
 - Ubisoft 닉네임이 다른 계정에 재할당되면 계정 ID 검증으로 갱신을 거부하며 재연결이 필요하다.
