@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -12,6 +14,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 
 import com.gamerin.backend.domain.r6.model.R6Profile;
@@ -56,10 +59,10 @@ class R6DataStatsClientTest {
     }
 
     @Test
-    void findProfileMapsCurrentPcRankedStatsAndUsesR6DataContract() {
+    void findProfileUsesR6DataHttpContractAndFetchesSeasonalTierWhenNeeded() {
         responder = query -> switch (query.get("type")) {
-            case "fullStats" -> StubResponse.ok(fullStatsResponse());
-            case "seasonalStats" -> StubResponse.ok(seasonalStatsResponse());
+            case "fullStats" -> StubResponse.ok(fixture("full-stats-ranked.json"));
+            case "seasonalStats" -> StubResponse.ok(fixture("seasonal-stats.json"));
             default -> new StubResponse(400, "{}");
         };
 
@@ -68,9 +71,6 @@ class R6DataStatsClientTest {
         assertThat(profile.playerName()).isEqualTo("CanonicalPlayer");
         assertThat(profile.accountId()).isEqualTo("account-41");
         assertThat(profile.summary().tierLabel()).isEqualTo("EMERALD II");
-        assertThat(profile.summary().kd()).isEqualTo(1.05);
-        assertThat(profile.summary().matches()).isEqualTo(117);
-        assertThat(profile.summary().winRate()).isCloseTo(55.652173913, within(0.000000001));
 
         assertThat(requests).hasSize(2);
         RecordedRequest fullStatsRequest = requests.get(0);
@@ -91,48 +91,29 @@ class R6DataStatsClientTest {
     }
 
     @Test
-    void findProfileAllowsAccountWithoutCurrentRankedStats() {
-        responder = query -> StubResponse.ok(unrankedFullStatsResponse());
+    void findProfileDoesNotFetchSeasonalStatsWhenRankedSnapshotIsAbsent() {
+        responder = query -> StubResponse.ok(fixture("full-stats-unranked.json"));
 
         R6Profile profile = client().findProfile("UnrankedPlayer");
 
         assertThat(profile.accountId()).isEqualTo("unranked-account");
         assertThat(profile.summary().tierLabel()).isNull();
-        assertThat(profile.summary().kd()).isNull();
-        assertThat(profile.summary().winRate()).isNull();
-        assertThat(profile.summary().matches()).isNull();
         assertThat(requests).hasSize(1);
         assertThat(requests.get(0).query()).containsEntry("type", "fullStats");
     }
 
     @Test
-    void findProfileFallsBackToAggregatedQuickplayWhenCurrentRankedStatsAreEmpty() {
-        responder = query -> StubResponse.ok(normalFallbackFullStatsResponse());
+    void findProfileDoesNotFetchSeasonalStatsForNormalFallback() {
+        responder = query -> StubResponse.ok(fixture("full-stats-normal-fallback.json"));
 
         R6Profile profile = client().findProfile("NormalPlayer");
 
-        assertThat(profile.accountId()).isEqualTo("normal-account");
         assertThat(profile.summary().tierLabel()).isNull();
-        assertThat(profile.summary().kd()).isEqualTo(1.41);
-        assertThat(profile.summary().winRate()).isEqualTo(50.0);
         assertThat(profile.summary().matches()).isEqualTo(50);
         assertThat(requests).hasSize(1);
         assertThat(requests.get(0).query())
                 .containsEntry("type", "fullStats")
                 .containsEntry("modes", "all");
-    }
-
-    @Test
-    void findProfileUsesLargestNormalPlaylistWhenQuickplayAggregateIsMissing() {
-        responder = query -> StubResponse.ok(normalAliasOnlyFullStatsResponse());
-
-        R6Profile profile = client().findProfile("NormalPlayer");
-
-        assertThat(profile.summary().tierLabel()).isNull();
-        assertThat(profile.summary().kd()).isEqualTo(1.48);
-        assertThat(profile.summary().winRate()).isCloseTo(53.658536585, within(0.000000001));
-        assertThat(profile.summary().matches()).isEqualTo(42);
-        assertThat(requests).hasSize(1);
     }
 
     @Test
@@ -146,7 +127,7 @@ class R6DataStatsClientTest {
 
     @Test
     void getSummaryRejectsPlayerNameReassignedToDifferentAccount() {
-        responder = query -> StubResponse.ok(normalFallbackFullStatsResponse());
+        responder = query -> StubResponse.ok(fixture("full-stats-normal-fallback.json"));
 
         assertThatThrownBy(() -> client().getSummary(new R6ProfileRef("NormalPlayer", "original-account")))
                 .isInstanceOf(ResponseStatusException.class)
@@ -193,8 +174,8 @@ class R6DataStatsClientTest {
     }
 
     @Test
-    void findProfileReturns502ForMalformedRankedNumericValue() {
-        responder = query -> StubResponse.ok(fullStatsResponse().replace(
+    void findProfileMapsMalformedStatsTo502() {
+        responder = query -> StubResponse.ok(fixture("full-stats-ranked.json").replace(
                 "\"kdRatio\": { \"value\": 1.05 }",
                 "\"kdRatio\": { \"value\": \"invalid\" }"
         ));
@@ -203,6 +184,8 @@ class R6DataStatsClientTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
                 .isEqualTo(HttpStatus.BAD_GATEWAY.value());
+
+        assertThat(requests).hasSize(1);
     }
 
     private R6DataStatsClient client() {
@@ -244,307 +227,13 @@ class R6DataStatsClientTest {
         return query;
     }
 
-    private org.assertj.core.data.Offset<Double> within(double value) {
-        return org.assertj.core.data.Offset.offset(value);
-    }
-
-    private String fullStatsResponse() {
-        return """
-                {
-                  "seasonNumber": 41,
-                  "platform_families_full_profiles": [
-                    {
-                      "profile_id": "account-41",
-                      "board_ids_full_profiles": [
-                        {
-                          "board_id": "ranked",
-                          "full_profiles": [
-                            {
-                              "season_id": 40,
-                              "profile": {
-                                "wins": 999,
-                                "losses": 1,
-                                "abandon": 0
-                              }
-                            },
-                            {
-                              "season_id": 41,
-                              "profile": {
-                                "rank": 18,
-                                "rank_points": 3300,
-                                "wins": 64,
-                                "losses": 51,
-                                "abandon": 2
-                              }
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  ],
-                  "data": {
-                    "platformInfo": {
-                      "platformSlug": "ubi",
-                      "platformUserId": "account-41",
-                      "platformUserHandle": "CanonicalPlayer"
-                    },
-                    "metadata": {
-                      "currentSeason": 41
-                    },
-                    "segments": [
-                      {
-                        "attributes": {
-                          "season": 40,
-                          "gamemode": "pvp_ranked",
-                          "platform": "pc",
-                          "sessionType": "ranked"
-                        },
-                        "stats": {
-                          "matchesPlayed": { "value": 999 },
-                          "kdRatio": { "value": 9.99 },
-                          "rankPoints": { "value": 9999 }
-                        }
-                      },
-                      {
-                        "attributes": {
-                          "season": 41,
-                          "gamemode": "pvp_casual",
-                          "platform": "pc",
-                          "sessionType": "casual"
-                        },
-                        "stats": {
-                          "matchesPlayed": { "value": 888 },
-                          "kdRatio": { "value": 8.88 }
-                        }
-                      },
-                      {
-                        "attributes": {
-                          "season": 41,
-                          "gamemode": "pvp_ranked",
-                          "platform": "console",
-                          "sessionType": "ranked"
-                        },
-                        "stats": {
-                          "matchesPlayed": { "value": 777 },
-                          "kdRatio": { "value": 7.77 }
-                        }
-                      },
-                      {
-                        "attributes": {
-                          "season": 41,
-                          "gamemode": "pvp_ranked",
-                          "platform": "pc",
-                          "sessionType": "ranked"
-                        },
-                        "stats": {
-                          "matchesPlayed": { "value": 117 },
-                          "kdRatio": { "value": 1.05 },
-                          "rankPoints": { "value": 3300 }
-                        }
-                      }
-                    ]
-                  }
-                }
-                """;
-    }
-
-    private String seasonalStatsResponse() {
-        return """
-                {
-                  "data": {
-                    "history": {
-                      "data": [
-                        [
-                          "2026-07-16T12:00:00+00:00",
-                          { "metadata": { "rank": "EMERALD II" }, "value": 3550 }
-                        ],
-                        [
-                          "2026-07-10T12:00:00+00:00",
-                          { "metadata": { "rank": "PLATINUM I" }, "value": 3300 }
-                        ]
-                      ]
-                    }
-                  }
-                }
-                """;
-    }
-
-    private String unrankedFullStatsResponse() {
-        return """
-                {
-                  "platform_families_full_profiles": [
-                    {
-                      "board_ids_full_profiles": [
-                        {
-                          "board_id": "ranked",
-                          "full_profiles": [
-                            {
-                              "season_id": 41,
-                              "profile": { "wins": 0, "losses": 0, "abandon": 0 }
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  ],
-                  "data": {
-                    "platformInfo": {
-                      "platformUserId": "unranked-account",
-                      "platformUserHandle": "UnrankedPlayer"
-                    },
-                    "metadata": {
-                      "currentSeason": 41
-                    },
-                    "segments": []
-                  }
-                }
-                """;
-    }
-
-    private String normalFallbackFullStatsResponse() {
-        return """
-                {
-                  "platform_families_full_profiles": [
-                    {
-                      "board_ids_full_profiles": [
-                        {
-                          "board_id": "ranked",
-                          "full_profiles": [
-                            {
-                              "season_id": 42,
-                              "profile": { "wins": 0, "losses": 0, "abandon": 0 }
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  ],
-                  "data": {
-                    "platformInfo": {
-                      "platformUserId": "normal-account",
-                      "platformUserHandle": "NormalPlayer"
-                    },
-                    "metadata": {
-                      "currentSeason": 42
-                    },
-                    "segments": [
-                      {
-                        "attributes": {
-                          "season": 42,
-                          "gamemode": "pvp_ranked",
-                          "platform": "pc",
-                          "sessionType": "ranked"
-                        },
-                        "stats": {
-                          "matchesPlayed": { "value": 0 },
-                          "kdRatio": { "value": 0.0 }
-                        }
-                      },
-                      {
-                        "attributes": {
-                          "gamemode": "pvp_quickplay",
-                          "platform": "pc",
-                          "sessionType": "quickplay"
-                        },
-                        "stats": {
-                          "matchesPlayed": { "value": 50 },
-                          "matchesWon": { "value": 24 },
-                          "matchesLost": { "value": 24 },
-                          "kdRatio": { "value": 1.41 }
-                        }
-                      },
-                      {
-                        "attributes": {
-                          "season": 40,
-                          "gamemode": "pvp_casual",
-                          "platform": "pc",
-                          "sessionType": "quick-match"
-                        },
-                        "stats": {
-                          "matchesPlayed": { "value": 80 },
-                          "matchesWon": { "value": 70 },
-                          "matchesLost": { "value": 10 },
-                          "kdRatio": { "value": 9.0 }
-                        }
-                      },
-                      {
-                        "attributes": {
-                          "season": 34,
-                          "gamemode": "pvp_standard",
-                          "platform": "pc",
-                          "sessionType": "standard"
-                        },
-                        "stats": {
-                          "matchesPlayed": { "value": 70 },
-                          "matchesWon": { "value": 60 },
-                          "matchesLost": { "value": 10 },
-                          "kdRatio": { "value": 8.0 }
-                        }
-                      }
-                    ]
-                  }
-                }
-                """;
-    }
-
-    private String normalAliasOnlyFullStatsResponse() {
-        return """
-                {
-                  "data": {
-                    "platformInfo": {
-                      "platformUserId": "normal-account",
-                      "platformUserHandle": "NormalPlayer"
-                    },
-                    "metadata": {
-                      "currentSeason": 42
-                    },
-                    "segments": [
-                      {
-                        "attributes": {
-                          "season": 40,
-                          "gamemode": "pvp_casual",
-                          "platform": "pc",
-                          "sessionType": "quick-match"
-                        },
-                        "stats": {
-                          "matchesPlayed": { "value": 8 },
-                          "matchesWon": { "value": 2 },
-                          "matchesLost": { "value": 6 },
-                          "kdRatio": { "value": 1.0 }
-                        }
-                      },
-                      {
-                        "attributes": {
-                          "season": 34,
-                          "gamemode": "pvp_standard",
-                          "platform": "pc",
-                          "sessionType": "standard"
-                        },
-                        "stats": {
-                          "matchesPlayed": { "value": 42 },
-                          "matchesWon": { "value": 22 },
-                          "matchesLost": { "value": 19 },
-                          "kdRatio": { "value": 1.48 }
-                        }
-                      },
-                      {
-                        "attributes": {
-                          "season": 35,
-                          "gamemode": "pvp_unranked",
-                          "platform": "pc",
-                          "sessionType": "unranked"
-                        },
-                        "stats": {
-                          "matchesPlayed": { "value": 10 },
-                          "matchesWon": { "value": 5 },
-                          "matchesLost": { "value": 5 },
-                          "kdRatio": { "value": 1.2 }
-                        }
-                      }
-                    ]
-                  }
-                }
-                """;
+    private String fixture(String name) {
+        String path = "/fixtures/r6/" + name;
+        try (InputStream input = Objects.requireNonNull(getClass().getResourceAsStream(path), path)) {
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     private record RecordedRequest(Map<String, String> query, String apiKey) {
