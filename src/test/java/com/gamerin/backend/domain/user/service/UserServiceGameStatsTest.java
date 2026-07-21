@@ -64,20 +64,28 @@ class UserServiceGameStatsTest {
     }
 
     @Test
-    void profileResponseRemovesR6InternalIdentifiersAndKeepsExistingGameStats() {
+    void profileResponseKeepsCommonPubgAndR6FieldsAndRemovesR6InternalIdentifier() {
         User user = savedUser(UUID.randomUUID(), "target", "Target");
         Map<String, Object> pubg = new HashMap<>();
         pubg.put("connected", true);
         pubg.put("playerName", "pubgPlayer");
         pubg.put("accountId", "pubg-account");
+        pubg.put("tierLabel", "Gold III");
+        pubg.put("kd", 1.42);
+        pubg.put("winRate", 12);
+        pubg.put("matches", 42);
+        pubg.put("statsMode", "RANKED");
 
         Map<String, Object> r6 = new HashMap<>();
         r6.put("connected", true);
         r6.put("playerName", "R6Player");
         r6.put("platform", "PC");
         r6.put("tierLabel", "Gold");
+        r6.put("kd", 1.18);
+        r6.put("winRate", 48);
+        r6.put("matches", 25);
+        r6.put("statsMode", "NORMAL");
         r6.put("accountId", "r6-account");
-        r6.put("trackerProfileId", "tracker-1");
 
         user.getProfile().updateGameStats(new HashMap<>(Map.of("PUBG", pubg, "R6", r6)));
 
@@ -90,16 +98,25 @@ class UserServiceGameStatsTest {
         assertThat(publicPubg)
                 .containsEntry("connected", true)
                 .containsEntry("playerName", "pubgPlayer")
+                .containsEntry("tierLabel", "Gold III")
+                .containsEntry("kd", 1.42)
+                .containsEntry("winRate", 12)
+                .containsEntry("matches", 42)
+                .containsEntry("statsMode", "RANKED")
                 .containsEntry("accountId", "pubg-account");
         assertThat(publicR6)
                 .containsEntry("connected", true)
                 .containsEntry("playerName", "R6Player")
                 .containsEntry("platform", "PC")
                 .containsEntry("tierLabel", "Gold")
-                .doesNotContainKeys("accountId", "trackerProfileId");
+                .containsEntry("kd", 1.18)
+                .containsEntry("winRate", 48)
+                .containsEntry("matches", 25)
+                .containsEntry("statsMode", "NORMAL")
+                .doesNotContainKey("accountId");
 
         assertThat(nestedMap(user.getProfile().getGameStats(), "PUBG")).containsKey("accountId");
-        assertThat(nestedMap(user.getProfile().getGameStats(), "R6")).containsKeys("accountId", "trackerProfileId");
+        assertThat(nestedMap(user.getProfile().getGameStats(), "R6")).containsKey("accountId");
     }
 
     @Test

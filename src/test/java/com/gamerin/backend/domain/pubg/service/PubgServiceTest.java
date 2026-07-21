@@ -6,9 +6,11 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.pubg.client.PubgApiClient;
 import com.gamerin.backend.domain.pubg.dto.response.PubgSummaryResponse;
 import com.gamerin.backend.domain.pubg.exception.NoRankedRecordException;
@@ -58,10 +60,20 @@ class PubgServiceTest {
         PubgSummaryResponse response = pubgService.getMySummary(CustomUserPrincipal.from(user));
 
         assertThat(response.connected()).isTrue();
+        assertThat(response.game()).isEqualTo("PUBG");
+        assertThat(response.playerName()).isEqualTo("PubgPlayer");
         assertThat(response.tierLabel()).isNull();
-        assertThat(response.kda()).isEqualTo(1.26);
+        assertThat(response.kd()).isEqualTo(1.26);
         assertThat(response.winRate()).isEqualTo(20);
-        assertThat(response.games()).isEqualTo(10);
+        assertThat(response.matches()).isEqualTo(10);
+        assertThat(response.statsMode()).isEqualTo(GameStatsMode.NORMAL);
+
+        Map<String, Object> stored = pubgStats(user.getProfile());
+        assertThat(stored)
+                .containsEntry("playerName", "PubgPlayer")
+                .containsEntry("kd", 1.26)
+                .containsEntry("matches", 10)
+                .containsEntry("statsMode", "NORMAL");
         verify(pubgApiClient).getNormalStats("account-1", "season-1", "squad");
     }
 
@@ -81,7 +93,7 @@ class PubgServiceTest {
     }
 
     @Test
-    void getMySummaryTruncatesKdaToTwoDecimalPlaces() {
+    void getMySummaryReturnsRankedCommonContractAndTruncatesKdToTwoDecimalPlaces() {
         User user = savedUser(UUID.randomUUID(), "tester", "Tester");
         user.getProfile().connectPubg("PubgPlayer", "account-1");
 
@@ -92,7 +104,71 @@ class PubgServiceTest {
 
         PubgSummaryResponse response = pubgService.getMySummary(CustomUserPrincipal.from(user));
 
-        assertThat(response.kda()).isEqualTo(3.76);
+        assertThat(response.game()).isEqualTo("PUBG");
+        assertThat(response.connected()).isTrue();
+        assertThat(response.playerName()).isEqualTo("PubgPlayer");
+        assertThat(response.tierLabel()).isEqualTo("Survivor 1");
+        assertThat(response.kd()).isEqualTo(3.76);
+        assertThat(response.winRate()).isEqualTo(31);
+        assertThat(response.matches()).isEqualTo(16);
+        assertThat(response.statsMode()).isEqualTo(GameStatsMode.RANKED);
+    }
+
+    @Test
+    void getMySummaryKeepsUnavailableKdAndWinRateNull() {
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        user.getProfile().connectPubg("PubgPlayer", "account-1");
+
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(pubgApiClient.findCurrentSeasonId()).thenReturn("season-1");
+        when(pubgApiClient.getRankedStats("account-1", "season-1", "squad"))
+                .thenReturn(new RankedStats(null, 16, null, "Gold", "III"));
+
+        PubgSummaryResponse response = pubgService.getMySummary(CustomUserPrincipal.from(user));
+
+        assertThat(response.kd()).isNull();
+        assertThat(response.winRate()).isNull();
+        assertThat(pubgStats(user.getProfile()))
+                .doesNotContainKeys("kd", "winRate")
+                .containsEntry("statsMode", "RANKED");
+    }
+
+    @Test
+    void getMySummaryLeavesStatsModeNullWhenNormalRecordHasNoMatches() {
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        user.getProfile().connectPubg("PubgPlayer", "account-1");
+
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(pubgApiClient.findCurrentSeasonId()).thenReturn("season-1");
+        when(pubgApiClient.getRankedStats("account-1", "season-1", "squad"))
+                .thenThrow(new NoRankedRecordException());
+        when(pubgApiClient.getNormalStats("account-1", "season-1", "squad"))
+                .thenReturn(new NormalStats(null, 0, 0));
+
+        PubgSummaryResponse response = pubgService.getMySummary(CustomUserPrincipal.from(user));
+
+        assertThat(response.connected()).isTrue();
+        assertThat(response.playerName()).isEqualTo("PubgPlayer");
+        assertThat(response.statsMode()).isNull();
+        assertThat(response.winRate()).isNull();
+        assertThat(pubgStats(user.getProfile())).doesNotContainKey("statsMode");
+    }
+
+    @Test
+    void getMySummaryReturnsNullableDisconnectedContract() {
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+
+        PubgSummaryResponse response = pubgService.getMySummary(CustomUserPrincipal.from(user));
+
+        assertThat(response.game()).isEqualTo("PUBG");
+        assertThat(response.connected()).isFalse();
+        assertThat(response.playerName()).isNull();
+        assertThat(response.tierLabel()).isNull();
+        assertThat(response.kd()).isNull();
+        assertThat(response.winRate()).isNull();
+        assertThat(response.matches()).isNull();
+        assertThat(response.statsMode()).isNull();
     }
 
     private void assertRankedFailureDoesNotFallBackToNormalStats(HttpStatus status) {
@@ -116,5 +192,10 @@ class PubgServiceTest {
         UserProfile profile = UserProfile.createDefault(user);
         user.setProfile(profile);
         return user;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> pubgStats(UserProfile profile) {
+        return (Map<String, Object>) profile.getGameStats().get("PUBG");
     }
 }

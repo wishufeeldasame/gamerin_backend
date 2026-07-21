@@ -135,7 +135,7 @@ public class UserService {
             }
         }
 
-        removeInternalFields(publicGameStats, "R6", "accountId", "trackerProfileId");
+        removeInternalFields(publicGameStats, "R6", "accountId");
         return publicGameStats;
     }
 

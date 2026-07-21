@@ -4,6 +4,7 @@ import java.net.URI;
 import java.time.Duration;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.r6.model.R6Profile;
 import com.gamerin.backend.domain.r6.model.R6ProfileRef;
 import com.gamerin.backend.domain.r6.model.R6SummaryStats;
@@ -106,7 +107,10 @@ public class R6DataStatsClient implements R6StatsClient {
                         tierLabel,
                         parsedStats.kd(),
                         parsedStats.winRate(),
-                        parsedStats.matches()
+                        parsedStats.matches(),
+                        parsedStats.matches() == null
+                                ? null
+                                : parsedStats.ranked() ? GameStatsMode.RANKED : GameStatsMode.NORMAL
                 )
         );
     }

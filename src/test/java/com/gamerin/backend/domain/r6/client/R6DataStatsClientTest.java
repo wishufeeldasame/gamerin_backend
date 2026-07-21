@@ -20,6 +20,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
+import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.r6.model.R6Profile;
 import com.gamerin.backend.domain.r6.model.R6ProfileRef;
 import com.sun.net.httpserver.HttpExchange;
@@ -79,6 +80,7 @@ class R6DataStatsClientTest {
         assertThat(profile.playerName()).isEqualTo("CanonicalPlayer");
         assertThat(profile.accountId()).isEqualTo("account-41");
         assertThat(profile.summary().tierLabel()).isEqualTo("EMERALD II");
+        assertThat(profile.summary().statsMode()).isEqualTo(GameStatsMode.RANKED);
 
         assertThat(requests).hasSize(2);
         RecordedRequest fullStatsRequest = requests.get(0);
@@ -106,6 +108,7 @@ class R6DataStatsClientTest {
 
         assertThat(profile.accountId()).isEqualTo("unranked-account");
         assertThat(profile.summary().tierLabel()).isNull();
+        assertThat(profile.summary().statsMode()).isNull();
         assertThat(requests).hasSize(1);
         assertThat(requests.get(0).query()).containsEntry("type", "fullStats");
     }
@@ -118,6 +121,7 @@ class R6DataStatsClientTest {
 
         assertThat(profile.summary().tierLabel()).isNull();
         assertThat(profile.summary().matches()).isEqualTo(50);
+        assertThat(profile.summary().statsMode()).isEqualTo(GameStatsMode.NORMAL);
         assertThat(requests).hasSize(1);
         assertThat(requests.get(0).query())
                 .containsEntry("type", "fullStats")

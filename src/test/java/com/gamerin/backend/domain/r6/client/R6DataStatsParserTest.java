@@ -26,7 +26,7 @@ class R6DataStatsParserTest {
         assertThat(stats.tierLabel()).isNull();
         assertThat(stats.kd()).isEqualTo(1.05);
         assertThat(stats.matches()).isEqualTo(117);
-        assertThat(stats.winRate()).isCloseTo(55.652173913, within(0.000000001));
+        assertThat(stats.winRate()).isCloseTo(54.700854701, within(0.000000001));
 
         assertThat(parser.parseLatestTierLabel(fixture("seasonal-stats.json")))
                 .isEqualTo("EMERALD II");
@@ -53,7 +53,7 @@ class R6DataStatsParserTest {
         assertThat(stats.ranked()).isFalse();
         assertThat(stats.tierLabel()).isNull();
         assertThat(stats.kd()).isEqualTo(1.41);
-        assertThat(stats.winRate()).isEqualTo(50.0);
+        assertThat(stats.winRate()).isEqualTo(48.0);
         assertThat(stats.matches()).isEqualTo(50);
     }
 
@@ -65,7 +65,7 @@ class R6DataStatsParserTest {
 
         assertThat(stats.ranked()).isFalse();
         assertThat(stats.kd()).isEqualTo(1.48);
-        assertThat(stats.winRate()).isCloseTo(53.658536585, within(0.000000001));
+        assertThat(stats.winRate()).isCloseTo(52.380952381, within(0.000000001));
         assertThat(stats.matches()).isEqualTo(42);
     }
 

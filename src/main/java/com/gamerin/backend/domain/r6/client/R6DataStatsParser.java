@@ -100,7 +100,7 @@ final class R6DataStatsParser {
             throw new InvalidResponseException();
         }
 
-        Double winRate = calculateWinRate(wins, losses);
+        Double winRate = calculateWinRate(wins, matches);
         String tierLabel = firstText(
                 statMetadata(segment, "rank", "rankName"),
                 statMetadata(segment, "rankPoints", "rankName"),
@@ -124,10 +124,9 @@ final class R6DataStatsParser {
         }
 
         Integer wins = firstStatInteger(segment, "wins", "matchesWon");
-        Integer losses = firstStatInteger(segment, "losses", "matchesLost");
         return StatsSnapshot.normal(
                 readStatDouble(segment, "kdRatio"),
-                calculateWinRate(wins, losses),
+                calculateWinRate(wins, matches),
                 matches
         );
     }
@@ -310,12 +309,11 @@ final class R6DataStatsParser {
         return readInteger(boardProfile.path("profile").path(fieldName));
     }
 
-    private Double calculateWinRate(Integer wins, Integer losses) {
-        if (wins == null || losses == null || wins < 0 || losses < 0) {
+    private Double calculateWinRate(Integer wins, Integer matches) {
+        if (wins == null || matches == null || wins < 0 || matches <= 0 || wins > matches) {
             return null;
         }
-        int completedMatches = wins + losses;
-        return completedMatches == 0 ? null : wins * 100.0 / completedMatches;
+        return wins * 100.0 / matches;
     }
 
     private Integer firstInteger(JsonNode... nodes) {

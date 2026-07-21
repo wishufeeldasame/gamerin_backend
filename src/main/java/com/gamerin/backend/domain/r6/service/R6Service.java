@@ -4,7 +4,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.util.Locale;
+import java.util.UUID;
 
+import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.r6.client.R6StatsClient;
 import com.gamerin.backend.domain.r6.dto.request.R6ConnectRequest;
 import com.gamerin.backend.domain.r6.dto.response.R6ConnectionResponse;
@@ -44,6 +46,8 @@ public class R6Service {
 
         R6Profile r6Profile = r6StatsClient.findProfile(playerName);
         validateProfileIdentifier(r6Profile);
+        String accountId = trimToNull(r6Profile.accountId());
+        validateR6AccountDuplicate(user.getId(), accountId);
 
         R6SummaryStats summary = normalizeSummaryMetrics(r6Profile.summary());
         OffsetDateTime updatedAt = OffsetDateTime.now();
@@ -51,11 +55,12 @@ public class R6Service {
                 playerName,
                 normalizePlayerName(playerName),
                 PLATFORM,
-                trimToNull(r6Profile.accountId()),
+                accountId,
                 summary == null ? null : summary.tierLabel(),
                 summary == null ? null : summary.kd(),
-                summary == null ? null : summary.winRate(),
+                summary == null ? null : roundWinRate(summary.winRate()),
                 summary == null ? null : summary.matches(),
+                summary == null ? null : summary.statsMode(),
                 updatedAt
         );
 
@@ -99,8 +104,9 @@ public class R6Service {
         profile.updateR6Summary(
                 summary == null ? null : summary.tierLabel(),
                 summary == null ? null : summary.kd(),
-                summary == null ? null : summary.winRate(),
+                summary == null ? null : roundWinRate(summary.winRate()),
                 summary == null ? null : summary.matches(),
+                summary == null ? null : summary.statsMode(),
                 updatedAt
         );
 
@@ -141,6 +147,17 @@ public class R6Service {
         return trimmed;
     }
 
+    private void validateR6AccountDuplicate(UUID userId, String accountId) {
+        boolean duplicated = userRepository.existsConnectedR6AccountIdByOtherUser(userId, accountId);
+
+        if (duplicated) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "이미 다른 유저가 사용 중인 R6 계정입니다."
+            );
+        }
+    }
+
     private String normalizePlayerName(String playerName) {
         return playerName.strip().toLowerCase(Locale.ROOT);
     }
@@ -153,7 +170,7 @@ public class R6Service {
     }
 
     private R6SummaryResponse disconnectedResponse() {
-        return new R6SummaryResponse(GAME, false, null, PLATFORM, null, null, null, null, null);
+        return new R6SummaryResponse(GAME, false, null, null, null, null, null, null, PLATFORM, null);
     }
 
     private R6SummaryResponse toSummaryResponse(UserProfile profile) {
@@ -161,11 +178,12 @@ public class R6Service {
                 GAME,
                 profile.hasConnectedR6(),
                 profile.getR6PlayerName(),
-                PLATFORM,
                 profile.getR6TierLabel(),
                 profile.getR6Kd(),
                 profile.getR6WinRate(),
                 profile.getR6Matches(),
+                profile.getR6StatsMode(),
+                PLATFORM,
                 profile.getR6UpdatedAt()
         );
     }
@@ -174,11 +192,13 @@ public class R6Service {
         if (summary == null) {
             return null;
         }
+        GameStatsMode statsMode = summary.statsMode();
         return new R6SummaryStats(
-                summary.tierLabel(),
+                statsMode == GameStatsMode.RANKED ? summary.tierLabel() : null,
                 truncate2(summary.kd()),
-                roundWinRate(summary.winRate()),
-                summary.matches()
+                summary.winRate(),
+                summary.matches(),
+                statsMode
         );
     }
 
@@ -192,12 +212,12 @@ public class R6Service {
                 .doubleValue();
     }
 
-    private Double roundWinRate(Double value) {
+    private Integer roundWinRate(Double value) {
         if (value == null) {
             return null;
         }
         validateFiniteMetric(value);
-        return (double) Math.round(value);
+        return (int) Math.round(value);
     }
 
     private void validateFiniteMetric(Double value) {

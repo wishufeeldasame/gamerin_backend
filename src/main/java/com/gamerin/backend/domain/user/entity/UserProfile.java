@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
+import com.gamerin.backend.domain.game.model.GameStatsMode;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -28,7 +29,6 @@ public class UserProfile {
     private static final String PUBG_KEY = "PUBG";
     private static final String R6_KEY = "R6";
     private static final String ACCOUNT_ID_KEY = "accountId";
-    private static final String LEGACY_TRACKER_PROFILE_ID_KEY = "trackerProfileId";
     private static final String PLAYER_NAME_KEY = "playerName";
     private static final String PLAYER_NAME_NORMALIZED_KEY = "playerNameNormalized";
     private static final String PLATFORM_KEY = "platform";
@@ -39,6 +39,7 @@ public class UserProfile {
     private static final String WIN_RATE_KEY = "winRate";
     private static final String GAMES_KEY = "games";
     private static final String MATCHES_KEY = "matches";
+    private static final String STATS_MODE_KEY = "statsMode";
     private static final String UPDATED_AT_KEY = "updatedAt";
 
     private static final String RIOT_KEY = "RIOT";
@@ -187,6 +188,10 @@ public class UserProfile {
         return accountId instanceof String value && !value.isBlank() ? value : null;
     }
 
+    public String getPubgPlayerName() {
+        return getStringValue(getPubgStats(), PLAYER_NAME_KEY);
+    }
+
     public void connectPubg(String playerName, String accountId) {
         Map<String, Object> pubgStats = new HashMap<>(getPubgStats());
         pubgStats.put(ACCOUNT_ID_KEY, accountId);
@@ -198,13 +203,20 @@ public class UserProfile {
         this.gameStats = nextGameStats;
     }
 
-    public void updatePubgSummary(String tierLabel, double kda, int winRate, int games) {
+    public void updatePubgSummary(
+            String tierLabel,
+            Double kd,
+            Integer winRate,
+            Integer matches,
+            GameStatsMode statsMode
+    ) {
         Map<String, Object> pubgStats = new HashMap<>(getPubgStats());
         pubgStats.put(CONNECTED_KEY, true);
-        pubgStats.put(TIER_LABEL_KEY, tierLabel);
-        pubgStats.put(KDA_KEY, kda);
-        pubgStats.put(WIN_RATE_KEY, winRate);
-        pubgStats.put(GAMES_KEY, games);
+        putNullable(pubgStats, TIER_LABEL_KEY, tierLabel);
+        putNullable(pubgStats, KD_KEY, kd);
+        putNullable(pubgStats, WIN_RATE_KEY, winRate);
+        putNullable(pubgStats, MATCHES_KEY, matches);
+        putNullable(pubgStats, STATS_MODE_KEY, statsMode == null ? null : statsMode.name());
 
         Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
         nextGameStats.put(PUBG_KEY, pubgStats);
@@ -242,8 +254,8 @@ public class UserProfile {
         return getDoubleValue(getR6Stats(), KD_KEY);
     }
 
-    public Double getR6WinRate() {
-        return getDoubleValue(getR6Stats(), WIN_RATE_KEY);
+    public Integer getR6WinRate() {
+        return getIntegerValue(getR6Stats(), WIN_RATE_KEY);
     }
 
     public Integer getR6Matches() {
@@ -262,6 +274,10 @@ public class UserProfile {
         }
     }
 
+    public GameStatsMode getR6StatsMode() {
+        return getGameStatsModeValue(getR6Stats(), STATS_MODE_KEY);
+    }
+
     public void connectR6(
             String playerName,
             String playerNameNormalized,
@@ -269,8 +285,9 @@ public class UserProfile {
             String accountId,
             String tierLabel,
             Double kd,
-            Double winRate,
+            Integer winRate,
             Integer matches,
+            GameStatsMode statsMode,
             OffsetDateTime updatedAt
     ) {
         Map<String, Object> r6Stats = new HashMap<>(getR6Stats());
@@ -279,8 +296,7 @@ public class UserProfile {
         r6Stats.put(PLAYER_NAME_NORMALIZED_KEY, playerNameNormalized);
         r6Stats.put(PLATFORM_KEY, platform);
         putNullable(r6Stats, ACCOUNT_ID_KEY, accountId);
-        r6Stats.remove(LEGACY_TRACKER_PROFILE_ID_KEY);
-        putR6SummaryValues(r6Stats, tierLabel, kd, winRate, matches, updatedAt);
+        putR6SummaryValues(r6Stats, tierLabel, kd, winRate, matches, statsMode, updatedAt);
 
         Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
         nextGameStats.put(R6_KEY, r6Stats);
@@ -290,14 +306,14 @@ public class UserProfile {
     public void updateR6Summary(
             String tierLabel,
             Double kd,
-            Double winRate,
+            Integer winRate,
             Integer matches,
+            GameStatsMode statsMode,
             OffsetDateTime updatedAt
     ) {
         Map<String, Object> r6Stats = new HashMap<>(getR6Stats());
         r6Stats.put(CONNECTED_KEY, true);
-        r6Stats.remove(LEGACY_TRACKER_PROFILE_ID_KEY);
-        putR6SummaryValues(r6Stats, tierLabel, kd, winRate, matches, updatedAt);
+        putR6SummaryValues(r6Stats, tierLabel, kd, winRate, matches, statsMode, updatedAt);
 
         Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
         nextGameStats.put(R6_KEY, r6Stats);
@@ -396,14 +412,16 @@ public class UserProfile {
             Map<String, Object> r6Stats,
             String tierLabel,
             Double kd,
-            Double winRate,
+            Integer winRate,
             Integer matches,
+            GameStatsMode statsMode,
             OffsetDateTime updatedAt
     ) {
         putNullable(r6Stats, TIER_LABEL_KEY, tierLabel);
         putNullable(r6Stats, KD_KEY, kd);
         putNullable(r6Stats, WIN_RATE_KEY, winRate);
         putNullable(r6Stats, MATCHES_KEY, matches);
+        putNullable(r6Stats, STATS_MODE_KEY, statsMode == null ? null : statsMode.name());
         putNullable(r6Stats, UPDATED_AT_KEY, updatedAt == null ? null : updatedAt.toString());
     }
 
@@ -428,13 +446,6 @@ public class UserProfile {
         if (value instanceof Number number) {
             return number.doubleValue();
         }
-        if (value instanceof String text && !text.isBlank()) {
-            try {
-                return Double.parseDouble(text);
-            } catch (NumberFormatException e) {
-                return null;
-            }
-        }
         return null;
     }
 
@@ -443,14 +454,19 @@ public class UserProfile {
         if (value instanceof Number number) {
             return number.intValue();
         }
-        if (value instanceof String text && !text.isBlank()) {
-            try {
-                return Integer.parseInt(text);
-            } catch (NumberFormatException e) {
-                return null;
-            }
-        }
         return null;
+    }
+
+    private GameStatsMode getGameStatsModeValue(Map<String, Object> source, String key) {
+        String value = getStringValue(source, key);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return GameStatsMode.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private Map<String, Object> getSafeGameStats() {

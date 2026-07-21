@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import com.gamerin.backend.domain.game.model.GameStatsMode;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -25,8 +26,9 @@ class UserProfileTest {
                 "account-1",
                 "Gold",
                 1.2,
-                52.0,
+                52,
                 100,
+                GameStatsMode.RANKED,
                 OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
         );
 
@@ -49,15 +51,17 @@ class UserProfileTest {
                 "account-1",
                 "Silver",
                 1.0,
-                50.0,
+                50,
                 20,
+                GameStatsMode.RANKED,
                 OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
         );
         profile.updateR6Summary(
                 "Gold",
                 1.2,
-                55.0,
+                55,
                 30,
+                GameStatsMode.RANKED,
                 OffsetDateTime.parse("2026-07-11T12:00:00+09:00")
         );
         profile.disconnectR6();
@@ -80,16 +84,18 @@ class UserProfileTest {
                 "account-1",
                 "Silver",
                 1.0,
-                40.0,
+                40,
                 20,
+                GameStatsMode.RANKED,
                 OffsetDateTime.parse("2026-07-09T12:00:00+09:00")
         );
 
         profile.updateR6Summary(
                 "Emerald",
                 1.5,
-                60.0,
+                60,
                 150,
+                GameStatsMode.RANKED,
                 OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
         );
 
@@ -98,8 +104,9 @@ class UserProfileTest {
         assertThat(profile.getR6AccountId()).isEqualTo("account-1");
         assertThat(profile.getR6TierLabel()).isEqualTo("Emerald");
         assertThat(profile.getR6Kd()).isEqualTo(1.5);
-        assertThat(profile.getR6WinRate()).isEqualTo(60.0);
+        assertThat(profile.getR6WinRate()).isEqualTo(60);
         assertThat(profile.getR6Matches()).isEqualTo(150);
+        assertThat(profile.getR6StatsMode()).isEqualTo(GameStatsMode.RANKED);
     }
 
     @Test
@@ -111,6 +118,7 @@ class UserProfileTest {
                 "r6player",
                 "PC",
                 "account-1",
+                null,
                 null,
                 null,
                 null,
@@ -138,6 +146,7 @@ class UserProfileTest {
                 null,
                 null,
                 null,
+                null,
                 OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
         );
         assertThat(profile.hasConnectedR6()).isTrue();
@@ -146,35 +155,6 @@ class UserProfileTest {
         profile.disconnectR6();
 
         assertThat(profile.getGameStats()).doesNotContainKey("R6");
-        assertThat(profile.getGameStats()).containsKey("PUBG");
-    }
-
-    @Test
-    void connectR6RemovesLegacyTrackerIdentifierWithoutChangingOtherGameData() {
-        UserProfile profile = savedUser().getProfile();
-        Map<String, Object> legacyR6 = new HashMap<>();
-        legacyR6.put("connected", true);
-        legacyR6.put("trackerProfileId", "legacy-tracker-id");
-        profile.updateGameStats(new HashMap<>(Map.of(
-                "R6", legacyR6,
-                "PUBG", Map.of("playerName", "pubgPlayer")
-        )));
-
-        profile.connectR6(
-                "R6Player",
-                "r6player",
-                "PC",
-                "account-1",
-                "Gold",
-                1.2,
-                52.0,
-                100,
-                OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
-        );
-
-        assertThat(nestedMap(profile.getGameStats(), "R6"))
-                .containsEntry("accountId", "account-1")
-                .doesNotContainKey("trackerProfileId");
         assertThat(profile.getGameStats()).containsKey("PUBG");
     }
 

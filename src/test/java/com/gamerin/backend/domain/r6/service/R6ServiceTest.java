@@ -2,6 +2,7 @@ package com.gamerin.backend.domain.r6.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -12,6 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.r6.client.R6StatsClient;
 import com.gamerin.backend.domain.r6.dto.request.R6ConnectRequest;
 import com.gamerin.backend.domain.r6.dto.response.R6ConnectionResponse;
@@ -124,7 +126,7 @@ class R6ServiceTest {
         when(r6StatsClient.findProfile("R6Player")).thenReturn(new R6Profile(
                 "R6Player",
                 "account-1",
-                new R6SummaryStats("Gold", 1.239, 52.4, 120)
+                new R6SummaryStats("Gold", 1.239, 52.4, 120, GameStatsMode.RANKED)
         ));
 
         R6ConnectionResponse response = r6Service.connect(
@@ -145,10 +147,76 @@ class R6ServiceTest {
                 .containsEntry("accountId", "account-1")
                 .containsEntry("tierLabel", "Gold")
                 .containsEntry("kd", 1.23)
-                .containsEntry("winRate", 52.0)
-                .containsEntry("matches", 120);
+                .containsEntry("winRate", 52)
+                .containsEntry("matches", 120)
+                .containsEntry("statsMode", "RANKED");
         assertThat(r6.get("updatedAt")).isInstanceOf(String.class);
         assertThat(profile.getGameStats()).containsKey("PUBG");
+        verify(userRepository).existsConnectedR6AccountIdByOtherUser(user.getId(), "account-1");
+    }
+
+    @Test
+    void connectRejectsR6AccountAlreadyConnectedByAnotherUser() {
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        UserProfile profile = user.getProfile();
+        profile.connectPubg("pubgPlayer", "pubg-account");
+        Map<String, Object> before = deepCopy(profile.getGameStats());
+
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(r6StatsClient.findProfile("R6Player")).thenReturn(new R6Profile(
+                "R6Player",
+                "account-1",
+                new R6SummaryStats("Gold", 1.2, 52.0, 120, GameStatsMode.RANKED)
+        ));
+        when(userRepository.existsConnectedR6AccountIdByOtherUser(user.getId(), "account-1"))
+                .thenReturn(true);
+
+        assertThatThrownBy(() -> r6Service.connect(
+                CustomUserPrincipal.from(user),
+                new R6ConnectRequest("R6Player")
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(error -> {
+                    ResponseStatusException statusException = (ResponseStatusException) error;
+                    assertThat(statusException.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(statusException.getReason()).isEqualTo("이미 다른 유저가 사용 중인 R6 계정입니다.");
+                });
+        assertThat(profile.getGameStats()).isEqualTo(before);
+    }
+
+    @Test
+    void connectAllowsCurrentUserToReconnectSameR6Account() {
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        UserProfile profile = user.getProfile();
+        profile.connectR6(
+                "OldR6Player",
+                "oldr6player",
+                "PC",
+                "account-1",
+                "Silver",
+                1.0,
+                40,
+                20,
+                GameStatsMode.RANKED,
+                OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
+        );
+
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(r6StatsClient.findProfile("R6Player")).thenReturn(new R6Profile(
+                "R6Player",
+                "account-1",
+                new R6SummaryStats("Gold", 1.2, 52.0, 120, GameStatsMode.RANKED)
+        ));
+
+        R6ConnectionResponse response = r6Service.connect(
+                CustomUserPrincipal.from(user),
+                new R6ConnectRequest("R6Player")
+        );
+
+        assertThat(response.connected()).isTrue();
+        assertThat(profile.getR6AccountId()).isEqualTo("account-1");
+        assertThat(profile.getR6PlayerName()).isEqualTo("R6Player");
+        verify(userRepository).existsConnectedR6AccountIdByOtherUser(user.getId(), "account-1");
     }
 
     @Test
@@ -183,8 +251,9 @@ class R6ServiceTest {
                 "account-1",
                 "Gold",
                 1.2,
-                50.0,
+                50,
                 10,
+                GameStatsMode.RANKED,
                 OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
         );
 
@@ -207,6 +276,7 @@ class R6ServiceTest {
         assertThat(response.game()).isEqualTo("R6");
         assertThat(response.platform()).isEqualTo("PC");
         assertThat(response.playerName()).isNull();
+        assertThat(response.statsMode()).isNull();
         verifyNoInteractions(r6StatsClient);
     }
 
@@ -222,8 +292,9 @@ class R6ServiceTest {
                 "account-1",
                 "Silver",
                 1.0,
-                40.0,
+                40,
                 20,
+                GameStatsMode.RANKED,
                 storedUpdatedAt
         );
         Map<String, Object> before = deepCopy(profile.getGameStats());
@@ -237,8 +308,9 @@ class R6ServiceTest {
         assertThat(response.platform()).isEqualTo("PC");
         assertThat(response.tierLabel()).isEqualTo("Silver");
         assertThat(response.kd()).isEqualTo(1.0);
-        assertThat(response.winRate()).isEqualTo(40.0);
+        assertThat(response.winRate()).isEqualTo(40);
         assertThat(response.matches()).isEqualTo(20);
+        assertThat(response.statsMode()).isEqualTo(GameStatsMode.RANKED);
         assertThat(response.updatedAt()).isEqualTo(storedUpdatedAt);
         assertThat(profile.getGameStats()).isEqualTo(before);
         verifyNoInteractions(r6StatsClient);
@@ -294,14 +366,15 @@ class R6ServiceTest {
                 "account-1",
                 "Silver",
                 1.0,
-                40.0,
+                40,
                 20,
+                GameStatsMode.RANKED,
                 OffsetDateTime.parse("2026-07-09T12:00:00+09:00")
         );
 
         when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
         when(r6StatsClient.getSummary(new R6ProfileRef("R6Player", "account-1")))
-                .thenReturn(new R6SummaryStats("Platinum", 1.459, 58.6, 130));
+                .thenReturn(new R6SummaryStats("Platinum", 1.459, 58.6, 130, GameStatsMode.RANKED));
 
         R6SummaryResponse response = r6Service.refreshMySummary(CustomUserPrincipal.from(user));
 
@@ -310,8 +383,9 @@ class R6ServiceTest {
         assertThat(response.platform()).isEqualTo("PC");
         assertThat(response.tierLabel()).isEqualTo("Platinum");
         assertThat(response.kd()).isEqualTo(1.45);
-        assertThat(response.winRate()).isEqualTo(59.0);
+        assertThat(response.winRate()).isEqualTo(59);
         assertThat(response.matches()).isEqualTo(130);
+        assertThat(response.statsMode()).isEqualTo(GameStatsMode.RANKED);
         assertThat(response.updatedAt()).isNotNull();
 
         Map<String, Object> r6 = r6Stats(profile);
@@ -321,8 +395,40 @@ class R6ServiceTest {
                 .containsEntry("accountId", "account-1")
                 .containsEntry("tierLabel", "Platinum")
                 .containsEntry("kd", 1.45)
-                .containsEntry("winRate", 59.0)
-                .containsEntry("matches", 130);
+                .containsEntry("winRate", 59)
+                .containsEntry("matches", 130)
+                .containsEntry("statsMode", "RANKED");
+    }
+
+    @Test
+    void refreshMySummaryMarksNormalStatsAndDoesNotExposeTier() {
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        UserProfile profile = user.getProfile();
+        profile.connectR6(
+                "R6Player",
+                "r6player",
+                "PC",
+                "account-1",
+                "Silver",
+                1.0,
+                40,
+                20,
+                GameStatsMode.RANKED,
+                OffsetDateTime.parse("2026-07-09T12:00:00+09:00")
+        );
+
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(r6StatsClient.getSummary(new R6ProfileRef("R6Player", "account-1")))
+                .thenReturn(new R6SummaryStats("stale-tier", 1.239, 48.4, 25, GameStatsMode.NORMAL));
+
+        R6SummaryResponse response = r6Service.refreshMySummary(CustomUserPrincipal.from(user));
+
+        assertThat(response.tierLabel()).isNull();
+        assertThat(response.statsMode()).isEqualTo(GameStatsMode.NORMAL);
+        assertThat(response.winRate()).isEqualTo(48);
+        assertThat(r6Stats(profile))
+                .doesNotContainKey("tierLabel")
+                .containsEntry("statsMode", "NORMAL");
     }
 
     @Test
@@ -363,8 +469,9 @@ class R6ServiceTest {
                 "account-1",
                 "Silver",
                 1.0,
-                40.0,
+                40,
                 20,
+                GameStatsMode.RANKED,
                 OffsetDateTime.parse("2026-07-09T12:00:00+09:00")
         );
         Map<String, Object> before = deepCopy(profile.getGameStats());
@@ -389,8 +496,9 @@ class R6ServiceTest {
                 null,
                 "Silver",
                 1.0,
-                40.0,
+                40,
                 20,
+                GameStatsMode.RANKED,
                 OffsetDateTime.parse("2026-07-09T12:00:00+09:00")
         );
         return user;

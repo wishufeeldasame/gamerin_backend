@@ -85,7 +85,7 @@
 일반전도 플랫폼 값이 없거나 `pc`인 세그먼트만 사용한다.
 `pvp_quickplay`는 통합값이므로 하위 모드와 합산하지 않는다.
 일반전 fallback의 `tierLabel`은 항상 `null`이다.
-경쟁전과 일반전 기록이 모두 없으면 네 요약 값 모두 `null`이다.
+경쟁전과 일반전 기록이 모두 없으면 전적 요약 값과 `statsMode`는 모두 `null`이다.
 
 ### 4.3 공개 값 계산
 
@@ -94,9 +94,11 @@
 | `tierLabel` | 선택한 경쟁전 티어, 일반전이면 `null` |
 | `kd` | 선택 세그먼트의 `stats.kdRatio.value`, 소수 셋째 자리부터 버림 |
 | `matches` | `matchesPlayed`, 없으면 승+패+이탈 |
-| `winRate` | `wins / (wins + losses) * 100`, 가장 가까운 정수로 반올림 |
+| `winRate` | `wins / matches * 100`, 가장 가까운 정수로 반올림 |
+| `statsMode` | 경쟁전이면 `RANKED`, 일반전 fallback이면 `NORMAL`, 전적이 없으면 `null` |
 
-승률 분모에는 이탈을 넣지 않는다. 승+패가 0이거나 필요한 값이 없으면 승률은 `null`이다.
+`matches`가 승+패+이탈로 계산되거나 `matchesPlayed`에 이탈 경기가 포함되면 승률 분모에도 이탈이 포함된다.
+경기 수가 0이거나 필요한 값이 없으면 승률은 `null`이다.
 음수 경기 수, 비정상 숫자, `NaN`·무한대는 잘못된 외부 응답으로 처리한다.
 
 ## 5. GamerIN API
@@ -109,6 +111,8 @@
 
 - 닉네임의 앞뒤 공백을 제거하며, 빈 값과 100자 초과는 거부한다.
 - `fullStats`를 호출해 `platformUserId`와 초기 전적을 확인한 뒤 저장한다.
+- 다른 사용자가 같은 `platformUserId`를 연결 중이면 `409 Conflict`를 반환하고 저장하지 않는다.
+- 현재 사용자의 동일 계정 재연결은 허용한다.
 - 저장 닉네임은 요청값을 정리한 값이고, 검색용 값은 소문자로 별도 저장한다.
 - 성공 응답 데이터는 `connected`, `playerName`, `platform`만 포함한다.
 
@@ -120,8 +124,8 @@ GET /api/v1/r6/me
 
 - 연결되지 않았거나 저장된 `accountId`가 없으면 외부 호출 없이 연결되지 않은 응답을 반환한다.
 - 연결됐으면 `UserProfile.gameStats.R6`에 저장된 전적을 즉시 반환하며, R6Data를 호출하지 않고 DB 값과 `updatedAt`도 변경하지 않는다.
-- 성공 응답 필드는 `game`, `connected`, `playerName`, `platform`, `tierLabel`, `kd`,
-  `winRate`, `matches`, `updatedAt`이다.
+- 성공 응답 필드는 `game`, `connected`, `playerName`, `tierLabel`, `kd`, `winRate`, `matches`,
+  `statsMode`, `platform`, `updatedAt`이다.
 
 ### 5.3 내 전적 갱신
 
@@ -154,8 +158,9 @@ DELETE /api/v1/r6/disconnect
     "accountId": "r6-platform-user-id",
     "tierLabel": "EMERALD II",
     "kd": 1.05,
-    "winRate": 56.0,
+    "winRate": 55,
     "matches": 117,
+    "statsMode": "RANKED",
     "updatedAt": "2026-07-17T03:30:00+09:00"
   }
 }
@@ -165,8 +170,7 @@ DELETE /api/v1/r6/disconnect
 - 연결 및 명시적 갱신이 성공할 때 `updatedAt`을 서버 현재 시각으로 기록한다.
 - 연결·갱신·해제 시 다른 게임 항목은 보존한다.
 - 외부 호출 또는 파싱이 실패하면 R6 저장값을 부분 갱신하지 않는다.
-- 이전 `trackerProfileId`는 성공적인 연결 또는 갱신 시 제거한다.
-- `accountId`와 `trackerProfileId`는 R6 응답 및 공개 프로필에서 노출하지 않는다.
+- `accountId`는 R6 응답 및 공개 프로필에서 노출하지 않는다.
 
 ## 7. 오류 계약
 
@@ -176,6 +180,7 @@ DELETE /api/v1/r6/disconnect
 | 사용자 프로필 미초기화 | `409 Conflict` | 변경 없음 |
 | 닉네임 누락·공백·100자 초과 | `400 Bad Request` | 외부 호출 없음 |
 | R6Data 계정 없음 (`404`) | `404 Not Found` | 변경 없음 |
+| 다른 사용자가 동일 R6 accountId 연결 중 | `409 Conflict` | 변경 없음 |
 | 저장 계정과 갱신 계정 ID 불일치 | `409 Conflict` | 변경 없음 |
 | R6Data 요청 제한 (`429`) | `429 Too Many Requests` | 변경 없음 |
 | API 키·기본 URL 누락 | `503 Service Unavailable` | 변경 없음 |

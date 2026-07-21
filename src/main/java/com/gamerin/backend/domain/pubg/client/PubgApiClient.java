@@ -123,9 +123,9 @@ public class PubgApiClient {
 
             TierInfo tier = modeStats.currentTier();
             return new RankedStats(
-                    resolveRankedKda(modeStats),
-                    nullSafe(modeStats.roundsPlayed()),
-                    nullSafe(modeStats.wins()),
+                    resolveRankedKd(modeStats),
+                    modeStats.roundsPlayed(),
+                    nullableNonNegative(modeStats.wins()),
                     tier == null ? null : tier.tier(),
                     tier == null ? null : tier.subTier()
             );
@@ -165,9 +165,9 @@ public class PubgApiClient {
             }
 
             return new NormalStats(
-                    resolveNormalKda(modeStats),
-                    nullSafe(modeStats.roundsPlayed()),
-                    nullSafe(modeStats.wins())
+                    resolveNormalKd(modeStats),
+                    nullableNonNegative(modeStats.roundsPlayed()),
+                    nullableNonNegative(modeStats.wins())
             );
         } catch (HttpClientErrorException.NotFound e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "PUBG normal season record not found.");
@@ -184,56 +184,21 @@ public class PubgApiClient {
         }
     }
 
-    private double resolveNormalKda(NormalGameModeStats modeStats) {
-        Double apiKda = modeStats.kda();
-        if (apiKda != null && apiKda > 0.0) {
-            return apiKda;
-        }
-
-        Integer kills = modeStats.kills();
+    private Double resolveNormalKd(NormalGameModeStats modeStats) {
         Integer deaths = modeStats.deaths();
-
-        if (kills != null && deaths != null) {
-            if (deaths == 0) {
-                return kills.doubleValue();
-            }
-            return kills.doubleValue() / deaths;
-        }
-
-        Integer losses = modeStats.losses();
-
-        if (kills != null && losses != null) {
-            if (losses == 0) {
-                return kills.doubleValue();
-            }
-            return kills.doubleValue() / losses;
-        }
-
-        return apiKda == null ? 0.0 : apiKda;
+        // PUBG season gameModeStats may omit deaths while exposing losses; use losses only when deaths is absent.
+        return calculateKd(modeStats.kills(), deaths == null ? modeStats.losses() : deaths);
     }
 
-    private double resolveRankedKda(RankedGameModeStats modeStats) {
-        Double apiKda = modeStats.kda();
-        if (apiKda != null && apiKda >= 0.0) {
-            return apiKda;
+    private Double resolveRankedKd(RankedGameModeStats modeStats) {
+        return calculateKd(modeStats.kills(), modeStats.deaths());
+    }
+
+    private Double calculateKd(Integer kills, Integer deaths) {
+        if (kills == null || deaths == null || kills < 0 || deaths <= 0) {
+            return null;
         }
-
-        Integer kills = modeStats.kills();
-        Integer assists = modeStats.assists();
-        Integer deaths = modeStats.deaths();
-
-        if (kills == null || kills < 0
-                || assists == null || assists < 0
-                || deaths == null || deaths < 0) {
-            return 0.0;
-        }
-
-        double killsAndAssists = kills.doubleValue() + assists;
-        if (deaths == 0) {
-            return killsAndAssists;
-        }
-
-        return killsAndAssists / deaths;
+        return kills.doubleValue() / deaths;
     }
 
     private boolean hasRankedRecord(RankedGameModeStats modeStats) {
@@ -242,5 +207,15 @@ public class PubgApiClient {
 
     private int nullSafe(Integer value) {
         return value == null ? 0 : value;
+    }
+
+    private Integer nullableNonNegative(Integer value) {
+        if (value == null) {
+            return null;
+        }
+        if (value < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to load PUBG stats.");
+        }
+        return value;
     }
 }

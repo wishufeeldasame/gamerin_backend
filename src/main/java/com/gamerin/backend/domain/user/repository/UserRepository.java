@@ -49,6 +49,19 @@ public interface UserRepository extends JpaRepository<User, UUID> {
                 SELECT 1
                 FROM user_profiles up
                 WHERE up.user_id <> :userId
+                  AND LOWER(up.game_stats -> 'R6' ->> 'accountId') = LOWER(:accountId)
+                  AND COALESCE((up.game_stats -> 'R6' ->> 'connected')::boolean, false) = true
+            )
+            """, nativeQuery = true)
+    boolean existsConnectedR6AccountIdByOtherUser(
+            @Param("userId") UUID userId,
+            @Param("accountId") String accountId);
+
+    @Query(value = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM user_profiles up
+                WHERE up.user_id <> :userId
                 AND up.game_stats -> 'RIOT' ->> 'puuid' = :puuid
                 AND COALESCE((up.game_stats -> 'RIOT' ->> 'connected')::boolean, false) = true
             )

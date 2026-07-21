@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 import java.time.OffsetDateTime;
 import java.util.Set;
 
+import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.r6.dto.request.R6ConnectRequest;
 import com.gamerin.backend.domain.r6.dto.response.R6ConnectionResponse;
 import com.gamerin.backend.domain.r6.dto.response.R6SummaryResponse;
@@ -59,11 +60,12 @@ class R6ControllerTest {
                 "R6",
                 true,
                 "R6Player",
-                "PC",
                 "Gold",
                 1.2,
-                52.0,
+                52,
                 100,
+                GameStatsMode.RANKED,
+                "PC",
                 OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
         );
         when(r6Service.getMySummary(principal)).thenReturn(serviceResponse);
@@ -83,11 +85,12 @@ class R6ControllerTest {
                 "R6",
                 true,
                 "R6Player",
-                "PC",
                 "Platinum",
                 1.45,
-                59.0,
+                59,
                 130,
+                GameStatsMode.RANKED,
+                "PC",
                 OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
         );
         when(r6Service.refreshMySummary(principal)).thenReturn(serviceResponse);
