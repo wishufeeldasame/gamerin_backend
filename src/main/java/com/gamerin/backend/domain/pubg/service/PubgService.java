@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.UUID;
 
+import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.pubg.client.PubgApiClient;
 import com.gamerin.backend.domain.pubg.dto.request.PubgConnectRequest;
 import com.gamerin.backend.domain.pubg.dto.response.PubgConnectionResponse;
@@ -66,13 +67,14 @@ public class PubgService {
         UserProfile profile = getCurrentProfile(user);
 
         if (!profile.hasConnectedPubg()) {
-            return new PubgSummaryResponse(GAME_NAME, null, 0.0, 0, 0, false);
+            return disconnectedResponse();
         }
 
         String accountId = profile.getPubgAccountId();
         if (accountId == null) {
-            return new PubgSummaryResponse(GAME_NAME, null, 0.0, 0, 0, false);
+            return disconnectedResponse();
         }
+        String playerName = profile.getPubgPlayerName();
 
         String seasonId = pubgApiClient.findCurrentSeasonId();
 
@@ -81,13 +83,25 @@ public class PubgService {
             rankedStats = pubgApiClient.getRankedStats(accountId, seasonId, RANKED_MODE);
         } catch (NoRankedRecordException e) {
             NormalStats normalStats = pubgApiClient.getNormalStats(accountId, seasonId, NORMAL_MODE);
-            PubgSummaryResponse response = toNormalSummary(normalStats);
-            profile.updatePubgSummary(response.tierLabel(), response.kda(), response.winRate(), response.games());
+            PubgSummaryResponse response = toNormalSummary(playerName, normalStats);
+            profile.updatePubgSummary(
+                    response.tierLabel(),
+                    response.kd(),
+                    response.winRate(),
+                    response.matches(),
+                    response.statsMode()
+            );
             return response;
         }
 
-        PubgSummaryResponse response = toRankedSummary(rankedStats);
-        profile.updatePubgSummary(response.tierLabel(), response.kda(), response.winRate(), response.games());
+        PubgSummaryResponse response = toRankedSummary(playerName, rankedStats);
+        profile.updatePubgSummary(
+                response.tierLabel(),
+                response.kd(),
+                response.winRate(),
+                response.matches(),
+                response.statsMode()
+        );
         return response;
     }
 
@@ -124,39 +138,52 @@ public class PubgService {
         return tier + " " + subTier;
     }
 
-    private double truncate2(double value) {
+    private Double truncate2(Double value) {
+        if (value == null) {
+            return null;
+        }
         return BigDecimal.valueOf(value)
                 .setScale(2, RoundingMode.DOWN)
                 .doubleValue();
     }
 
-    private PubgSummaryResponse toRankedSummary(RankedStats stats) {
-        int games = stats.roundsPlayed();
-        int wins = stats.wins();
-        int winRate = games == 0 ? 0 : (int) Math.round((wins * 100.0) / games);
+    private PubgSummaryResponse toRankedSummary(String playerName, RankedStats stats) {
+        int matches = stats.roundsPlayed();
 
         return new PubgSummaryResponse(
                 GAME_NAME,
+                true,
+                playerName,
                 toTierLabel(stats.currentTier(), stats.currentSubTier()),
-                truncate2(stats.kda()),
-                winRate,
-                games,
-                true
+                truncate2(stats.kd()),
+                calculateWinRate(stats.wins(), matches),
+                matches,
+                GameStatsMode.RANKED
         );
     }
 
-    private PubgSummaryResponse toNormalSummary(NormalStats stats) {
-        int games = stats.roundsPlayed();
-        int wins = stats.wins();
-        int winRate = games == 0 ? 0 : (int) Math.round((wins * 100.0) / games);
-
+    private PubgSummaryResponse toNormalSummary(String playerName, NormalStats stats) {
+        Integer matches = stats.roundsPlayed();
         return new PubgSummaryResponse(
                 GAME_NAME,
+                true,
+                playerName,
                 null,
-                truncate2(stats.kda()),
-                winRate,
-                games,
-                true
+                truncate2(stats.kd()),
+                calculateWinRate(stats.wins(), matches),
+                matches,
+                matches == null || matches <= 0 ? null : GameStatsMode.NORMAL
         );
+    }
+
+    private Integer calculateWinRate(Integer wins, Integer matches) {
+        if (wins == null || matches == null || matches <= 0 || wins < 0 || wins > matches) {
+            return null;
+        }
+        return (int) Math.round(wins * 100.0 / matches);
+    }
+
+    private PubgSummaryResponse disconnectedResponse() {
+        return new PubgSummaryResponse(GAME_NAME, false, null, null, null, null, null, null);
     }
 }

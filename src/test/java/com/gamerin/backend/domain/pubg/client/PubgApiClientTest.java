@@ -14,7 +14,6 @@ import com.gamerin.backend.domain.pubg.dto.external.RankedGameModeStats;
 import com.gamerin.backend.domain.pubg.exception.NoRankedRecordException;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -29,25 +28,7 @@ class PubgApiClientTest {
     private final PubgApiClient pubgApiClient = new PubgApiClient("test-api-key");
 
     @Test
-    void resolveRankedKdaUsesPositiveApiKdaWhenAvailable() {
-        RankedGameModeStats stats = new RankedGameModeStats(
-                16,
-                5,
-                2.5,
-                null,
-                null,
-                null,
-                null,
-                null
-        );
-
-        Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKda", stats);
-
-        assertThat(kda).isEqualTo(2.5);
-    }
-
-    @Test
-    void resolveRankedKdaUsesOfficialKdaBeforeDeprecatedKdr() {
+    void resolveRankedKdUsesKillsAndDeathsAndIgnoresKdaKdrAndAssists() {
         RankedGameModeStats stats = new RankedGameModeStats(
                 16,
                 5,
@@ -59,35 +40,17 @@ class PubgApiClientTest {
                 13
         );
 
-        Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKda", stats);
+        Double kd = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKd", stats);
 
-        assertThat(kda).isEqualTo(6.1);
+        assertThat(kd).isEqualTo(49 / 13.0);
     }
 
     @Test
-    void resolveRankedKdaCalculatesKillDeathAssistRatioWhenApiKdaIsMissing() {
+    void resolveRankedKdReturnsNullWhenDeathsAreZero() {
         RankedGameModeStats stats = new RankedGameModeStats(
                 16,
                 5,
-                null,
-                3.8,
-                null,
-                49,
-                30,
-                13
-        );
-
-        Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKda", stats);
-
-        assertThat(kda).isEqualTo(79 / 13.0);
-    }
-
-    @Test
-    void resolveRankedKdaUsesKillsAndAssistsWhenDeathsAreZero() {
-        RankedGameModeStats stats = new RankedGameModeStats(
-                16,
-                5,
-                null,
+                6.1,
                 3.8,
                 null,
                 49,
@@ -95,73 +58,45 @@ class PubgApiClientTest {
                 0
         );
 
-        Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKda", stats);
+        Double kd = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKd", stats);
 
-        assertThat(kda).isEqualTo(79.0);
+        assertThat(kd).isNull();
     }
 
     @Test
-    void resolveRankedKdaPreservesOfficialZeroKda() {
+    void resolveRankedKdReturnsNullWhenKillsOrDeathsAreUnavailable() {
         RankedGameModeStats stats = new RankedGameModeStats(
                 16,
                 5,
-                0.0,
+                6.1,
                 3.8,
                 null,
-                49,
+                null,
                 30,
                 13
         );
 
-        Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKda", stats);
+        Double kd = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKd", stats);
 
-        assertThat(kda).isZero();
+        assertThat(kd).isNull();
     }
 
     @Test
-    void resolveRankedKdaCalculatesFromAggregatesWhenApiKdaIsNegative() {
+    void resolveRankedKdReturnsNullForNegativeAggregates() {
         RankedGameModeStats stats = new RankedGameModeStats(
                 16,
                 5,
-                -1.0,
+                6.1,
                 3.8,
                 null,
-                49,
+                -1,
                 30,
                 13
         );
 
-        Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKda", stats);
+        Double kd = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKd", stats);
 
-        assertThat(kda).isEqualTo(79 / 13.0);
-    }
-
-    @Test
-    void resolveRankedKdaReturnsZeroWhenAnyCalculationFieldIsMissing() {
-        List<RankedGameModeStats> statsWithMissingField = List.of(
-                rankedStats(null, null, 30, 13),
-                rankedStats(null, 49, null, 13),
-                rankedStats(null, 49, 30, null)
-        );
-
-        assertThat(statsWithMissingField).allSatisfy(stats -> {
-            Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKda", stats);
-            assertThat(kda).isZero();
-        });
-    }
-
-    @Test
-    void resolveRankedKdaReturnsZeroWhenAnyCalculationFieldIsNegative() {
-        List<RankedGameModeStats> statsWithNegativeField = List.of(
-                rankedStats(-1.0, -1, 30, 13),
-                rankedStats(-1.0, 49, -1, 13),
-                rankedStats(-1.0, 49, 30, -1)
-        );
-
-        assertThat(statsWithNegativeField).allSatisfy(stats -> {
-            Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveRankedKda", stats);
-            assertThat(kda).isZero();
-        });
+        assertThat(kd).isNull();
     }
 
     @Test
@@ -320,17 +255,6 @@ class PubgApiClientTest {
         return client;
     }
 
-    private RankedGameModeStats rankedStats(
-            Double kda,
-            Integer kills,
-            Integer assists,
-            Integer deaths
-    ) {
-        return new RankedGameModeStats(
-                16, 5, kda, 3.8, null, kills, assists, deaths
-        );
-    }
-
     private PubgRankedStatsResponse rankedResponse(RankedGameModeStats stats) {
         return new PubgRankedStatsResponse(
                 new RankedData(new RankedAttributes(Map.of("squad", stats)))
@@ -374,39 +298,39 @@ class PubgApiClientTest {
     }
 
     @Test
-    void resolveNormalKdaUsesPositiveApiKdaWhenAvailable() {
+    void resolveNormalKdUsesKillsAndDeathsAndIgnoresApiRatio() {
         NormalGameModeStats stats = new NormalGameModeStats(
                 10,
                 2,
-                1.25,
-                null,
-                null,
-                null
-        );
-
-        Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveNormalKda", stats);
-
-        assertThat(kda).isEqualTo(1.25);
-    }
-
-    @Test
-    void resolveNormalKdaCalculatesKillDeathRatioWhenApiKdaIsZero() {
-        NormalGameModeStats stats = new NormalGameModeStats(
-                10,
-                2,
-                0.0,
+                9.99,
                 18,
                 6,
                 9
         );
 
-        Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveNormalKda", stats);
+        Double kd = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveNormalKd", stats);
 
-        assertThat(kda).isEqualTo(3.0);
+        assertThat(kd).isEqualTo(3.0);
     }
 
     @Test
-    void resolveNormalKdaFallsBackToLossesWhenDeathsAreMissing() {
+    void resolveNormalKdReturnsNullWhenDeathsAreZero() {
+        NormalGameModeStats stats = new NormalGameModeStats(
+                10,
+                2,
+                0.0,
+                18,
+                0,
+                9
+        );
+
+        Double kd = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveNormalKd", stats);
+
+        assertThat(kd).isNull();
+    }
+
+    @Test
+    void resolveNormalKdUsesLossesWhenSeasonStatsOmitDeaths() {
         NormalGameModeStats stats = new NormalGameModeStats(
                 10,
                 2,
@@ -416,24 +340,56 @@ class PubgApiClientTest {
                 9
         );
 
-        Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveNormalKda", stats);
+        Double kd = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveNormalKd", stats);
 
-        assertThat(kda).isEqualTo(2.0);
+        assertThat(kd).isEqualTo(2.0);
     }
 
     @Test
-    void resolveNormalKdaPreservesZeroWhenNoKillDeathOrLossFieldsExist() {
+    void resolveNormalKdReturnsNullWhenDeathsAndLossesAreMissing() {
         NormalGameModeStats stats = new NormalGameModeStats(
                 10,
                 2,
                 0.0,
-                null,
+                18,
                 null,
                 null
         );
 
-        Double kda = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveNormalKda", stats);
+        Double kd = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveNormalKd", stats);
 
-        assertThat(kda).isZero();
+        assertThat(kd).isNull();
+    }
+
+    @Test
+    void resolveNormalKdReturnsNullWhenFallbackLossesAreNegative() {
+        NormalGameModeStats stats = new NormalGameModeStats(
+                10,
+                2,
+                0.0,
+                18,
+                null,
+                -1
+        );
+
+        Double kd = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveNormalKd", stats);
+
+        assertThat(kd).isNull();
+    }
+
+    @Test
+    void resolveNormalKdPreservesRealZeroKills() {
+        NormalGameModeStats stats = new NormalGameModeStats(
+                10,
+                2,
+                0.0,
+                0,
+                4,
+                null
+        );
+
+        Double kd = ReflectionTestUtils.invokeMethod(pubgApiClient, "resolveNormalKd", stats);
+
+        assertThat(kd).isZero();
     }
 }
