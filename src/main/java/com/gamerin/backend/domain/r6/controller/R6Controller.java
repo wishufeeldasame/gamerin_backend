@@ -42,6 +42,13 @@ public class R6Controller {
         return ApiResponse.ok(r6Service.getMySummary(principal));
     }
 
+    @PostMapping("/me/refresh")
+    public ApiResponse<R6SummaryResponse> refreshMyR6Summary(
+            @AuthenticationPrincipal CustomUserPrincipal principal
+    ) {
+        return ApiResponse.ok(r6Service.refreshMySummary(principal));
+    }
+
     @DeleteMapping("/disconnect")
     public ApiResponse<Void> disconnect(
             @AuthenticationPrincipal CustomUserPrincipal principal

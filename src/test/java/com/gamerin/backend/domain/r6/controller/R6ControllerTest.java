@@ -70,8 +70,32 @@ class R6ControllerTest {
 
         ApiResponse<R6SummaryResponse> response = r6Controller.getMyR6Summary(principal);
 
+        verify(r6Service).getMySummary(principal);
         assertThat(response.success()).isTrue();
         assertThat(response.data().platform()).isEqualTo("PC");
+        assertThat(response.data()).isEqualTo(serviceResponse);
+    }
+
+    @Test
+    void refreshMyR6SummaryDelegatesToServiceAndReturnsApiResponse() {
+        CustomUserPrincipal principal = principal();
+        R6SummaryResponse serviceResponse = new R6SummaryResponse(
+                "R6",
+                true,
+                "R6Player",
+                "PC",
+                "Platinum",
+                1.45,
+                59.0,
+                130,
+                OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
+        );
+        when(r6Service.refreshMySummary(principal)).thenReturn(serviceResponse);
+
+        ApiResponse<R6SummaryResponse> response = r6Controller.refreshMyR6Summary(principal);
+
+        verify(r6Service).refreshMySummary(principal);
+        assertThat(response.success()).isTrue();
         assertThat(response.data()).isEqualTo(serviceResponse);
     }
 

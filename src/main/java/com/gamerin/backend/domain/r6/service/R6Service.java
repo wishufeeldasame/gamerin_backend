@@ -62,7 +62,23 @@ public class R6Service {
         return new R6ConnectionResponse(true, playerName, PLATFORM);
     }
 
+    @Transactional(readOnly = true)
     public R6SummaryResponse getMySummary(CustomUserPrincipal principal) {
+        User user = getCurrentUser(principal);
+        UserProfile profile = getCurrentProfile(user);
+
+        if (!profile.hasConnectedR6()) {
+            return disconnectedResponse();
+        }
+
+        if (trimToNull(profile.getR6AccountId()) == null) {
+            return disconnectedResponse();
+        }
+
+        return toSummaryResponse(profile);
+    }
+
+    public R6SummaryResponse refreshMySummary(CustomUserPrincipal principal) {
         User user = getCurrentUser(principal);
         UserProfile profile = getCurrentProfile(user);
 

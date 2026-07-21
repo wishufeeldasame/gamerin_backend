@@ -2,8 +2,7 @@ package com.gamerin.backend.domain.r6.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.RecordComponent;
@@ -208,11 +207,84 @@ class R6ServiceTest {
         assertThat(response.game()).isEqualTo("R6");
         assertThat(response.platform()).isEqualTo("PC");
         assertThat(response.playerName()).isNull();
-        verify(r6StatsClient, never()).getSummary(org.mockito.ArgumentMatchers.any());
+        verifyNoInteractions(r6StatsClient);
     }
 
     @Test
-    void getMySummaryUpdatesStoredSummaryAndReturnsPublicFields() {
+    void getMySummaryReturnsStoredSummaryWithoutExternalCallOrMutation() {
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        UserProfile profile = user.getProfile();
+        OffsetDateTime storedUpdatedAt = OffsetDateTime.parse("2026-07-09T12:00:00+09:00");
+        profile.connectR6(
+                "R6Player",
+                "r6player",
+                "PC",
+                "account-1",
+                "Silver",
+                1.0,
+                40.0,
+                20,
+                storedUpdatedAt
+        );
+        Map<String, Object> before = deepCopy(profile.getGameStats());
+
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+
+        R6SummaryResponse response = r6Service.getMySummary(CustomUserPrincipal.from(user));
+
+        assertThat(response.connected()).isTrue();
+        assertThat(response.playerName()).isEqualTo("R6Player");
+        assertThat(response.platform()).isEqualTo("PC");
+        assertThat(response.tierLabel()).isEqualTo("Silver");
+        assertThat(response.kd()).isEqualTo(1.0);
+        assertThat(response.winRate()).isEqualTo(40.0);
+        assertThat(response.matches()).isEqualTo(20);
+        assertThat(response.updatedAt()).isEqualTo(storedUpdatedAt);
+        assertThat(profile.getGameStats()).isEqualTo(before);
+        verifyNoInteractions(r6StatsClient);
+    }
+
+    @Test
+    void getMySummaryReturnsDisconnectedWhenAccountIdIsMissingWithoutExternalCall() {
+        User user = connectedUserWithoutAccountId();
+        UserProfile profile = user.getProfile();
+        Map<String, Object> before = deepCopy(profile.getGameStats());
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+
+        R6SummaryResponse response = r6Service.getMySummary(CustomUserPrincipal.from(user));
+
+        assertThat(response.connected()).isFalse();
+        assertThat(profile.getGameStats()).isEqualTo(before);
+        verifyNoInteractions(r6StatsClient);
+    }
+
+    @Test
+    void refreshMySummaryReturnsDisconnectedWhenNotConnectedWithoutExternalCall() {
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+
+        R6SummaryResponse response = r6Service.refreshMySummary(CustomUserPrincipal.from(user));
+
+        assertThat(response.connected()).isFalse();
+        verifyNoInteractions(r6StatsClient);
+    }
+
+    @Test
+    void refreshMySummaryReturnsDisconnectedWhenAccountIdIsMissingWithoutExternalCall() {
+        User user = connectedUserWithoutAccountId();
+        UserProfile profile = user.getProfile();
+        Map<String, Object> before = deepCopy(profile.getGameStats());
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+
+        R6SummaryResponse response = r6Service.refreshMySummary(CustomUserPrincipal.from(user));
+
+        assertThat(response.connected()).isFalse();
+        assertThat(profile.getGameStats()).isEqualTo(before);
+        verifyNoInteractions(r6StatsClient);
+    }
+
+    @Test
+    void refreshMySummaryUpdatesStoredSummaryAndReturnsPublicFields() {
         User user = savedUser(UUID.randomUUID(), "tester", "Tester");
         UserProfile profile = user.getProfile();
         profile.connectR6(
@@ -231,7 +303,7 @@ class R6ServiceTest {
         when(r6StatsClient.getSummary(new R6ProfileRef("R6Player", "account-1")))
                 .thenReturn(new R6SummaryStats("Platinum", 1.459, 58.6, 130));
 
-        R6SummaryResponse response = r6Service.getMySummary(CustomUserPrincipal.from(user));
+        R6SummaryResponse response = r6Service.refreshMySummary(CustomUserPrincipal.from(user));
 
         assertThat(response.connected()).isTrue();
         assertThat(response.playerName()).isEqualTo("R6Player");
@@ -254,22 +326,22 @@ class R6ServiceTest {
     }
 
     @Test
-    void getMySummaryPropagatesExternal404AndPreservesStoredStats() {
+    void refreshMySummaryPropagatesExternal404AndPreservesStoredStats() {
         assertSummaryFailurePreservesStats(HttpStatus.NOT_FOUND);
     }
 
     @Test
-    void getMySummaryPropagatesExternal429AndPreservesStoredStats() {
+    void refreshMySummaryPropagatesExternal429AndPreservesStoredStats() {
         assertSummaryFailurePreservesStats(HttpStatus.TOO_MANY_REQUESTS);
     }
 
     @Test
-    void getMySummaryPropagatesNetworkFailureAndPreservesStoredStats() {
+    void refreshMySummaryPropagatesNetworkFailureAndPreservesStoredStats() {
         assertSummaryFailurePreservesStats(HttpStatus.BAD_GATEWAY);
     }
 
     @Test
-    void getMySummaryPropagatesAccountMismatchAndPreservesStoredStats() {
+    void refreshMySummaryPropagatesAccountMismatchAndPreservesStoredStats() {
         assertSummaryFailurePreservesStats(HttpStatus.CONFLICT);
     }
 
@@ -301,11 +373,27 @@ class R6ServiceTest {
         when(r6StatsClient.getSummary(new R6ProfileRef("R6Player", "account-1")))
                 .thenThrow(new ResponseStatusException(status, "external failure"));
 
-        assertThatThrownBy(() -> r6Service.getMySummary(CustomUserPrincipal.from(user)))
+        assertThatThrownBy(() -> r6Service.refreshMySummary(CustomUserPrincipal.from(user)))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
                 .isEqualTo(status.value());
         assertThat(profile.getGameStats()).isEqualTo(before);
+    }
+
+    private User connectedUserWithoutAccountId() {
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        user.getProfile().connectR6(
+                "R6Player",
+                "r6player",
+                "PC",
+                null,
+                "Silver",
+                1.0,
+                40.0,
+                20,
+                OffsetDateTime.parse("2026-07-09T12:00:00+09:00")
+        );
+        return user;
     }
 
     private User savedUser(UUID id, String handle, String nickname) {
