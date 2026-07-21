@@ -2,6 +2,8 @@ package com.gamerin.backend.domain.r6.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
+
 import com.gamerin.backend.domain.r6.model.R6Profile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -18,7 +20,12 @@ class R6DataLiveIntegrationTest {
         assertThat(apiKey).isNotBlank();
         assertThat(playerName).isNotBlank();
 
-        R6Profile profile = new R6DataStatsClient(apiKey, baseUrl).findProfile(playerName);
+        R6Profile profile = new R6DataStatsClient(
+                apiKey,
+                baseUrl,
+                Duration.ofSeconds(3),
+                Duration.ofSeconds(10)
+        ).findProfile(playerName);
 
         assertThat(profile.accountId()).isNotBlank();
         assertThat(profile.playerName()).isNotBlank();

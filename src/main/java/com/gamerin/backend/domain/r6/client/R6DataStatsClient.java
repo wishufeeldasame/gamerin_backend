@@ -1,12 +1,15 @@
 package com.gamerin.backend.domain.r6.client;
 
 import java.net.URI;
+import java.time.Duration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.gamerin.backend.domain.r6.model.R6Profile;
 import com.gamerin.backend.domain.r6.model.R6ProfileRef;
 import com.gamerin.backend.domain.r6.model.R6SummaryStats;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
+import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
@@ -30,14 +33,20 @@ public class R6DataStatsClient implements R6StatsClient {
 
     public R6DataStatsClient(
             @Value("${r6.api.key:}") String apiKey,
-            @Value("${r6.api.base-url:https://api.r6data.com}") String baseUrl
+            @Value("${r6.api.base-url:https://api.r6data.com}") String baseUrl,
+            @Value("${r6.api.connect-timeout:3s}") Duration connectTimeout,
+            @Value("${r6.api.read-timeout:10s}") Duration readTimeout
     ) {
         String configuredApiKey = trimToNull(apiKey);
         String configuredBaseUrl = trimToNull(baseUrl);
         this.configured = configuredApiKey != null && configuredBaseUrl != null;
         this.parser = new R6DataStatsParser();
 
-        RestClient.Builder builder = RestClient.builder();
+        ClientHttpRequestFactorySettings requestFactorySettings = ClientHttpRequestFactorySettings.defaults()
+                .withConnectTimeout(connectTimeout)
+                .withReadTimeout(readTimeout);
+        RestClient.Builder builder = RestClient.builder()
+                .requestFactory(ClientHttpRequestFactoryBuilder.detect().build(requestFactorySettings));
         if (configuredBaseUrl != null) {
             builder.baseUrl(configuredBaseUrl);
         }

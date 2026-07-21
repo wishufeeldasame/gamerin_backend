@@ -10,11 +10,14 @@ import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import com.gamerin.backend.domain.r6.model.R6Profile;
@@ -49,7 +52,12 @@ class R6DataStatsClientTest {
 
     @Test
     void findProfileReturns503WhenRequiredConfigurationIsMissing() {
-        R6DataStatsClient client = new R6DataStatsClient("", "");
+        R6DataStatsClient client = new R6DataStatsClient(
+                "",
+                "",
+                Duration.ofSeconds(3),
+                Duration.ofSeconds(10)
+        );
 
         assertThatThrownBy(() -> client.findProfile("R6Player"))
                 .isInstanceOf(ResponseStatusException.class)
@@ -156,6 +164,24 @@ class R6DataStatsClientTest {
     }
 
     @Test
+    void findProfileMapsReadTimeoutRestClientExceptionTo502() {
+        CountDownLatch releaseResponse = new CountDownLatch(1);
+        responder = query -> StubResponse.blocked(fixture("full-stats-unranked.json"), releaseResponse);
+
+        try {
+            assertThatThrownBy(() -> client(Duration.ofSeconds(1), Duration.ofMillis(50))
+                    .findProfile("R6Player"))
+                    .isInstanceOf(ResponseStatusException.class)
+                    .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                    .isEqualTo(HttpStatus.BAD_GATEWAY.value());
+        } finally {
+            releaseResponse.countDown();
+        }
+
+        assertThat(requests).hasSize(1);
+    }
+
+    @Test
     void findProfileReturns502ForMissingAccountIdentifier() {
         responder = query -> StubResponse.ok("""
                 {
@@ -189,9 +215,15 @@ class R6DataStatsClientTest {
     }
 
     private R6DataStatsClient client() {
+        return client(Duration.ofSeconds(3), Duration.ofSeconds(10));
+    }
+
+    private R6DataStatsClient client(Duration connectTimeout, Duration readTimeout) {
         return new R6DataStatsClient(
                 "test-api-key",
-                "http://127.0.0.1:" + server.getAddress().getPort()
+                "http://127.0.0.1:" + server.getAddress().getPort(),
+                connectTimeout,
+                readTimeout
         );
     }
 
@@ -203,6 +235,15 @@ class R6DataStatsClientTest {
         StubResponse response = responder == null
                 ? new StubResponse(500, "{}")
                 : responder.apply(query);
+        if (response.releaseResponse() != null) {
+            try {
+                response.releaseResponse().await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                exchange.close();
+                return;
+            }
+        }
         byte[] body = response.body().getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json");
         exchange.sendResponseHeaders(response.status(), body.length);
@@ -239,10 +280,18 @@ class R6DataStatsClientTest {
     private record RecordedRequest(Map<String, String> query, String apiKey) {
     }
 
-    private record StubResponse(int status, String body) {
+    private record StubResponse(int status, String body, CountDownLatch releaseResponse) {
+
+        private StubResponse(int status, String body) {
+            this(status, body, null);
+        }
 
         private static StubResponse ok(String body) {
             return new StubResponse(200, body);
+        }
+
+        private static StubResponse blocked(String body, CountDownLatch releaseResponse) {
+            return new StubResponse(200, body, releaseResponse);
         }
     }
 }

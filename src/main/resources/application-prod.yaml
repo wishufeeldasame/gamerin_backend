@@ -103,6 +103,8 @@ r6:
   api:
     key: ${R6DATA_API_KEY:}
     base-url: ${R6DATA_API_BASE_URL:https://api.r6data.com}
+    connect-timeout: ${R6DATA_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${R6DATA_API_READ_TIMEOUT:10s}
 
 openai:
   api:
