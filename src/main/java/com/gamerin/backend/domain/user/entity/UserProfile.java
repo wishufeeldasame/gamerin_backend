@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.user.entity;
 
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -25,13 +26,20 @@ import jakarta.persistence.Table;
 public class UserProfile {
 
     private static final String PUBG_KEY = "PUBG";
+    private static final String R6_KEY = "R6";
     private static final String ACCOUNT_ID_KEY = "accountId";
+    private static final String LEGACY_TRACKER_PROFILE_ID_KEY = "trackerProfileId";
     private static final String PLAYER_NAME_KEY = "playerName";
+    private static final String PLAYER_NAME_NORMALIZED_KEY = "playerNameNormalized";
+    private static final String PLATFORM_KEY = "platform";
     private static final String CONNECTED_KEY = "connected";
     private static final String TIER_LABEL_KEY = "tierLabel";
     private static final String KDA_KEY = "kda";
+    private static final String KD_KEY = "kd";
     private static final String WIN_RATE_KEY = "winRate";
     private static final String GAMES_KEY = "games";
+    private static final String MATCHES_KEY = "matches";
+    private static final String UPDATED_AT_KEY = "updatedAt";
 
     private static final String RIOT_KEY = "RIOT";
     private static final String LOL_KEY = "LOL";
@@ -209,6 +217,99 @@ public class UserProfile {
         this.gameStats = nextGameStats;
     }
 
+    public boolean hasConnectedR6() {
+        Object connected = getR6Stats().get(CONNECTED_KEY);
+        return connected instanceof Boolean value && value;
+    }
+
+    public String getR6PlayerName() {
+        return getStringValue(getR6Stats(), PLAYER_NAME_KEY);
+    }
+
+    public String getR6AccountId() {
+        return getStringValue(getR6Stats(), ACCOUNT_ID_KEY);
+    }
+
+    public String getR6ConnectedPlatform() {
+        return getStringValue(getR6Stats(), PLATFORM_KEY);
+    }
+
+    public String getR6TierLabel() {
+        return getStringValue(getR6Stats(), TIER_LABEL_KEY);
+    }
+
+    public Double getR6Kd() {
+        return getDoubleValue(getR6Stats(), KD_KEY);
+    }
+
+    public Double getR6WinRate() {
+        return getDoubleValue(getR6Stats(), WIN_RATE_KEY);
+    }
+
+    public Integer getR6Matches() {
+        return getIntegerValue(getR6Stats(), MATCHES_KEY);
+    }
+
+    public OffsetDateTime getR6UpdatedAt() {
+        String value = getStringValue(getR6Stats(), UPDATED_AT_KEY);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return OffsetDateTime.parse(value);
+        } catch (DateTimeParseException e) {
+            return null;
+        }
+    }
+
+    public void connectR6(
+            String playerName,
+            String playerNameNormalized,
+            String platform,
+            String accountId,
+            String tierLabel,
+            Double kd,
+            Double winRate,
+            Integer matches,
+            OffsetDateTime updatedAt
+    ) {
+        Map<String, Object> r6Stats = new HashMap<>(getR6Stats());
+        r6Stats.put(CONNECTED_KEY, true);
+        r6Stats.put(PLAYER_NAME_KEY, playerName);
+        r6Stats.put(PLAYER_NAME_NORMALIZED_KEY, playerNameNormalized);
+        r6Stats.put(PLATFORM_KEY, platform);
+        putNullable(r6Stats, ACCOUNT_ID_KEY, accountId);
+        r6Stats.remove(LEGACY_TRACKER_PROFILE_ID_KEY);
+        putR6SummaryValues(r6Stats, tierLabel, kd, winRate, matches, updatedAt);
+
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.put(R6_KEY, r6Stats);
+        this.gameStats = nextGameStats;
+    }
+
+    public void updateR6Summary(
+            String tierLabel,
+            Double kd,
+            Double winRate,
+            Integer matches,
+            OffsetDateTime updatedAt
+    ) {
+        Map<String, Object> r6Stats = new HashMap<>(getR6Stats());
+        r6Stats.put(CONNECTED_KEY, true);
+        r6Stats.remove(LEGACY_TRACKER_PROFILE_ID_KEY);
+        putR6SummaryValues(r6Stats, tierLabel, kd, winRate, matches, updatedAt);
+
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.put(R6_KEY, r6Stats);
+        this.gameStats = nextGameStats;
+    }
+
+    public void disconnectR6() {
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.remove(R6_KEY);
+        this.gameStats = nextGameStats;
+    }
+
     public boolean hasConnectedRiot() {
         Object connected = getRiotStats().get(CONNECTED_KEY);
         return connected instanceof Boolean value && value;
@@ -259,6 +360,10 @@ public class UserProfile {
         return getGameStatsFor(RIOT_KEY);
     }
 
+    private Map<String, Object> getR6Stats() {
+        return getGameStatsFor(R6_KEY);
+    }
+
     private Map<String, Object> getGameStatsFor(String key) {
         Object stats = getSafeGameStats().get(key);
         if (stats instanceof Map<?, ?> map) {
@@ -285,6 +390,67 @@ public class UserProfile {
             return casted;
         }
         return new HashMap<>();
+    }
+
+    private void putR6SummaryValues(
+            Map<String, Object> r6Stats,
+            String tierLabel,
+            Double kd,
+            Double winRate,
+            Integer matches,
+            OffsetDateTime updatedAt
+    ) {
+        putNullable(r6Stats, TIER_LABEL_KEY, tierLabel);
+        putNullable(r6Stats, KD_KEY, kd);
+        putNullable(r6Stats, WIN_RATE_KEY, winRate);
+        putNullable(r6Stats, MATCHES_KEY, matches);
+        putNullable(r6Stats, UPDATED_AT_KEY, updatedAt == null ? null : updatedAt.toString());
+    }
+
+    private void putNullable(Map<String, Object> target, String key, Object value) {
+        if (value == null) {
+            target.remove(key);
+            return;
+        }
+        target.put(key, value);
+    }
+
+    private String getStringValue(Map<String, Object> source, String key) {
+        Object value = source.get(key);
+        if (value instanceof String text && !text.isBlank()) {
+            return text;
+        }
+        return null;
+    }
+
+    private Double getDoubleValue(Map<String, Object> source, String key) {
+        Object value = source.get(key);
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return Double.parseDouble(text);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Integer getIntegerValue(Map<String, Object> source, String key) {
+        Object value = source.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return Integer.parseInt(text);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private Map<String, Object> getSafeGameStats() {

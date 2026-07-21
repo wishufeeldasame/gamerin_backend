@@ -1,6 +1,8 @@
 package com.gamerin.backend.domain.user.service;
 
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -106,7 +108,7 @@ public class UserService {
                 profile != null ? profile.getWebsite() : null,
                 profile != null ? profile.getCoverImageUrl() : null,
                 profile != null ? profile.getProfileImageUrl() : null,
-                profile != null ? profile.getGameStats() : null,
+                profile != null ? toPublicGameStats(profile.getGameStats()) : null,
                 profile != null && profile.isVerifiedBadge(),
                 isFollowing,
                 followsViewer,
@@ -116,6 +118,48 @@ public class UserService {
                 mediaPostCount,
                 mediaItemCount
         );
+    }
+
+    private Map<String, Object> toPublicGameStats(Map<String, Object> gameStats) {
+        if (gameStats == null) {
+            return null;
+        }
+
+        Map<String, Object> publicGameStats = new HashMap<>();
+        for (Map.Entry<String, Object> entry : gameStats.entrySet()) {
+            Object value = entry.getValue();
+            if (value instanceof Map<?, ?> map) {
+                publicGameStats.put(entry.getKey(), copyStringKeyedMap(map));
+            } else {
+                publicGameStats.put(entry.getKey(), value);
+            }
+        }
+
+        removeInternalFields(publicGameStats, "R6", "accountId", "trackerProfileId");
+        return publicGameStats;
+    }
+
+    private Map<String, Object> copyStringKeyedMap(Map<?, ?> source) {
+        Map<String, Object> copy = new HashMap<>();
+        for (Map.Entry<?, ?> entry : source.entrySet()) {
+            if (entry.getKey() instanceof String key) {
+                copy.put(key, entry.getValue());
+            }
+        }
+        return copy;
+    }
+
+    private void removeInternalFields(Map<String, Object> gameStats, String gameKey, String... fieldNames) {
+        Object stats = gameStats.get(gameKey);
+        if (!(stats instanceof Map<?, ?> map)) {
+            return;
+        }
+
+        Map<String, Object> publicStats = copyStringKeyedMap(map);
+        for (String fieldName : fieldNames) {
+            publicStats.remove(fieldName);
+        }
+        gameStats.put(gameKey, publicStats);
     }
 
     @Transactional

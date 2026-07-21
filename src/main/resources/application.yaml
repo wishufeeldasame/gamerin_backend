@@ -54,6 +54,11 @@ app:
     password-reset:
       expiration-minutes: 30
 
+r6:
+  api:
+    key: ${R6DATA_API_KEY:}
+    base-url: ${R6DATA_API_BASE_URL:https://api.r6data.com}
+
 openai:
   api:
     key: ${OPENAI_API_KEY:}

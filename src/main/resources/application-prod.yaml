@@ -97,7 +97,12 @@ pubg:
 
 riot:
   api:
-    key: ${RIOT_API_KEY:}    
+    key: ${RIOT_API_KEY:}
+
+r6:
+  api:
+    key: ${R6DATA_API_KEY:}
+    base-url: ${R6DATA_API_BASE_URL:https://api.r6data.com}
 
 openai:
   api:
