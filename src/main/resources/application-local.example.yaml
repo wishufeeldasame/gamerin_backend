@@ -76,6 +76,18 @@ pubg:
   api:
     key: "여기에_PUBG_API_KEY"
 
+riot:
+  api:
+    key: "여기에_RIOT_API_KEY"
+
+r6:
+  api:
+    # Create a key at https://r6data.com/dashboard. Never commit a real key.
+    key: your-r6data-api-key
+    base-url: "https://api.r6data.com"
+    connect-timeout: ${R6DATA_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${R6DATA_API_READ_TIMEOUT:10s}
+
 openai:
   api:
     key: ${OPENAI_API_KEY:}
