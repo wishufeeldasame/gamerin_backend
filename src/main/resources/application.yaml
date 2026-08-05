@@ -45,6 +45,10 @@ app:
       hard-delete-after: 24h
       initial-delay-ms: 60000
       fixed-delay-ms: 3600000
+  hashtag:
+    backfill:
+      enabled: ${APP_HASHTAG_BACKFILL_ENABLED:false}
+      batch-size: ${APP_HASHTAG_BACKFILL_BATCH_SIZE:200}
   frontend:
     base-url: http://localhost:3000
     password-reset-path: /auth/reset-password
