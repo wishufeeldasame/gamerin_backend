@@ -50,6 +50,7 @@ import com.gamerin.backend.domain.post.repository.PostShareRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+import com.gamerin.backend.domain.hashtag.service.HashtagService;
 
 @ExtendWith(MockitoExtension.class)
 class PostServiceTest {
@@ -79,6 +80,9 @@ class PostServiceTest {
 
     @Mock
     private PostResponseAssembler postResponseAssembler;
+
+    @Mock
+    private HashtagService hashtagService;
 
     @Mock
     private MediaStorageService mediaStorageService;
@@ -114,6 +118,7 @@ class PostServiceTest {
                 postCommentRepository,
                 postShareRepository,
                 postResponseAssembler,
+                hashtagService,
                 mediaStorageService,
                 videoMetadataService,
                 contentModerationService,
@@ -136,6 +141,7 @@ class PostServiceTest {
                 postCommentRepository,
                 postShareRepository,
                 postResponseAssembler,
+                hashtagService,
                 mediaStorageService,
                 videoMetadataService,
                 contentModerationService,
@@ -147,6 +153,33 @@ class PostServiceTest {
         ))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("max file size");
+    }
+
+    @Test
+    void createAttachesHashtagsAfterSavingJsonPost() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        PostDetailResponse response = postDetailResponse(postId);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.save(any(Post.class))).thenAnswer(invocation -> {
+            Post post = invocation.getArgument(0);
+            ReflectionTestUtils.setField(post, "id", postId);
+            return post;
+        });
+        when(postResponseAssembler.toPostDetail(any(Post.class), eq(userId))).thenReturn(response);
+
+        PostDetailResponse result = postService.create(
+                CustomUserPrincipal.from(user),
+                new CreatePostRequest("#PUBG ranked")
+        );
+
+        assertThat(result).isSameAs(response);
+        ArgumentCaptor<Post> postCaptor = ArgumentCaptor.forClass(Post.class);
+        verify(hashtagService).attachToPost(postCaptor.capture());
+        assertThat(postCaptor.getValue().getId()).isEqualTo(postId);
+        assertThat(postCaptor.getValue().getContent()).isEqualTo("#PUBG ranked");
     }
 
     @Test
@@ -165,6 +198,7 @@ class PostServiceTest {
                 .isEqualTo(HttpStatus.BAD_REQUEST.value());
 
         verify(postRepository, never()).save(any(Post.class));
+        verify(hashtagService, never()).attachToPost(any(Post.class));
     }
 
     @Test
@@ -186,6 +220,7 @@ class PostServiceTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
 
         verify(postRepository, never()).save(any(Post.class));
+        verify(hashtagService, never()).attachToPost(any(Post.class));
     }
 
     @Test
@@ -216,6 +251,7 @@ class PostServiceTest {
 
         postService.create(CustomUserPrincipal.from(user), request);
 
+        verify(hashtagService).attachToPost(any(Post.class));
         ArgumentCaptor<List<PostMedia>> mediaCaptor = ArgumentCaptor.forClass(List.class);
         verify(postMediaRepository).saveAll(mediaCaptor.capture());
 
@@ -636,6 +672,9 @@ class PostServiceTest {
                 0,
                 0,
                 0,
+                false,
+                0,
+                null,
                 false,
                 false,
                 true,
