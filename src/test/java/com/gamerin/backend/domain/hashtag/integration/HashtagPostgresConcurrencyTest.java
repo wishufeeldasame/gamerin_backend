@@ -38,6 +38,7 @@ import com.gamerin.backend.domain.hashtag.repository.HashtagQueryRepository;
 import com.gamerin.backend.domain.hashtag.service.HashtagService;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.repository.PostRepository;
+import com.gamerin.backend.domain.search.repository.SearchQueryRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -58,6 +59,8 @@ class HashtagPostgresConcurrencyTest {
     private HashtagService hashtagService;
     @Autowired
     private HashtagQueryRepository hashtagQueryRepository;
+    @Autowired
+    private SearchQueryRepository searchQueryRepository;
     @Autowired
     private UserRepository userRepository;
     @Autowired
@@ -159,6 +162,28 @@ class HashtagPostgresConcurrencyTest {
         });
     }
 
+    @Test
+    void postgresGlobalSearchMatchesAccountsAndPostsCaseInsensitively() {
+        String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+        String handle = "pgsearch" + suffix;
+        UUID userId = createUser(handle, "Postgres Search User");
+        UUID postId = transactionTemplate.execute(status -> {
+            User user = userRepository.findById(userId).orElseThrow();
+            return postRepository.saveAndFlush(
+                    Post.create(user, "POSTGRESNEEDLE 경기 기록")
+            ).getId();
+        });
+
+        transactionTemplate.executeWithoutResult(status -> {
+            assertThat(searchQueryRepository.findActiveAccounts("pgsearch" + suffix, null, 10))
+                    .extracting(User::getId)
+                    .containsExactly(userId);
+            assertThat(searchQueryRepository.findActivePosts("postgresneedle", null, 10))
+                    .extracting(Post::getId)
+                    .containsExactly(postId);
+        });
+    }
+
     private UUID createPost(String content) {
         return transactionTemplate.execute(status -> {
             String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
@@ -166,6 +191,10 @@ class HashtagPostgresConcurrencyTest {
             User savedUser = userRepository.findById(userId).orElseThrow();
             return postRepository.saveAndFlush(Post.create(savedUser, content)).getId();
         });
+    }
+
+    private UUID createUser(String handle, String nickname) {
+        return transactionTemplate.execute(status -> createUserInCurrentTransaction(handle, nickname));
     }
 
     private UUID createUserInCurrentTransaction(String handle, String nickname) {
