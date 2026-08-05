@@ -13,19 +13,16 @@ import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 
-class PostRepostMigrationTest {
+class HashtagMigrationTest {
 
     @Test
-    void migrationAddsUniqueRepostsAndCascadesPostAndUserDeletion() throws Exception {
-        String url = "jdbc:h2:mem:repost_migration_" + UUID.randomUUID()
+    void migrationAddsUniqueHashtagsAndCascadePostRelations() throws Exception {
+        String url = "jdbc:h2:mem:hashtag_migration_" + UUID.randomUUID()
                 + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1";
-        UUID userId = UUID.randomUUID();
         UUID postId = UUID.randomUUID();
 
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
-            connection.createStatement().execute("create table users (id uuid primary key)");
             connection.createStatement().execute("create table posts (id uuid primary key)");
-            execute(connection, "insert into users(id) values (?)", userId);
             execute(connection, "insert into posts(id) values (?)", postId);
         }
 
@@ -33,50 +30,70 @@ class PostRepostMigrationTest {
                 .dataSource(url, "sa", "")
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
-                .baselineVersion("15")
-                .target("16")
+                .baselineVersion("17")
+                .target("18")
                 .load();
 
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
         assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
 
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
-            UUID repostId = UUID.randomUUID();
-            insertRepost(connection, repostId, postId, userId);
+            UUID hashtagId = UUID.randomUUID();
+            UUID lowercaseHashtagId = UUID.randomUUID();
+            UUID relationId = UUID.randomUUID();
+            insertHashtag(connection, hashtagId, "PUBG", "PUBG");
+            insertHashtag(connection, lowercaseHashtagId, "pubg", "pubg");
+            insertPostHashtag(connection, relationId, postId, hashtagId);
 
-            assertThatThrownBy(() -> insertRepost(
+            assertThatThrownBy(() -> insertHashtag(
+                    connection,
+                    UUID.randomUUID(),
+                    "PUBG",
+                    "PUBG"
+            )).isInstanceOf(SQLException.class);
+
+            assertThatThrownBy(() -> insertPostHashtag(
                     connection,
                     UUID.randomUUID(),
                     postId,
-                    userId
+                    hashtagId
             )).isInstanceOf(SQLException.class);
 
             execute(connection, "delete from posts where id = ?", postId);
-            assertThat(count(connection, "select count(*) from post_reposts where id = ?", repostId))
+            assertThat(count(connection, "select count(*) from post_hashtags where id = ?", relationId))
                     .isZero();
-
-            UUID nextPostId = UUID.randomUUID();
-            UUID nextRepostId = UUID.randomUUID();
-            execute(connection, "insert into posts(id) values (?)", nextPostId);
-            insertRepost(connection, nextRepostId, nextPostId, userId);
-            execute(connection, "delete from users where id = ?", userId);
-            assertThat(count(connection, "select count(*) from post_reposts where id = ?", nextRepostId))
-                    .isZero();
+            assertThat(count(connection, "select count(*) from hashtags where id = ?", hashtagId))
+                    .isEqualTo(1);
         }
     }
 
-    private void insertRepost(
+    private void insertHashtag(
             Connection connection,
-            UUID repostId,
-            UUID postId,
-            UUID userId
+            UUID hashtagId,
+            String displayName,
+            String normalizedName
     ) throws SQLException {
         execute(
                 connection,
-                "insert into post_reposts(id, post_id, user_id) values (?, ?, ?)",
-                repostId,
+                "insert into hashtags(id, display_name, normalized_name) values (?, ?, ?)",
+                hashtagId,
+                displayName,
+                normalizedName
+        );
+    }
+
+    private void insertPostHashtag(
+            Connection connection,
+            UUID relationId,
+            UUID postId,
+            UUID hashtagId
+    ) throws SQLException {
+        execute(
+                connection,
+                "insert into post_hashtags(id, post_id, hashtag_id) values (?, ?, ?)",
+                relationId,
                 postId,
-                userId
+                hashtagId
         );
     }
 
