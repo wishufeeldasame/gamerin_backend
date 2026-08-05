@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -245,7 +246,9 @@ class PostRepostControllerIntegrationTest {
     @Test
     void timelineCursorIsStableAndRejectsMalformedValues() throws Exception {
         User viewer = saveUser("cursor");
-        OffsetDateTime base = OffsetDateTime.now(ZoneOffset.UTC).minusDays(1);
+        OffsetDateTime base = OffsetDateTime.now(ZoneOffset.UTC)
+                .minusDays(1)
+                .truncatedTo(ChronoUnit.MICROS);
         Post newest = savePost(viewer, "newest");
         Post middle = savePost(viewer, "middle");
         Post oldest = savePost(viewer, "oldest");
