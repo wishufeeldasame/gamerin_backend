@@ -242,3 +242,18 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 검증: `./gradlew test --tests com.gamerin.backend.domain.message.service.MessageServiceTest --tests com.gamerin.backend.domain.message.controller.MessageControllerTest --tests com.gamerin.backend.global.security.jwt.JwtAuthenticationFilterTest`, `./gradlew test` 통과
 
   > 요약 : 배포 리스크 보안 변경을 유지하면서 메시지 SSE 인증, 대화방 생성 동시성, 실시간 이벤트/첨부 삭제 트랜잭션 정합성을 보강
+
+- **26/07/21** 서장호
+
+  > PUBG와 R6 전적 요약 응답을 `game`, `connected`, `playerName`, `tierLabel`, `kd`, `winRate`, `matches`, `statsMode` 공통 필드로 정리
+  > 경쟁전과 일반전을 구분하는 공통 `GameStatsMode(RANKED, NORMAL)`를 추가하고 프로필 `gameStats` JSON에도 동일한 값을 저장하도록 변경
+  > PUBG 경쟁전 K/D는 `kills / deaths`, 일반전은 deaths가 없을 때 `kills / losses`로 계산하고 승률과 경기 수를 공통 계약에 맞춰 반환
+  > R6는 경쟁전 기록이 없을 때 일반전 통계를 사용하고, 경쟁전에서만 티어를 제공하도록 파싱 및 저장 로직 정리
+  > R6 연결 시 외부 API의 고유 `accountId`를 기준으로 다른 사용자의 중복 연동을 검사하고 중복이면 `409 Conflict`를 반환하도록 보강
+  > 현재 사용자의 동일 R6 계정 재연결은 허용하며, 중복 실패 시 기존 게임 전적을 변경하지 않도록 테스트 추가
+  > PUBG와 R6 연결 해제 시 해당 게임 항목만 삭제하고 다른 게임 데이터는 유지하도록 검증
+  > 기존 DB 레거시 필드 변환 없이 새 `kd`, `matches`, `statsMode` 구조만 지원하도록 정리
+  > `R6_INTEGRATION_SPEC_KO.md`에 공통 전적 계약, 갱신·해제 및 중복 계정 오류 정책을 반영
+  > 검증: `git diff --check`, 전체 `./gradlew test --rerun-tasks --console=plain` 333건 통과, 실패·오류 0건
+
+  > 요약 : PUBG/R6 전적 계약을 공통화하고 R6 계정 중복 연동 차단과 게임별 안전한 연결 해제 흐름을 추가

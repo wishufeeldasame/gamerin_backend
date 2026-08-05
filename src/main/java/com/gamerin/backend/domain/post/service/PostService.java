@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.hashtag.service.HashtagService;
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
@@ -52,6 +53,7 @@ public class PostService {
     private final PostCommentRepository postCommentRepository;
     private final PostShareRepository postShareRepository;
     private final PostResponseAssembler postResponseAssembler;
+    private final HashtagService hashtagService;
     private final MediaStorageService mediaStorageService;
     private final VideoMetadataService videoMetadataService;
     private final ContentModerationService contentModerationService;
@@ -70,6 +72,7 @@ public class PostService {
             PostCommentRepository postCommentRepository,
             PostShareRepository postShareRepository,
             PostResponseAssembler postResponseAssembler,
+            HashtagService hashtagService,
             MediaStorageService mediaStorageService,
             VideoMetadataService videoMetadataService,
             ContentModerationService contentModerationService,
@@ -91,6 +94,7 @@ public class PostService {
         this.postCommentRepository = postCommentRepository;
         this.postShareRepository = postShareRepository;
         this.postResponseAssembler = postResponseAssembler;
+        this.hashtagService = hashtagService;
         this.mediaStorageService = mediaStorageService;
         this.videoMetadataService = videoMetadataService;
         this.contentModerationService = contentModerationService;
@@ -111,6 +115,7 @@ public class PostService {
 
         Post post = Post.create(user, content);
         Post savedPost = postRepository.save(post);
+        hashtagService.attachToPost(savedPost);
 
         return postResponseAssembler.toPostDetail(savedPost, user.getId());
     }
@@ -129,6 +134,7 @@ public class PostService {
         try {
             Post post = Post.create(user, content);
             Post savedPost = postRepository.save(post);
+            hashtagService.attachToPost(savedPost);
 
             if (!preparedMediaUpload.isEmpty()) {
                 saveUploadedMedia(savedPost, preparedMediaUpload);
