@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -15,6 +16,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -30,12 +32,18 @@ import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.jwt.JwtTokenProvider;
 
+import jakarta.persistence.EntityManager;
+
 @SpringBootTest
 @AutoConfigureMockMvc
 class SearchControllerIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+    @Autowired
+    private EntityManager entityManager;
     @Autowired
     private ObjectMapper objectMapper;
     @Autowired
@@ -131,26 +139,52 @@ class SearchControllerIntegrationTest {
     }
 
     @Test
-    void postSearchIsCaseInsensitiveAndUsesLatestFirstCursor() throws Exception {
+    void accountSearchIsCaseSensitive() throws Exception {
         User viewer = saveUser("viewer", "Viewer");
-        savePost(viewer, "오래된 SearchNeedle 기록");
-        savePost(viewer, "최신 searchneedle 기록");
+        saveUser("upper_result", "PlayerNeedle");
+        saveUser("lower_result", "playerneedle");
+        String token = bearerToken(viewer);
+
+        mockMvc.perform(get("/api/v1/search/accounts")
+                        .header(HttpHeaders.AUTHORIZATION, token)
+                        .param("q", "PlayerNeedle"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(1)))
+                .andExpect(jsonPath("$.data.items[0].handle").value("upper_result"));
+
+        mockMvc.perform(get("/api/v1/search/accounts")
+                        .header(HttpHeaders.AUTHORIZATION, token)
+                        .param("q", "playerneedle"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(1)))
+                .andExpect(jsonPath("$.data.items[0].handle").value("lower_result"));
+    }
+
+    @Test
+    void postSearchIsCaseSensitiveAndUsesLatestFirstCursor() throws Exception {
+        User viewer = saveUser("viewer", "Viewer");
+        Post older = savePost(viewer, "오래된 SearchNeedle 기록");
+        Post latest = savePost(viewer, "최신 SearchNeedle 기록");
+        savePost(viewer, "제외 searchneedle 기록");
+        setPostTime(older.getId(), OffsetDateTime.parse("2026-08-06T10:00:00+09:00"));
+        setPostTime(latest.getId(), OffsetDateTime.parse("2026-08-06T10:01:00+09:00"));
+        entityManager.clear();
         String token = bearerToken(viewer);
 
         MvcResult firstPage = mockMvc.perform(get("/api/v1/search/posts")
                         .header(HttpHeaders.AUTHORIZATION, token)
-                        .param("q", "SEARCHNEEDLE")
+                        .param("q", "SearchNeedle")
                         .param("size", "1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
-                .andExpect(jsonPath("$.data.items[0].content").value("최신 searchneedle 기록"))
+                .andExpect(jsonPath("$.data.items[0].content").value("최신 SearchNeedle 기록"))
                 .andExpect(jsonPath("$.data.hasNext").value(true))
                 .andReturn();
         String cursor = body(firstPage).path("data").path("nextCursor").asText();
 
         mockMvc.perform(get("/api/v1/search/posts")
                         .header(HttpHeaders.AUTHORIZATION, token)
-                        .param("q", "SEARCHNEEDLE")
+                        .param("q", "SearchNeedle")
                         .param("size", "1")
                         .param("cursor", cursor))
                 .andExpect(status().isOk())
@@ -234,6 +268,15 @@ class SearchControllerIntegrationTest {
 
     private Post savePost(User author, String content) {
         return postRepository.saveAndFlush(Post.create(author, content));
+    }
+
+    private void setPostTime(UUID postId, OffsetDateTime createdAt) {
+        jdbcTemplate.update(
+                "update posts set created_at = ?, updated_at = ? where id = ?",
+                createdAt,
+                createdAt,
+                postId
+        );
     }
 
     private String bearerToken(User user) {
