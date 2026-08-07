@@ -2,6 +2,9 @@ package com.gamerin.backend.domain.report.entity;
 
 import com.gamerin.backend.domain.user.entity.User;
 import jakarta.persistence.*;
+import org.hibernate.generator.EventType;
+import org.hibernate.annotations.Generated;
+
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -15,6 +18,7 @@ public class Report {
 
     // DB 시퀀스 자동 생성 (RPT-1001 등), 읽기 전용
     @Column(name = "report_code", nullable = false, insertable = false, updatable = false, length = 30)
+    @Generated(event = EventType.INSERT)
     private String reportCode;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
@@ -51,7 +55,7 @@ public class Report {
     private OffsetDateTime createdAt;
 
     @Column(name = "updated_at", nullable = false)
-    private OffsetDateTime updatedAt;
+        private OffsetDateTime updatedAt;
 
     protected Report() {
     }
@@ -82,7 +86,8 @@ public class Report {
         this.updatedAt = OffsetDateTime.now();
     }
 
-    public void updateStatus(ReportStatus status, User admin) {
+    public void updateStatus(ReportStatus status,
+            User admin) {
         this.status = status;
         this.assignedAdmin = admin;
     }
