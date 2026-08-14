@@ -163,7 +163,7 @@ class HashtagPostgresConcurrencyTest {
     }
 
     @Test
-    void postgresGlobalSearchMatchesAccountsAndPostsCaseInsensitively() {
+    void postgresGlobalSearchMatchesAccountsAndPostsCaseSensitively() {
         String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 10);
         String handle = "pgsearch" + suffix;
         UUID userId = createUser(handle, "Postgres Search User");
@@ -178,9 +178,13 @@ class HashtagPostgresConcurrencyTest {
             assertThat(searchQueryRepository.findActiveAccounts("pgsearch" + suffix, null, 10))
                     .extracting(User::getId)
                     .containsExactly(userId);
-            assertThat(searchQueryRepository.findActivePosts("postgresneedle", null, 10))
+            assertThat(searchQueryRepository.findActiveAccounts("PGSEARCH" + suffix, null, 10))
+                    .isEmpty();
+            assertThat(searchQueryRepository.findActivePosts("POSTGRESNEEDLE", null, 10))
                     .extracting(Post::getId)
                     .containsExactly(postId);
+            assertThat(searchQueryRepository.findActivePosts("postgresneedle", null, 10))
+                    .isEmpty();
         });
     }
 

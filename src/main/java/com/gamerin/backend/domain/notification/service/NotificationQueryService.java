@@ -122,21 +122,29 @@ public class NotificationQueryService {
 
     private NotificationResponse toResponse(Notification notification) {
         User actor = notification.getActor();
-        UserProfile profile = actor.getProfile();
+        UserProfile profile = actor != null ? actor.getProfile() : null;
         return new NotificationResponse(
                 notification.getId(),
                 notification.getType().apiValue(),
-                new NotificationActorResponse(
-                        actor.getId(),
-                        actor.getHandle(),
-                        actor.getNickname(),
-                        profile != null ? profile.getProfileImageUrl() : null,
-                        profile != null && profile.isVerifiedBadge()
-                ),
+                actor != null
+                        ? new NotificationActorResponse(
+                                actor.getId(),
+                                actor.getHandle(),
+                                actor.getNickname(),
+                                profile != null ? profile.getProfileImageUrl() : null,
+                                profile != null && profile.isVerifiedBadge()
+                        )
+                        : null,
                 notification.getPost() != null ? notification.getPost().getId() : null,
                 notification.getComment() != null ? notification.getComment().getId() : null,
+                notification.getConversation() != null ? notification.getConversation().getId() : null,
+                notification.getMessage() != null ? notification.getMessage().getId() : null,
+                notification.getMentoringApplication() != null
+                        ? notification.getMentoringApplication().getId()
+                        : null,
+                notification.getMentoringReview() != null ? notification.getMentoringReview().getId() : null,
                 notification.getReadAt() != null,
-                notification.getCreatedAt()
+                notification.getEventAt()
         );
     }
 
@@ -181,7 +189,7 @@ public class NotificationQueryService {
     }
 
     private String buildCursor(Notification notification) {
-        String payload = notification.getCreatedAt() + "|" + notification.getId();
+        String payload = notification.getEventAt() + "|" + notification.getId();
         return Base64.getUrlEncoder()
                 .withoutPadding()
                 .encodeToString(payload.getBytes(StandardCharsets.UTF_8));

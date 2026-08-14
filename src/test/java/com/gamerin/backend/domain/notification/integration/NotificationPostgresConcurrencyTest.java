@@ -8,6 +8,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -38,6 +39,22 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.follow.service.FollowService;
+import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
+import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
+import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
+import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
+import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
+import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
+import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
+import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
+import com.gamerin.backend.domain.mentoring.service.MentoringService;
+import com.gamerin.backend.domain.mentoring.service.SettlementProcessor;
+import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
+import com.gamerin.backend.domain.message.entity.MessageConversation;
+import com.gamerin.backend.domain.message.entity.MessageParticipant;
+import com.gamerin.backend.domain.message.repository.MessageConversationRepository;
+import com.gamerin.backend.domain.message.repository.MessageParticipantRepository;
+import com.gamerin.backend.domain.message.service.MessageService;
 import com.gamerin.backend.domain.notification.service.NotificationQueryService;
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
@@ -46,9 +63,14 @@ import com.gamerin.backend.domain.post.entity.ShareTarget;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.post.service.PostCleanupService;
 import com.gamerin.backend.domain.post.service.PostService;
+import com.gamerin.backend.domain.repost.service.PostRepostService;
+import com.gamerin.backend.domain.user.entity.MileageWallet;
+import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
+import com.gamerin.backend.domain.user.repository.MileageWalletRepository;
+import com.gamerin.backend.domain.user.service.MileageService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
 @Tag("postgresql")
@@ -67,6 +89,28 @@ class NotificationPostgresConcurrencyTest {
     private PostService postService;
     @Autowired
     private FollowService followService;
+    @Autowired
+    private PostRepostService postRepostService;
+    @Autowired
+    private MessageService messageService;
+    @Autowired
+    private MessageConversationRepository messageConversationRepository;
+    @Autowired
+    private MessageParticipantRepository messageParticipantRepository;
+    @Autowired
+    private MentoringService mentoringService;
+    @Autowired
+    private SettlementProcessor settlementProcessor;
+    @Autowired
+    private MentorProfileRepository mentorProfileRepository;
+    @Autowired
+    private MentoringProgramRepository mentoringProgramRepository;
+    @Autowired
+    private MentoringApplicationRepository mentoringApplicationRepository;
+    @Autowired
+    private MileageWalletRepository mileageWalletRepository;
+    @Autowired
+    private MileageService mileageService;
     @Autowired
     private NotificationQueryService notificationQueryService;
     @Autowired
@@ -438,12 +482,12 @@ class NotificationPostgresConcurrencyTest {
             postService.like(actor.principal(), fixture.postId());
         }
         jdbcTemplate.update(
-                "update notifications set created_at = timestamp with time zone '2026-08-12 10:00:00+09' "
+                "update notifications set event_at = timestamp with time zone '2026-08-12 10:00:00+09' "
                         + "where recipient_id = ?",
                 fixture.recipientId()
         );
         List<UUID> expectedOrder = jdbcTemplate.queryForList(
-                "select id from notifications where recipient_id = ? order by created_at desc, id desc",
+                "select id from notifications where recipient_id = ? order by event_at desc, id desc",
                 UUID.class,
                 fixture.recipientId()
         );
@@ -550,6 +594,265 @@ class NotificationPostgresConcurrencyTest {
                 .isEqualTo(sourceCount);
     }
 
+    @Test
+    void concurrentDuplicateRepostsKeepOneSourceAndNotification() throws Exception {
+        Fixture fixture = createFixture();
+        List<Supplier<Void>> operations = IntStream.range(0, CONCURRENT_REQUESTS)
+                .mapToObj(ignored -> (Supplier<Void>) () -> {
+                    postRepostService.repost(fixture.actorPrincipal(), fixture.postId());
+                    return null;
+                })
+                .toList();
+
+        List<Outcome<Void>> outcomes = runConcurrently(operations);
+
+        assertNoFailures(outcomes, "repost");
+        assertThat(count(
+                "select count(*) from post_reposts where post_id = ? and user_id = ?",
+                fixture.postId(),
+                fixture.actorId()
+        )).isEqualTo(1);
+        assertThat(count(
+                "select count(*) from notifications where type = 'REPOST' and post_id = ?",
+                fixture.postId()
+        )).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentMessagesAndReadKeepOneConversationNotificationConsistent() throws Exception {
+        MessageFixture fixture = createMessageFixture();
+        List<Supplier<Void>> sends = IntStream.range(0, CONCURRENT_REQUESTS)
+                .mapToObj(index -> (Supplier<Void>) () -> {
+                    messageService.sendMessage(
+                            fixture.senderPrincipal(),
+                            fixture.conversationId(),
+                            new SendMessageRequest("message-" + index, null)
+                    );
+                    return null;
+                })
+                .toList();
+
+        assertNoFailures(runConcurrently(sends), "direct messages");
+        assertThat(count(
+                "select count(*) from direct_messages where conversation_id = ?",
+                fixture.conversationId()
+        )).isEqualTo(CONCURRENT_REQUESTS);
+        assertThat(count(
+                """
+                select count(*) from notifications
+                where type = 'DIRECT_MESSAGE' and recipient_id = ? and conversation_id = ?
+                """,
+                fixture.recipientId(),
+                fixture.conversationId()
+        )).isEqualTo(1);
+        UUID latestMessageId = singleUuid(
+                """
+                select id from direct_messages
+                where conversation_id = ? and deleted_at is null
+                order by created_at desc, id desc limit 1
+                """,
+                fixture.conversationId()
+        );
+        assertThat(singleUuid(
+                "select message_id from notifications where recipient_id = ? and conversation_id = ?",
+                fixture.recipientId(),
+                fixture.conversationId()
+        )).isEqualTo(latestMessageId);
+
+        List<Supplier<Void>> sendAndRead = List.of(
+                () -> {
+                    messageService.sendMessage(
+                            fixture.senderPrincipal(),
+                            fixture.conversationId(),
+                            new SendMessageRequest("racing-message", null)
+                    );
+                    return null;
+                },
+                () -> {
+                    messageService.markRead(fixture.recipientPrincipal(), fixture.conversationId());
+                    return null;
+                }
+        );
+        assertNoFailures(runConcurrently(sendAndRead), "direct message and read");
+
+        OffsetDateTime lastReadAt = jdbcTemplate.queryForObject(
+                """
+                select last_read_at from message_participants
+                where conversation_id = ? and user_id = ?
+                """,
+                OffsetDateTime.class,
+                fixture.conversationId(),
+                fixture.recipientId()
+        );
+        long unreadMessages = lastReadAt == null
+                ? count(
+                        """
+                        select count(*) from direct_messages
+                        where conversation_id = ? and sender_id <> ? and deleted_at is null
+                        """,
+                        fixture.conversationId(),
+                        fixture.recipientId()
+                )
+                : count(
+                        """
+                        select count(*) from direct_messages
+                        where conversation_id = ? and sender_id <> ? and deleted_at is null
+                          and created_at > ?
+                        """,
+                        fixture.conversationId(),
+                        fixture.recipientId(),
+                        lastReadAt
+                );
+        OffsetDateTime notificationReadAt = jdbcTemplate.queryForObject(
+                """
+                select read_at from notifications
+                where recipient_id = ? and conversation_id = ?
+                """,
+                OffsetDateTime.class,
+                fixture.recipientId(),
+                fixture.conversationId()
+        );
+        if (unreadMessages == 0) {
+            assertThat(notificationReadAt).isNotNull();
+        } else {
+            assertThat(notificationReadAt).isNull();
+        }
+    }
+
+    @Test
+    void concurrentMentoringAcceptAndRejectApplyExactlyOneTransition() throws Exception {
+        MentoringFixture fixture = createMentoringFixture(ApplicationStatus.APPLIED, 900L);
+        List<Supplier<Void>> operations = List.of(
+                () -> {
+                    mentoringService.acceptApplication(fixture.mentorPrincipal(), fixture.applicationId());
+                    return null;
+                },
+                () -> {
+                    mentoringService.rejectApplication(fixture.mentorPrincipal(), fixture.applicationId());
+                    return null;
+                }
+        );
+
+        List<Outcome<Void>> outcomes = runConcurrently(operations);
+
+        assertThat(outcomes.stream().filter(outcome -> outcome.error() == null).count()).isEqualTo(1);
+        String finalStatus = jdbcTemplate.queryForObject(
+                "select status from mentoring_applications where id = ?",
+                String.class,
+                fixture.applicationId()
+        );
+        assertThat(finalStatus).isIn("ACCEPTED", "REJECTED");
+        assertThat(count(
+                """
+                select count(*) from notifications
+                where mentoring_application_id = ?
+                  and type in ('MENTORING_ACCEPTED', 'MENTORING_REJECTED')
+                """,
+                fixture.applicationId()
+        )).isEqualTo(1);
+        long refundCount = count(
+                """
+                select count(*) from mileage_transactions
+                where reference_id = ? and type = 'MENTORING_REFUND'
+                """,
+                fixture.applicationId()
+        );
+        long menteeBalance = count(
+                "select balance from mileage_wallets where user_id = ?",
+                fixture.menteeId()
+        );
+        if ("REJECTED".equals(finalStatus)) {
+            assertThat(refundCount).isEqualTo(1);
+            assertThat(menteeBalance).isEqualTo(1_000);
+        } else {
+            assertThat(refundCount).isZero();
+            assertThat(menteeBalance).isEqualTo(900);
+        }
+    }
+
+    @Test
+    void concurrentManualAndAutomaticSettlementPayExactlyOnce() throws Exception {
+        MentoringFixture fixture = createMentoringFixture(ApplicationStatus.FINISHED, 1_000L);
+        OffsetDateTime oldUpdatedAt = OffsetDateTime.now().minusDays(8);
+        jdbcTemplate.update(
+                "update mentoring_applications set updated_at = ? where id = ?",
+                oldUpdatedAt,
+                fixture.applicationId()
+        );
+        OffsetDateTime threshold = OffsetDateTime.now().minusDays(7);
+        List<Supplier<Void>> operations = List.of(
+                () -> {
+                    mentoringService.completeMentoring(fixture.menteePrincipal(), fixture.applicationId());
+                    return null;
+                },
+                () -> {
+                    settlementProcessor.processSingleSettlement(fixture.applicationId(), threshold);
+                    return null;
+                }
+        );
+
+        List<Outcome<Void>> outcomes = runConcurrently(operations);
+
+        assertThat(outcomes.stream().filter(outcome -> outcome.error() == null).count()).isBetween(1L, 2L);
+        assertThat(jdbcTemplate.queryForObject(
+                "select status from mentoring_applications where id = ?",
+                String.class,
+                fixture.applicationId()
+        )).isEqualTo("COMPLETED");
+        assertThat(count(
+                "select count(*) from mileage_transactions where reference_id = ? and type = 'SETTLEMENT'",
+                fixture.applicationId()
+        )).isEqualTo(1);
+        assertThat(count(
+                "select balance from mileage_wallets where user_id = ?",
+                fixture.mentorId()
+        )).isEqualTo(100);
+        assertThat(count(
+                "select mentee_count from mentor_profiles where user_id = ?",
+                fixture.mentorId()
+        )).isEqualTo(1);
+        assertThat(count(
+                """
+                select count(*) from notifications
+                where mentoring_application_id = ? and type = 'MENTORING_COMPLETED'
+                """,
+                fixture.applicationId()
+        )).isBetween(1L, 2L);
+    }
+
+    @Test
+    void concurrentMileageCreditsDoNotLoseBalanceUpdates() throws Exception {
+        User user = transactionTemplate.execute(status -> {
+            User saved = saveUser("mileage-user");
+            MileageWallet wallet = new MileageWallet();
+            wallet.setUser(saved);
+            wallet.setBalance(0L);
+            mileageWalletRepository.saveAndFlush(wallet);
+            return saved;
+        });
+        List<Supplier<Void>> operations = IntStream.range(0, CONCURRENT_REQUESTS)
+                .mapToObj(index -> (Supplier<Void>) () -> {
+                    User managed = userRepository.findById(user.getId()).orElseThrow();
+                    mileageService.addMileage(
+                            managed,
+                            10L,
+                            TransactionType.CHARGE,
+                            "concurrent credit",
+                            UUID.randomUUID()
+                    );
+                    return null;
+                })
+                .toList();
+
+        assertNoFailures(runConcurrently(operations), "mileage credits");
+        assertThat(count("select balance from mileage_wallets where user_id = ?", user.getId()))
+                .isEqualTo(CONCURRENT_REQUESTS * 10L);
+        assertThat(count(
+                "select count(*) from mileage_transactions where user_id = ? and type = 'CHARGE'",
+                user.getId()
+        )).isEqualTo(CONCURRENT_REQUESTS);
+    }
+
     private Fixture createFixture() {
         return transactionTemplate.execute(status -> {
             User recipient = saveUser("recipient");
@@ -562,6 +865,78 @@ class NotificationPostgresConcurrencyTest {
                     actor.getId(),
                     CustomUserPrincipal.from(actor),
                     post.getId()
+            );
+        });
+    }
+
+    private MessageFixture createMessageFixture() {
+        return transactionTemplate.execute(status -> {
+            User sender = saveUser("message-sender");
+            User recipient = saveUser("message-recipient");
+            String directKey = List.of(sender.getId().toString(), recipient.getId().toString())
+                    .stream()
+                    .sorted()
+                    .reduce((left, right) -> left + ":" + right)
+                    .orElseThrow();
+            MessageConversation conversation = messageConversationRepository.saveAndFlush(
+                    MessageConversation.createDirect(directKey)
+            );
+            messageParticipantRepository.save(MessageParticipant.create(conversation, sender));
+            messageParticipantRepository.save(MessageParticipant.create(conversation, recipient));
+            messageParticipantRepository.flush();
+            return new MessageFixture(
+                    conversation.getId(),
+                    sender.getId(),
+                    CustomUserPrincipal.from(sender),
+                    recipient.getId(),
+                    CustomUserPrincipal.from(recipient)
+            );
+        });
+    }
+
+    private MentoringFixture createMentoringFixture(ApplicationStatus status, long menteeBalance) {
+        return transactionTemplate.execute(transactionStatus -> {
+            User mentor = saveUser("mentor");
+            User mentee = saveUser("mentee");
+
+            MentorProfile profile = new MentorProfile();
+            profile.setUser(mentor);
+            profile = mentorProfileRepository.saveAndFlush(profile);
+
+            MentoringProgram program = new MentoringProgram();
+            program.setMentor(profile);
+            program.setGameName("PUBG");
+            program.setTitle("concurrency coaching");
+            program.setPrice(100L);
+            program.setTags(List.of());
+            program = mentoringProgramRepository.saveAndFlush(program);
+
+            MileageWallet menteeWallet = new MileageWallet();
+            menteeWallet.setUser(mentee);
+            menteeWallet.setBalance(menteeBalance);
+            mileageWalletRepository.save(menteeWallet);
+
+            MileageWallet mentorWallet = new MileageWallet();
+            mentorWallet.setUser(mentor);
+            mentorWallet.setBalance(0L);
+            mileageWalletRepository.save(mentorWallet);
+            mileageWalletRepository.flush();
+
+            MentoringApplication application = new MentoringApplication();
+            application.setProgram(program);
+            application.setMentee(mentee);
+            application.setAppliedMileage(100L);
+            application.setStatus(status);
+            application.setPaymentStatus(PaymentStatus.ESCROW_HELD);
+            application.setMessage("concurrency test");
+            application = mentoringApplicationRepository.saveAndFlush(application);
+
+            return new MentoringFixture(
+                    mentor.getId(),
+                    CustomUserPrincipal.from(mentor),
+                    mentee.getId(),
+                    CustomUserPrincipal.from(mentee),
+                    application.getId()
             );
         });
     }
@@ -713,6 +1088,24 @@ class NotificationPostgresConcurrencyTest {
             CustomUserPrincipal recipientPrincipal,
             UUID postId,
             List<Actor> actors
+    ) {
+    }
+
+    private record MessageFixture(
+            UUID conversationId,
+            UUID senderId,
+            CustomUserPrincipal senderPrincipal,
+            UUID recipientId,
+            CustomUserPrincipal recipientPrincipal
+    ) {
+    }
+
+    private record MentoringFixture(
+            UUID mentorId,
+            CustomUserPrincipal mentorPrincipal,
+            UUID menteeId,
+            CustomUserPrincipal menteePrincipal,
+            UUID applicationId
     ) {
     }
 

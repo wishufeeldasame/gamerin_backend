@@ -9,6 +9,10 @@ public record NotificationResponse(
         NotificationActorResponse actor,
         UUID postId,
         UUID commentId,
+        UUID conversationId,
+        UUID messageId,
+        UUID mentoringApplicationId,
+        UUID mentoringReviewId,
         boolean read,
         OffsetDateTime createdAt
 ) {
