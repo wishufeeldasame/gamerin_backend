@@ -10,6 +10,7 @@ import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.MentoringReview;
 import com.gamerin.backend.domain.message.entity.DirectMessage;
 import com.gamerin.backend.domain.message.entity.MessageConversation;
+import com.gamerin.backend.domain.mention.entity.UserMention;
 import com.gamerin.backend.domain.notification.entity.Notification;
 import com.gamerin.backend.domain.notification.entity.NotificationType;
 import com.gamerin.backend.domain.notification.repository.NotificationRepository;
@@ -148,6 +149,18 @@ public class NotificationCommandService {
             User mentor
     ) {
         notificationRepository.save(Notification.mentoringReview(mentor, mentee, application, review));
+    }
+
+    public void createMention(
+            UserMention mention,
+            Post post,
+            User actor,
+            User recipient
+    ) {
+        if (recipient.getId().equals(actor.getId())) {
+            return;
+        }
+        notificationRepository.save(Notification.mention(recipient, actor, post, mention));
     }
 
     private void createMentoring(

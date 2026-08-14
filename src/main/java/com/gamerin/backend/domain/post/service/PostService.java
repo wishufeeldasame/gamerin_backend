@@ -13,6 +13,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.hashtag.service.HashtagService;
+import com.gamerin.backend.domain.mention.service.MentionService;
 import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
@@ -55,6 +56,7 @@ public class PostService {
     private final PostShareRepository postShareRepository;
     private final PostResponseAssembler postResponseAssembler;
     private final HashtagService hashtagService;
+    private final MentionService mentionService;
     private final NotificationCommandService notificationCommandService;
     private final MediaStorageService mediaStorageService;
     private final VideoMetadataService videoMetadataService;
@@ -75,6 +77,7 @@ public class PostService {
             PostShareRepository postShareRepository,
             PostResponseAssembler postResponseAssembler,
             HashtagService hashtagService,
+            MentionService mentionService,
             NotificationCommandService notificationCommandService,
             MediaStorageService mediaStorageService,
             VideoMetadataService videoMetadataService,
@@ -98,6 +101,7 @@ public class PostService {
         this.postShareRepository = postShareRepository;
         this.postResponseAssembler = postResponseAssembler;
         this.hashtagService = hashtagService;
+        this.mentionService = mentionService;
         this.notificationCommandService = notificationCommandService;
         this.mediaStorageService = mediaStorageService;
         this.videoMetadataService = videoMetadataService;
@@ -120,6 +124,7 @@ public class PostService {
         Post post = Post.create(user, content);
         Post savedPost = postRepository.save(post);
         hashtagService.attachToPost(savedPost);
+        mentionService.attachToPost(savedPost);
 
         return postResponseAssembler.toPostDetail(savedPost, user.getId());
     }
@@ -139,6 +144,7 @@ public class PostService {
             Post post = Post.create(user, content);
             Post savedPost = postRepository.save(post);
             hashtagService.attachToPost(savedPost);
+            mentionService.attachToPost(savedPost);
 
             if (!preparedMediaUpload.isEmpty()) {
                 saveUploadedMedia(savedPost, preparedMediaUpload);
@@ -227,6 +233,7 @@ public class PostService {
         PostComment savedComment = postCommentRepository.save(PostComment.create(post, user, content));
         post.increaseCommentCount();
         notificationCommandService.createComment(savedComment, post, user);
+        mentionService.attachToComment(savedComment);
         return postResponseAssembler.toCommentResponse(savedComment, user.getId());
     }
 
@@ -252,6 +259,7 @@ public class PostService {
         }
 
         notificationCommandService.removeComment(commentId);
+        mentionService.removeForComment(commentId);
         postCommentRepository.delete(comment);
         post.decreaseCommentCount();
     }

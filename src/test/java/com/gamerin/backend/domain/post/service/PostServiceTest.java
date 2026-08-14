@@ -52,6 +52,7 @@ import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import com.gamerin.backend.domain.hashtag.service.HashtagService;
+import com.gamerin.backend.domain.mention.service.MentionService;
 import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 
 @ExtendWith(MockitoExtension.class)
@@ -85,6 +86,9 @@ class PostServiceTest {
 
     @Mock
     private HashtagService hashtagService;
+
+    @Mock
+    private MentionService mentionService;
 
     @Mock
     private NotificationCommandService notificationCommandService;
@@ -124,6 +128,7 @@ class PostServiceTest {
                 postShareRepository,
                 postResponseAssembler,
                 hashtagService,
+                mentionService,
                 notificationCommandService,
                 mediaStorageService,
                 videoMetadataService,
@@ -148,6 +153,7 @@ class PostServiceTest {
                 postShareRepository,
                 postResponseAssembler,
                 hashtagService,
+                mentionService,
                 notificationCommandService,
                 mediaStorageService,
                 videoMetadataService,
@@ -185,6 +191,7 @@ class PostServiceTest {
         assertThat(result).isSameAs(response);
         ArgumentCaptor<Post> postCaptor = ArgumentCaptor.forClass(Post.class);
         verify(hashtagService).attachToPost(postCaptor.capture());
+        verify(mentionService).attachToPost(postCaptor.getValue());
         assertThat(postCaptor.getValue().getId()).isEqualTo(postId);
         assertThat(postCaptor.getValue().getContent()).isEqualTo("#PUBG ranked");
     }
@@ -206,6 +213,7 @@ class PostServiceTest {
 
         verify(postRepository, never()).save(any(Post.class));
         verify(hashtagService, never()).attachToPost(any(Post.class));
+        verify(mentionService, never()).attachToPost(any(Post.class));
     }
 
     @Test
@@ -228,6 +236,7 @@ class PostServiceTest {
 
         verify(postRepository, never()).save(any(Post.class));
         verify(hashtagService, never()).attachToPost(any(Post.class));
+        verify(mentionService, never()).attachToPost(any(Post.class));
     }
 
     @Test
@@ -259,6 +268,7 @@ class PostServiceTest {
         postService.create(CustomUserPrincipal.from(user), request);
 
         verify(hashtagService).attachToPost(any(Post.class));
+        verify(mentionService).attachToPost(any(Post.class));
         ArgumentCaptor<List<PostMedia>> mediaCaptor = ArgumentCaptor.forClass(List.class);
         verify(postMediaRepository).saveAll(mediaCaptor.capture());
 
@@ -695,6 +705,7 @@ class PostServiceTest {
         ArgumentCaptor<PostComment> commentCaptor = ArgumentCaptor.forClass(PostComment.class);
         verify(postCommentRepository).save(commentCaptor.capture());
         verify(notificationCommandService).createComment(commentCaptor.getValue(), post, actor);
+        verify(mentionService).attachToComment(commentCaptor.getValue());
         assertThat(actual).isEqualTo(response);
         assertThat(post.getCommentCount()).isEqualTo(1);
     }
@@ -745,6 +756,7 @@ class PostServiceTest {
         postService.deleteComment(CustomUserPrincipal.from(user), postId, commentId);
 
         verify(notificationCommandService).removeComment(commentId);
+        verify(mentionService).removeForComment(commentId);
         verify(postCommentRepository).delete(comment);
         assertThat(post.getCommentCount()).isZero();
     }

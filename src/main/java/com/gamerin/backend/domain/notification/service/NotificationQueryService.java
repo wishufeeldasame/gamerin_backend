@@ -136,7 +136,7 @@ public class NotificationQueryService {
                         )
                         : null,
                 notification.getPost() != null ? notification.getPost().getId() : null,
-                notification.getComment() != null ? notification.getComment().getId() : null,
+                resolveCommentId(notification),
                 notification.getConversation() != null ? notification.getConversation().getId() : null,
                 notification.getMessage() != null ? notification.getMessage().getId() : null,
                 notification.getMentoringApplication() != null
@@ -146,6 +146,16 @@ public class NotificationQueryService {
                 notification.getReadAt() != null,
                 notification.getEventAt()
         );
+    }
+
+    private UUID resolveCommentId(Notification notification) {
+        if (notification.getComment() != null) {
+            return notification.getComment().getId();
+        }
+        if (notification.getMention() != null && notification.getMention().getComment() != null) {
+            return notification.getMention().getComment().getId();
+        }
+        return null;
     }
 
     private UUID getCurrentUserId(CustomUserPrincipal principal) {

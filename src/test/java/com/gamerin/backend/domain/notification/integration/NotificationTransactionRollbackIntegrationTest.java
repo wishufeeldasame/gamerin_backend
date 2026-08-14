@@ -46,6 +46,7 @@ import com.gamerin.backend.domain.message.repository.DirectMessageRepository;
 import com.gamerin.backend.domain.message.repository.MessageConversationRepository;
 import com.gamerin.backend.domain.message.repository.MessageParticipantRepository;
 import com.gamerin.backend.domain.message.service.MessageService;
+import com.gamerin.backend.domain.mention.repository.UserMentionRepository;
 import com.gamerin.backend.domain.notification.repository.NotificationRepository;
 import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.post.entity.Post;
@@ -76,6 +77,8 @@ class NotificationTransactionRollbackIntegrationTest {
     private JwtTokenProvider jwtTokenProvider;
     @Autowired
     private NotificationRepository notificationRepository;
+    @Autowired
+    private UserMentionRepository userMentionRepository;
     @Autowired
     private PostLikeRepository postLikeRepository;
     @Autowired
@@ -122,6 +125,7 @@ class NotificationTransactionRollbackIntegrationTest {
     @AfterEach
     void cleanFixtures() {
         notificationRepository.deleteAllInBatch();
+        userMentionRepository.deleteAllInBatch();
         directMessageAttachmentRepository.deleteAllInBatch();
         directMessageRepository.deleteAllInBatch();
         messageParticipantRepository.deleteAllInBatch();
@@ -169,6 +173,27 @@ class NotificationTransactionRollbackIntegrationTest {
 
         assertThat(postCommentRepository.count()).isZero();
         assertThat(reloadPost(fixture).getCommentCount()).isZero();
+    }
+
+    @Test
+    void postAndMentionRelationRollBackWhenMentionNotificationCreationFails() throws Exception {
+        Fixture fixture = createFixture();
+        long existingPostCount = postRepository.count();
+        doThrow(notificationFailure()).when(notificationCommandService)
+                .createMention(any(), any(), any(), any());
+
+        mockMvc.perform(post("/api/v1/posts")
+                        .header(HttpHeaders.AUTHORIZATION, fixture.actorToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of(
+                                "content",
+                                "hello @" + fixture.recipient().getHandle()
+                        ))))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.success").value(false));
+
+        assertThat(postRepository.count()).isEqualTo(existingPostCount);
+        assertThat(userMentionRepository.count()).isZero();
     }
 
     @Test

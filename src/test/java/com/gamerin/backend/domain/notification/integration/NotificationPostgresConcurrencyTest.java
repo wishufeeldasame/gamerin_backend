@@ -55,6 +55,7 @@ import com.gamerin.backend.domain.message.entity.MessageParticipant;
 import com.gamerin.backend.domain.message.repository.MessageConversationRepository;
 import com.gamerin.backend.domain.message.repository.MessageParticipantRepository;
 import com.gamerin.backend.domain.message.service.MessageService;
+import com.gamerin.backend.domain.mention.service.MentionService;
 import com.gamerin.backend.domain.notification.service.NotificationQueryService;
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
@@ -93,6 +94,8 @@ class NotificationPostgresConcurrencyTest {
     private PostRepostService postRepostService;
     @Autowired
     private MessageService messageService;
+    @Autowired
+    private MentionService mentionService;
     @Autowired
     private MessageConversationRepository messageConversationRepository;
     @Autowired
@@ -192,6 +195,72 @@ class NotificationPostgresConcurrencyTest {
                 from notifications
                 where actor_id = ? and recipient_id = ? and type = 'FOLLOW'
                 """, fixture.actorId(), fixture.recipientId())).isEqualTo(1L);
+    }
+
+    @Test
+    void concurrentDuplicateMentionAttachmentKeepsOneRelationAndOneNotification() throws Exception {
+        MentionFixture fixture = createMentionFixture();
+        List<Supplier<Void>> operations = IntStream.range(0, CONCURRENT_REQUESTS)
+                .mapToObj(ignored -> (Supplier<Void>) () -> {
+                    Post post = postRepository.findById(fixture.postId()).orElseThrow();
+                    mentionService.attachToPost(post);
+                    return null;
+                })
+                .toList();
+
+        List<Outcome<Void>> outcomes = runConcurrently(operations);
+
+        assertNoFailures(outcomes, "mention attachment");
+        assertThat(count("""
+                select count(*)
+                from user_mentions
+                where post_id = ? and mentioned_user_id = ?
+                """, fixture.postId(), fixture.recipientId())).isEqualTo(1L);
+        assertThat(count("""
+                select count(*)
+                from notifications
+                where post_id = ? and recipient_id = ? and type = 'MENTION'
+                """, fixture.postId(), fixture.recipientId())).isEqualTo(1L);
+    }
+
+    @Test
+    void mentionConstraintsRejectMissingSourceAndDuplicateNotification() {
+        MentionFixture fixture = createMentionFixture();
+        Post post = postRepository.findById(fixture.postId()).orElseThrow();
+        mentionService.attachToPost(post);
+        UUID mentionId = singleUuid(
+                "select id from user_mentions where post_id = ? and mentioned_user_id = ?",
+                fixture.postId(),
+                fixture.recipientId()
+        );
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                insert into notifications(recipient_id, actor_id, type, post_id)
+                values (?, ?, 'MENTION', ?)
+                """, fixture.recipientId(), fixture.actorId(), fixture.postId()))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                insert into notifications(recipient_id, actor_id, type, post_id, mention_id)
+                values (?, ?, 'MENTION', ?, ?)
+                """, fixture.recipientId(), fixture.actorId(), fixture.postId(), mentionId))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void hardDeletingMentionedPostCascadesMentionRelationAndNotification() {
+        MentionFixture fixture = createMentionFixture();
+        Post post = postRepository.findById(fixture.postId()).orElseThrow();
+        mentionService.attachToPost(post);
+        jdbcTemplate.update(
+                "update posts set deleted_at = current_timestamp - interval '2 days' where id = ?",
+                fixture.postId()
+        );
+
+        postCleanupService.purgeExpiredSoftDeletedPosts();
+
+        assertThat(count("select count(*) from posts where id = ?", fixture.postId())).isZero();
+        assertThat(count("select count(*) from user_mentions where post_id = ?", fixture.postId())).isZero();
+        assertThat(count("select count(*) from notifications where post_id = ?", fixture.postId())).isZero();
     }
 
     @Test
@@ -869,6 +938,21 @@ class NotificationPostgresConcurrencyTest {
         });
     }
 
+    private MentionFixture createMentionFixture() {
+        return transactionTemplate.execute(status -> {
+            User actor = saveUser("ma");
+            User recipient = saveUser("mr");
+            Post post = postRepository.saveAndFlush(
+                    Post.create(actor, "hello @" + recipient.getHandle())
+            );
+            return new MentionFixture(
+                    actor.getId(),
+                    recipient.getId(),
+                    post.getId()
+            );
+        });
+    }
+
     private MessageFixture createMessageFixture() {
         return transactionTemplate.execute(status -> {
             User sender = saveUser("message-sender");
@@ -1075,6 +1159,13 @@ class NotificationPostgresConcurrencyTest {
             CustomUserPrincipal recipientPrincipal,
             UUID actorId,
             CustomUserPrincipal actorPrincipal,
+            UUID postId
+    ) {
+    }
+
+    private record MentionFixture(
+            UUID actorId,
+            UUID recipientId,
             UUID postId
     ) {
     }

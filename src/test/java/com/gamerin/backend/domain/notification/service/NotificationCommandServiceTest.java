@@ -23,6 +23,7 @@ import com.gamerin.backend.domain.follow.entity.Follow;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.message.entity.DirectMessage;
 import com.gamerin.backend.domain.message.entity.MessageConversation;
+import com.gamerin.backend.domain.mention.entity.UserMention;
 import com.gamerin.backend.domain.notification.entity.Notification;
 import com.gamerin.backend.domain.notification.entity.NotificationType;
 import com.gamerin.backend.domain.notification.repository.NotificationRepository;
@@ -37,6 +38,9 @@ class NotificationCommandServiceTest {
 
     @Mock
     private NotificationRepository notificationRepository;
+
+    @Mock
+    private UserMention userMention;
 
     private NotificationCommandService service;
 
@@ -185,6 +189,32 @@ class NotificationCommandServiceTest {
         assertThat(notification.getRecipient()).isSameAs(recipient);
         assertThat(notification.getActor()).isNull();
         assertThat(notification.getMentoringApplication()).isSameAs(application);
+    }
+
+    @Test
+    void createsMentionNotificationWithMentionRelationAndNavigationPost() {
+        User recipient = savedUser("recipient");
+        User actor = savedUser("actor");
+        Post post = savedPost(actor);
+
+        service.createMention(userMention, post, actor, recipient);
+
+        Notification notification = captureSavedNotification();
+        assertThat(notification.getType()).isEqualTo(NotificationType.MENTION);
+        assertThat(notification.getRecipient()).isSameAs(recipient);
+        assertThat(notification.getActor()).isSameAs(actor);
+        assertThat(notification.getPost()).isSameAs(post);
+        assertThat(notification.getComment()).isNull();
+        assertThat(notification.getMention()).isSameAs(userMention);
+    }
+
+    @Test
+    void doesNotCreateOwnMentionNotification() {
+        User actor = savedUser("actor");
+
+        service.createMention(userMention, savedPost(actor), actor, actor);
+
+        verify(notificationRepository, never()).save(any(Notification.class));
     }
 
     private Notification captureSavedNotification() {

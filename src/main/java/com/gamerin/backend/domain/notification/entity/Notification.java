@@ -9,6 +9,7 @@ import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.MentoringReview;
 import com.gamerin.backend.domain.message.entity.DirectMessage;
 import com.gamerin.backend.domain.message.entity.MessageConversation;
+import com.gamerin.backend.domain.mention.entity.UserMention;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostComment;
 import com.gamerin.backend.domain.post.entity.PostLike;
@@ -46,7 +47,8 @@ import jakarta.persistence.UniqueConstraint;
                         name = "uq_notifications_recipient_mentoring_event",
                         columnNames = {"recipient_id", "type", "mentoring_application_id"}
                 ),
-                @UniqueConstraint(name = "uq_notifications_mentoring_review", columnNames = "mentoring_review_id")
+                @UniqueConstraint(name = "uq_notifications_mentoring_review", columnNames = "mentoring_review_id"),
+                @UniqueConstraint(name = "uq_notifications_mention", columnNames = "mention_id")
         }
 )
 public class Notification {
@@ -102,6 +104,10 @@ public class Notification {
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "mentoring_review_id")
     private MentoringReview mentoringReview;
+
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "mention_id")
+    private UserMention mention;
 
     @Column(name = "read_at")
     private OffsetDateTime readAt;
@@ -178,6 +184,18 @@ public class Notification {
                 application
         );
         notification.mentoringReview = review;
+        return notification;
+    }
+
+    public static Notification mention(
+            User recipient,
+            User actor,
+            Post post,
+            UserMention mention
+    ) {
+        Notification notification = base(recipient, actor, NotificationType.MENTION);
+        notification.post = post;
+        notification.mention = mention;
         return notification;
     }
 
@@ -260,6 +278,10 @@ public class Notification {
 
     public MentoringReview getMentoringReview() {
         return mentoringReview;
+    }
+
+    public UserMention getMention() {
+        return mention;
     }
 
     public OffsetDateTime getReadAt() {
