@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -42,6 +43,7 @@ import jakarta.servlet.http.HttpServletResponse;
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 public class SecurityConfig {
 
     private static final String[] PUBLIC_PATTERNS = {
@@ -118,9 +120,23 @@ public class SecurityConfig {
                         auth.requestMatchers(denyAllPatterns).denyAll();
                     }
                     auth.requestMatchers(buildPermitAllPatterns(swaggerUiEnabled, apiDocsEnabled)).permitAll()
+                            .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                             .anyRequest().authenticated();
                 })
                 .exceptionHandling(exception -> exception
+                        // 403 권한 없음 예외 발생 시 커스텀 JSON 응답 출력
+                        .accessDeniedHandler((request, response, accessDeniedException) -> {
+                            String message = "Access is denied due to insufficient permissions.";
+                            JsonLogContext.setFailureReason(request, message);
+                            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                            response.setContentType("application/json;charset=UTF-8");
+                            Map<String, Object> errorResponse = Map.of(
+                                    "success", false,
+                                    "message", "해당 리소스에 대한 접근 권한이 없습니다."
+                            );
+                            response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
+                        })
+                        // 401 인증 필요/토큰 만료 시 커스텀 JSON 응답 출력
                         .defaultAuthenticationEntryPointFor(
                                 (request, response, authException) -> response
                                         .sendError(HttpServletResponse.SC_FORBIDDEN),
@@ -134,11 +150,9 @@ public class SecurityConfig {
                                     Map<String, Object> errorResponse = Map.of(
                                             "success", false,
                                             "message", "인증이 필요하거나 토큰이 만료되었습니다."
-
-                                );
+                                    );
 
                                     response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
-
                                 },
                                 new AntPathRequestMatcher("/api/**"))
                         .defaultAuthenticationEntryPointFor(

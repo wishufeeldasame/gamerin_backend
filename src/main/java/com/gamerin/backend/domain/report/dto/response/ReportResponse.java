@@ -41,10 +41,8 @@ public record ReportResponse(
                     report.getReasonCode().getDescription(), // reasonCode.getDescription() 사용
                     report.getDetails(),
                     report.getStatus(),
-                    report.getAssignedAdmin() != null ? report.
-  getAssignedAdmin().getId() : null,
-                    report.getAssignedAdmin() != null ? report.
-  getAssignedAdmin().getNickname() : null,
+                    report.getAssignedAdmin() != null ? report.getAssignedAdmin().getId() : null,
+                    report.getAssignedAdmin() != null ? report.getAssignedAdmin().getNickname() : null,
                     report.getCreatedAt(),
                     report.getUpdatedAt()
             );
