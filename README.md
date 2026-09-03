@@ -159,7 +159,7 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 대화방을 나간 사용자가 단순 대화방 조회/생성 요청만으로 상대방에 의해 재활성화되지 않도록 DM participant 재활성화 흐름을 분리
   > 나간 사용자가 직접 같은 상대와 대화방을 다시 열 때는 본인 participant만 복구하고, 상대가 새 메시지를 보낼 때만 incoming message 기준으로 수신자 participant를 복구하도록 정리
   > 공유 게시글만 포함한 메시지가 게시글 hard delete 시 체크 제약을 깨지 않도록 `content`를 빈 문자열로 저장하도록 변경
-  > 기존 `content is null and shared_post_id is not null` DM 데이터를 보정하는 `V13__normalize_direct_message_shared_post_content.sql` Flyway 마이그레이션 추가
+  > 기존 `content is null and shared_post_id is not null` DM 데이터를 보정하는 `V12__normalize_direct_message_shared_post_content.sql` Flyway 마이그레이션 추가
   > 메시지 커서 페이징이 `createdAt`만 비교해 동일 timestamp 메시지를 누락하지 않도록 `(createdAt, id)` 튜플 기준으로 조회 조건 보강
   > 메시지 수정 API, `UpdateMessageRequest`, `editedAt` 응답 필드, `message-updated` 실시간 이벤트, 엔티티 edit 로직 제거
   > DM 삭제/대화방 나가기 명세와 변경 가이드를 현재 지원 기능 기준으로 정리

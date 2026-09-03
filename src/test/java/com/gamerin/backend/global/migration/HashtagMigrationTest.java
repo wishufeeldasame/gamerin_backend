@@ -30,8 +30,8 @@ class HashtagMigrationTest {
                 .dataSource(url, "sa", "")
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
-                .baselineVersion("17")
-                .target("18")
+                .baselineVersion("15")
+                .target("16")
                 .load();
 
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);

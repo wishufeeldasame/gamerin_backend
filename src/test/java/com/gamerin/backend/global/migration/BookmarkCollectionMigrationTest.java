@@ -43,8 +43,8 @@ class BookmarkCollectionMigrationTest {
                 .dataSource(url, "sa", "")
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
-                .baselineVersion("14")
-                .target("15")
+                .baselineVersion("13")
+                .target("14")
                 .load();
 
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);

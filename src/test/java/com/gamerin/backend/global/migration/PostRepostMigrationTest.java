@@ -33,8 +33,8 @@ class PostRepostMigrationTest {
                 .dataSource(url, "sa", "")
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
-                .baselineVersion("15")
-                .target("16")
+                .baselineVersion("14")
+                .target("15")
                 .load();
 
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
