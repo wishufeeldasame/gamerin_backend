@@ -37,6 +37,7 @@ import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostComment;
+import com.gamerin.backend.domain.post.entity.PostLike;
 import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
 import com.gamerin.backend.domain.post.entity.PostShare;
@@ -51,6 +52,8 @@ import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import com.gamerin.backend.domain.hashtag.service.HashtagService;
+import com.gamerin.backend.domain.mention.service.MentionService;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 
 @ExtendWith(MockitoExtension.class)
 class PostServiceTest {
@@ -83,6 +86,12 @@ class PostServiceTest {
 
     @Mock
     private HashtagService hashtagService;
+
+    @Mock
+    private MentionService mentionService;
+
+    @Mock
+    private NotificationCommandService notificationCommandService;
 
     @Mock
     private MediaStorageService mediaStorageService;
@@ -119,6 +128,8 @@ class PostServiceTest {
                 postShareRepository,
                 postResponseAssembler,
                 hashtagService,
+                mentionService,
+                notificationCommandService,
                 mediaStorageService,
                 videoMetadataService,
                 contentModerationService,
@@ -142,6 +153,8 @@ class PostServiceTest {
                 postShareRepository,
                 postResponseAssembler,
                 hashtagService,
+                mentionService,
+                notificationCommandService,
                 mediaStorageService,
                 videoMetadataService,
                 contentModerationService,
@@ -178,6 +191,7 @@ class PostServiceTest {
         assertThat(result).isSameAs(response);
         ArgumentCaptor<Post> postCaptor = ArgumentCaptor.forClass(Post.class);
         verify(hashtagService).attachToPost(postCaptor.capture());
+        verify(mentionService).attachToPost(postCaptor.getValue());
         assertThat(postCaptor.getValue().getId()).isEqualTo(postId);
         assertThat(postCaptor.getValue().getContent()).isEqualTo("#PUBG ranked");
     }
@@ -199,6 +213,7 @@ class PostServiceTest {
 
         verify(postRepository, never()).save(any(Post.class));
         verify(hashtagService, never()).attachToPost(any(Post.class));
+        verify(mentionService, never()).attachToPost(any(Post.class));
     }
 
     @Test
@@ -221,6 +236,7 @@ class PostServiceTest {
 
         verify(postRepository, never()).save(any(Post.class));
         verify(hashtagService, never()).attachToPost(any(Post.class));
+        verify(mentionService, never()).attachToPost(any(Post.class));
     }
 
     @Test
@@ -252,6 +268,7 @@ class PostServiceTest {
         postService.create(CustomUserPrincipal.from(user), request);
 
         verify(hashtagService).attachToPost(any(Post.class));
+        verify(mentionService).attachToPost(any(Post.class));
         ArgumentCaptor<List<PostMedia>> mediaCaptor = ArgumentCaptor.forClass(List.class);
         verify(postMediaRepository).saveAll(mediaCaptor.capture());
 
@@ -522,7 +539,7 @@ class PostServiceTest {
         Post post = savedPost(postId, user);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
 
         postService.delete(CustomUserPrincipal.from(user), postId);
 
@@ -539,7 +556,7 @@ class PostServiceTest {
         Post post = savedPost(postId, author);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
 
         assertThatThrownBy(() -> postService.delete(CustomUserPrincipal.from(user), postId))
                 .isInstanceOf(ResponseStatusException.class)
@@ -550,6 +567,70 @@ class PostServiceTest {
     }
 
     @Test
+    void likeCreatesNotificationOnlyWhenLikeIsNew() {
+        UUID actorId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User actor = savedUser(actorId, "actor", "Actor");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedPost(postId, author);
+
+        when(userRepository.findActiveByIdForUpdate(actorId)).thenReturn(Optional.of(actor));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(postLikeRepository.existsByPostIdAndUserId(postId, actorId)).thenReturn(false);
+        when(postLikeRepository.save(any(PostLike.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        postService.like(CustomUserPrincipal.from(actor), postId);
+
+        ArgumentCaptor<PostLike> likeCaptor = ArgumentCaptor.forClass(PostLike.class);
+        verify(postLikeRepository).save(likeCaptor.capture());
+        verify(notificationCommandService).createLike(likeCaptor.getValue(), post, actor);
+        assertThat(post.getLikeCount()).isEqualTo(1);
+    }
+
+    @Test
+    void likeDoesNotCreateAnotherNotificationWhenLikeAlreadyExists() {
+        UUID actorId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User actor = savedUser(actorId, "actor", "Actor");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedPost(postId, author);
+
+        when(userRepository.findActiveByIdForUpdate(actorId)).thenReturn(Optional.of(actor));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(postLikeRepository.existsByPostIdAndUserId(postId, actorId)).thenReturn(true);
+
+        postService.like(CustomUserPrincipal.from(actor), postId);
+
+        verify(postLikeRepository, never()).save(any(PostLike.class));
+        verify(notificationCommandService, never()).createLike(any(), any(), any());
+        assertThat(post.getLikeCount()).isZero();
+    }
+
+    @Test
+    void unlikeRemovesNotificationAndLikeWhenPresent() {
+        UUID actorId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User actor = savedUser(actorId, "actor", "Actor");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedPost(postId, author);
+        post.increaseLikeCount();
+        PostLike like = PostLike.create(post, actor);
+
+        when(userRepository.findActiveByIdForUpdate(actorId)).thenReturn(Optional.of(actor));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(postLikeRepository.findByPostIdAndUserId(postId, actorId)).thenReturn(Optional.of(like));
+
+        postService.unlike(CustomUserPrincipal.from(actor), postId);
+
+        verify(notificationCommandService).removeLike(postId, actorId);
+        verify(postLikeRepository).delete(like);
+        assertThat(post.getLikeCount()).isZero();
+    }
+
+    @Test
     void shareStoresEventAndIncreasesShareCount() {
         UUID userId = UUID.randomUUID();
         UUID postId = UUID.randomUUID();
@@ -557,7 +638,7 @@ class PostServiceTest {
         Post post = savedPost(postId, user);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
 
         postService.share(CustomUserPrincipal.from(user), postId, new CreateShareRequest(ShareTarget.KAKAO));
 
@@ -573,7 +654,7 @@ class PostServiceTest {
         Post post = savedPost(postId, user);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
         doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: harassment"))
                 .when(contentModerationService)
                 .assertTextAllowed("bad comment");
@@ -588,6 +669,45 @@ class PostServiceTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
 
         verify(postCommentRepository, never()).save(any());
+    }
+
+    @Test
+    void createCommentCreatesNotificationAfterSavingComment() {
+        UUID actorId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        UUID commentId = UUID.randomUUID();
+        User actor = savedUser(actorId, "actor", "Actor");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedPost(postId, author);
+        CommentResponse response = new CommentResponse(
+                commentId,
+                "Actor",
+                "actor",
+                null,
+                false,
+                "hello",
+                OffsetDateTime.now(),
+                true
+        );
+
+        when(userRepository.findByIdAndDeletedAtIsNull(actorId)).thenReturn(Optional.of(actor));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(postCommentRepository.save(any(PostComment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(postResponseAssembler.toCommentResponse(any(PostComment.class), eq(actorId))).thenReturn(response);
+
+        CommentResponse actual = postService.createComment(
+                CustomUserPrincipal.from(actor),
+                postId,
+                new CreateCommentRequest(" hello ")
+        );
+
+        ArgumentCaptor<PostComment> commentCaptor = ArgumentCaptor.forClass(PostComment.class);
+        verify(postCommentRepository).save(commentCaptor.capture());
+        verify(notificationCommandService).createComment(commentCaptor.getValue(), post, actor);
+        verify(mentionService).attachToComment(commentCaptor.getValue());
+        assertThat(actual).isEqualTo(response);
+        assertThat(post.getCommentCount()).isEqualTo(1);
     }
 
     @Test
@@ -630,10 +750,13 @@ class PostServiceTest {
         PostComment comment = PostComment.create(post, user, "hello");
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
         when(postCommentRepository.findActiveByPostIdAndId(postId, commentId)).thenReturn(Optional.of(comment));
 
         postService.deleteComment(CustomUserPrincipal.from(user), postId, commentId);
 
+        verify(notificationCommandService).removeComment(commentId);
+        verify(mentionService).removeForComment(commentId);
         verify(postCommentRepository).delete(comment);
         assertThat(post.getCommentCount()).isZero();
     }
@@ -650,6 +773,7 @@ class PostServiceTest {
         PostComment comment = PostComment.create(post, author, "hello");
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
         when(postCommentRepository.findActiveByPostIdAndId(postId, commentId)).thenReturn(Optional.of(comment));
 
         assertThatThrownBy(() -> postService.deleteComment(CustomUserPrincipal.from(user), postId, commentId))
@@ -658,6 +782,7 @@ class PostServiceTest {
                 .isEqualTo(HttpStatus.FORBIDDEN.value());
 
         assertThat(comment.getDeletedAt()).isNull();
+        verify(notificationCommandService, never()).removeComment(any());
     }
 
     private PostDetailResponse postDetailResponse(UUID postId) {

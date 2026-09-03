@@ -38,6 +38,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamerin.backend.domain.follow.entity.Follow;
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.notification.repository.NotificationRepository;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.repost.entity.PostRepost;
@@ -66,6 +67,8 @@ class PostRepostControllerIntegrationTest {
     @Autowired
     private PostRepostRepository postRepostRepository;
     @Autowired
+    private NotificationRepository notificationRepository;
+    @Autowired
     private FollowRepository followRepository;
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -75,6 +78,7 @@ class PostRepostControllerIntegrationTest {
     @BeforeEach
     @AfterEach
     void cleanRepostFixtures() {
+        notificationRepository.deleteAllInBatch();
         postRepostRepository.deleteAllInBatch();
         followRepository.deleteAllInBatch();
         postRepository.deleteAllInBatch();

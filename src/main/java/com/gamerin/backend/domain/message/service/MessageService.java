@@ -39,6 +39,7 @@ import com.gamerin.backend.domain.message.repository.DirectMessageAttachmentRepo
 import com.gamerin.backend.domain.message.repository.DirectMessageRepository;
 import com.gamerin.backend.domain.message.repository.MessageConversationRepository;
 import com.gamerin.backend.domain.message.repository.MessageParticipantRepository;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.moderation.ContentModerationService;
 import com.gamerin.backend.domain.post.repository.PostRepository;
@@ -84,6 +85,7 @@ public class MessageService {
     private final VideoMetadataService videoMetadataService;
     private final VideoOptimizationService videoOptimizationService;
     private final SseStreamTokenService sseStreamTokenService;
+    private final NotificationCommandService notificationCommandService;
 
     public MessageService(
             UserRepository userRepository,
@@ -101,7 +103,8 @@ public class MessageService {
             TextSecurityService textSecurityService,
             VideoMetadataService videoMetadataService,
             VideoOptimizationService videoOptimizationService,
-            SseStreamTokenService sseStreamTokenService
+            SseStreamTokenService sseStreamTokenService,
+            NotificationCommandService notificationCommandService
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -119,6 +122,7 @@ public class MessageService {
         this.videoMetadataService = videoMetadataService;
         this.videoOptimizationService = videoOptimizationService;
         this.sseStreamTokenService = sseStreamTokenService;
+        this.notificationCommandService = notificationCommandService;
     }
 
     @Transactional(readOnly = true)
@@ -200,7 +204,7 @@ public class MessageService {
             SendMessageRequest request
     ) {
         User viewer = getCurrentUser(principal);
-        MessageConversation conversation = getActiveConversation(conversationId);
+        MessageConversation conversation = getActiveConversationForUpdate(conversationId);
         MessageParticipant viewerParticipant = getParticipant(conversationId, viewer.getId());
 
         String content = normalizeContent(request.content());
@@ -216,7 +220,7 @@ public class MessageService {
                 content != null ? content : "",
                 sharedPost
         );
-        viewerParticipant.markRead();
+        markParticipantRead(viewerParticipant);
         publishMessageCreated(savedMessage);
 
         return toMessageResponse(savedMessage, viewer.getId());
@@ -242,6 +246,9 @@ public class MessageService {
         validateMultipartMessageContent(content, attachments);
         List<PreparedMessageAttachment> preparedAttachments = prepareAttachments(attachments);
 
+        conversation = getActiveConversationForUpdate(conversationId);
+        viewerParticipant = getParticipant(conversationId, viewer.getId());
+
         List<MessageAttachmentStorageService.StoredFile> storedFiles = new ArrayList<>();
         try {
             DirectMessage savedMessage = saveMessage(
@@ -266,7 +273,7 @@ public class MessageService {
             }
 
             directMessageAttachmentRepository.saveAll(messageAttachments);
-            viewerParticipant.markRead();
+            markParticipantRead(viewerParticipant);
             publishMessageCreated(savedMessage);
             return toMessageResponse(savedMessage, viewer.getId());
         } catch (Exception ex) {
@@ -286,6 +293,7 @@ public class MessageService {
             UUID messageId
     ) {
         User viewer = getCurrentUser(principal);
+        MessageConversation conversation = getActiveConversationForUpdate(conversationId);
         getParticipant(conversationId, viewer.getId());
 
         DirectMessage message = getActiveMessage(conversationId, messageId);
@@ -295,6 +303,7 @@ public class MessageService {
 
         deleteMessageAttachmentFilesAfterCommit(message);
         message.softDelete();
+        synchronizeConversationAfterMessageDeletion(conversation, message);
         publishMessageDeleted(message);
     }
 
@@ -317,14 +326,17 @@ public class MessageService {
 
     public void leaveConversation(CustomUserPrincipal principal, UUID conversationId) {
         User viewer = getCurrentUser(principal);
+        getActiveConversationForUpdate(conversationId);
         MessageParticipant participant = getParticipant(conversationId, viewer.getId());
         participant.softDelete();
+        notificationCommandService.removeDirectMessage(viewer.getId(), conversationId);
     }
 
     public void markRead(CustomUserPrincipal principal, UUID conversationId) {
         User viewer = getCurrentUser(principal);
+        getActiveConversationForUpdate(conversationId);
         MessageParticipant participant = getParticipant(conversationId, viewer.getId());
-        participant.markRead();
+        markParticipantRead(participant);
     }
 
     @Transactional(readOnly = true)
@@ -359,16 +371,22 @@ public class MessageService {
 
         validateMessageContent(content);
 
-        List<ConversationResponse> responses = new ArrayList<>();
-        for (User recipient : recipients) {
+        Map<UUID, ConversationResponse> responsesByRecipient = new LinkedHashMap<>();
+        List<User> lockOrderedRecipients = recipients.stream()
+                .sorted((left, right) -> left.getId().compareTo(right.getId()))
+                .toList();
+        for (User recipient : lockOrderedRecipients) {
             MessageConversation conversation = getOrCreateDirectConversation(viewer, recipient);
             MessageParticipant viewerParticipant = getOrCreateParticipant(conversation, viewer);
             DirectMessage savedMessage = saveMessage(conversation, viewer, content != null ? content : "", sharedPost);
-            viewerParticipant.markRead();
+            markParticipantRead(viewerParticipant);
             publishMessageCreated(savedMessage);
-            responses.add(toConversationResponse(conversation, viewer.getId(), viewerParticipant));
+            responsesByRecipient.put(
+                    recipient.getId(),
+                    toConversationResponse(conversation, viewer.getId(), viewerParticipant)
+            );
         }
-        return responses;
+        return recipients.stream().map(recipient -> responsesByRecipient.get(recipient.getId())).toList();
     }
 
     private MessageConversation getOrCreateDirectConversation(User viewer, User recipient) {
@@ -378,7 +396,7 @@ public class MessageService {
 
         String directKey = buildDirectKey(viewer.getId(), recipient.getId());
         messageConversationRepository.insertDirectConversationIfAbsent(directKey);
-        MessageConversation conversation = messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(directKey)
+        MessageConversation conversation = messageConversationRepository.findActiveByDirectKeyForUpdate(directKey)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "Direct conversation is not available."));
         messageParticipantRepository.insertParticipantIfAbsent(conversation.getId(), viewer.getId());
         messageParticipantRepository.insertParticipantIfAbsent(conversation.getId(), recipient.getId());
@@ -402,7 +420,7 @@ public class MessageService {
             String content,
             Post sharedPost
     ) {
-        reactivateRecipientsForIncomingMessage(conversation, sender.getId());
+        List<MessageParticipant> recipients = reactivateRecipientsForIncomingMessage(conversation, sender.getId());
         DirectMessage savedMessage = directMessageRepository.save(DirectMessage.create(
                 conversation,
                 sender,
@@ -410,15 +428,73 @@ public class MessageService {
                 sharedPost
         ));
         conversation.updateLastMessage(savedMessage.getId());
+        for (MessageParticipant recipient : recipients) {
+            notificationCommandService.createOrRefreshDirectMessage(
+                    recipient.getUser(),
+                    sender,
+                    conversation,
+                    savedMessage
+            );
+        }
         return savedMessage;
     }
 
-    private void reactivateRecipientsForIncomingMessage(MessageConversation conversation, UUID senderId) {
+    private List<MessageParticipant> reactivateRecipientsForIncomingMessage(
+            MessageConversation conversation,
+            UUID senderId
+    ) {
         List<MessageParticipant> participants = messageParticipantRepository.findByConversationId(conversation.getId());
         for (MessageParticipant participant : participants) {
             if (!participant.getUser().getId().equals(senderId) && participant.getDeletedAt() != null) {
                 participant.reactivateForIncomingMessage();
             }
+        }
+        return participants.stream()
+                .filter(participant -> !participant.getUser().getId().equals(senderId))
+                .toList();
+    }
+
+    private void markParticipantRead(MessageParticipant participant) {
+        participant.markRead();
+        notificationCommandService.markDirectMessageRead(
+                participant.getUser().getId(),
+                participant.getConversation().getId()
+        );
+    }
+
+    private void synchronizeConversationAfterMessageDeletion(
+            MessageConversation conversation,
+            DirectMessage deletedMessage
+    ) {
+        List<DirectMessage> latestMessages = directMessageRepository.findRecentActiveByConversationId(
+                conversation.getId(),
+                PageRequest.of(0, 1)
+        );
+        conversation.updateLastMessage(latestMessages.isEmpty() ? null : latestMessages.get(0).getId());
+
+        List<MessageParticipant> recipients = messageParticipantRepository
+                .findByConversationIdAndDeletedAtIsNull(conversation.getId())
+                .stream()
+                .filter(participant -> !participant.getUser().getId().equals(deletedMessage.getSender().getId()))
+                .toList();
+        for (MessageParticipant recipient : recipients) {
+            DirectMessage latestIncoming = directMessageRepository.findRecentActiveIncoming(
+                            conversation.getId(),
+                            recipient.getUser().getId(),
+                            PageRequest.of(0, 1)
+                    )
+                    .stream()
+                    .findFirst()
+                    .orElse(null);
+            OffsetDateTime readThreshold = latest(recipient.getLastReadAt(), recipient.getClearedAt());
+            boolean unread = latestIncoming != null
+                    && (readThreshold == null || latestIncoming.getCreatedAt().isAfter(readThreshold));
+            notificationCommandService.syncDirectMessage(
+                    recipient.getUser(),
+                    conversation,
+                    latestIncoming,
+                    unread
+            );
         }
     }
 
@@ -623,6 +699,11 @@ public class MessageService {
 
     private MessageConversation getActiveConversation(UUID conversationId) {
         return messageConversationRepository.findByIdAndDeletedAtIsNull(conversationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found."));
+    }
+
+    private MessageConversation getActiveConversationForUpdate(UUID conversationId) {
+        return messageConversationRepository.findActiveByIdForUpdate(conversationId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found."));
     }
 

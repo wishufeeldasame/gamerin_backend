@@ -54,6 +54,20 @@ public interface DirectMessageRepository extends JpaRepository<DirectMessage, UU
         select dm
         from DirectMessage dm
         where dm.conversation.id = :conversationId
+          and dm.sender.id <> :recipientId
+          and dm.deletedAt is null
+        order by dm.createdAt desc, dm.id desc
+        """)
+    List<DirectMessage> findRecentActiveIncoming(
+            @Param("conversationId") UUID conversationId,
+            @Param("recipientId") UUID recipientId,
+            Pageable pageable
+    );
+
+    @Query("""
+        select dm
+        from DirectMessage dm
+        where dm.conversation.id = :conversationId
           and dm.deletedAt is null
         order by dm.createdAt desc, dm.id desc
         """)
