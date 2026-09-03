@@ -9,6 +9,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.repository.PostRepository;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.repost.dto.response.RepostActionResponse;
 import com.gamerin.backend.domain.repost.entity.PostRepost;
 import com.gamerin.backend.domain.repost.repository.PostRepostRepository;
@@ -22,15 +23,18 @@ public class PostRepostService {
     private final UserRepository userRepository;
     private final PostRepository postRepository;
     private final PostRepostRepository postRepostRepository;
+    private final NotificationCommandService notificationCommandService;
 
     public PostRepostService(
             UserRepository userRepository,
             PostRepository postRepository,
-            PostRepostRepository postRepostRepository
+            PostRepostRepository postRepostRepository,
+            NotificationCommandService notificationCommandService
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
         this.postRepostRepository = postRepostRepository;
+        this.notificationCommandService = notificationCommandService;
     }
 
     @Transactional
@@ -43,7 +47,11 @@ public class PostRepostService {
         }
 
         PostRepost repost = postRepostRepository.findByPostIdAndUserId(postId, user.getId())
-                .orElseGet(() -> postRepostRepository.saveAndFlush(PostRepost.create(post, user)));
+                .orElse(null);
+        if (repost == null) {
+            repost = postRepostRepository.saveAndFlush(PostRepost.create(post, user));
+            notificationCommandService.createRepost(repost, post, user);
+        }
 
         return new RepostActionResponse(
                 postId,
@@ -59,7 +67,10 @@ public class PostRepostService {
         getAccessiblePost(postId);
 
         postRepostRepository.findByPostIdAndUserId(postId, user.getId())
-                .ifPresent(postRepostRepository::delete);
+                .ifPresent(repost -> {
+                    notificationCommandService.removeRepost(postId, user.getId());
+                    postRepostRepository.delete(repost);
+                });
         postRepostRepository.flush();
 
         return new RepostActionResponse(

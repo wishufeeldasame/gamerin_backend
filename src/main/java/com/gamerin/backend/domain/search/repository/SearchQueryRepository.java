@@ -5,7 +5,6 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -41,8 +40,8 @@ public class SearchQueryRepository {
                 from users u
                 where u.deleted_at is null
                   and (
-                      lower(u.handle) like :keyword escape '\\'
-                      or lower(u.nickname) like :keyword escape '\\'
+                      u.handle like :keyword escape '\\'
+                      or u.nickname like :keyword escape '\\'
                   )
                 """);
         if (cursor != null) {
@@ -76,7 +75,7 @@ public class SearchQueryRepository {
                 join users author on author.id = p.author_id
                 where p.deleted_at is null
                   and author.deleted_at is null
-                  and lower(coalesce(p.content, '')) like :keyword escape '\\'
+                  and coalesce(p.content, '') like :keyword escape '\\'
                 """);
         if (cursor != null) {
             sql.append("""
@@ -147,7 +146,7 @@ public class SearchQueryRepository {
     }
 
     private String containsPattern(String keyword) {
-        return "%" + escapeLike(keyword.toLowerCase(Locale.ROOT)) + "%";
+        return "%" + escapeLike(keyword) + "%";
     }
 
     private String escapeLike(String value) {

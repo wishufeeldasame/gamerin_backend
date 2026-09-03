@@ -35,6 +35,7 @@ import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringReviewRepository;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -61,6 +62,7 @@ public class MentoringService {
     private final MentoringReviewRepository mentoringReviewRepository;
     private final MileageService mileageService;
     private final SettlementProcessor settlementProcessor;
+    private final NotificationCommandService notificationCommandService;
 
     public MentoringService(
             MentorProfileRepository mentorProfileRepository,
@@ -69,7 +71,8 @@ public class MentoringService {
             MentoringApplicationRepository mentoringApplicationRepository,
             MentoringReviewRepository mentoringReviewRepository,
             MileageService mileageService,
-            SettlementProcessor settlementProcessor ) {
+            SettlementProcessor settlementProcessor,
+            NotificationCommandService notificationCommandService ) {
         this.mentorProfileRepository = mentorProfileRepository;
         this.userRepository = userRepository;
         this.mentoringProgramRepository = mentoringProgramRepository;
@@ -77,6 +80,7 @@ public class MentoringService {
         this.mentoringReviewRepository = mentoringReviewRepository;
         this.mileageService = mileageService;
         this.settlementProcessor = settlementProcessor;
+        this.notificationCommandService = notificationCommandService;
     }
 
     @Transactional
@@ -247,13 +251,19 @@ public class MentoringService {
 
         MentoringApplication savedApplication = mentoringApplicationRepository.save(application);
 
+        notificationCommandService.createMentoringApplication(
+                savedApplication,
+                mentee,
+                program.getMentor().getUser()
+        );
+
         return toApplicationResponse(savedApplication);
     }
 
     //멘토링 신청 취소
     @Transactional
     public MentoringApplicationResponse cancelApplication(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
                         .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
 
         // 권한 확인: 신청한 멘티 본인인지 확인
@@ -269,6 +279,12 @@ public class MentoringService {
         // 상태 변경
         application.setStatus(ApplicationStatus.CANCELLED);
         application.setPaymentStatus(PaymentStatus.REFUNDED);
+
+        notificationCommandService.createMentoringCancelled(
+                application,
+                application.getMentee(),
+                application.getProgram().getMentor().getUser()
+        );
 
         // 마일리지 환불 및 트랜잭션 기록
         mileageService.addMileage(
@@ -297,7 +313,7 @@ public class MentoringService {
     // 신청 수락
     @Transactional
     public MentoringApplicationResponse acceptApplication(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
                 .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
 
         // 권한 확인: 신청된 프로그램의 멘토가 본인인지 확인
@@ -310,6 +326,11 @@ public class MentoringService {
         }
 
         application.setStatus(ApplicationStatus.ACCEPTED);
+        notificationCommandService.createMentoringAccepted(
+                application,
+                application.getProgram().getMentor().getUser(),
+                application.getMentee()
+        );
         return toApplicationResponse(application);
     
     }
@@ -317,7 +338,7 @@ public class MentoringService {
     // 신청 거절
     @Transactional
     public MentoringApplicationResponse rejectApplication(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
                 .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
 
         // 권한 확인
@@ -333,6 +354,12 @@ public class MentoringService {
         application.setStatus(ApplicationStatus.REJECTED);
         application.setPaymentStatus(PaymentStatus.REFUNDED);
 
+        notificationCommandService.createMentoringRejected(
+                application,
+                application.getProgram().getMentor().getUser(),
+                application.getMentee()
+        );
+
         // 마일리지 환불 및 트랜잭션 기록
         mileageService.addMileage(
             application.getMentee(),
@@ -347,7 +374,7 @@ public class MentoringService {
     // 멘토링 시작 (멘토가 수행)
     @Transactional
     public MentoringApplicationResponse startMentoring(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
                 .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
 
         // 권한 확인: 해당 프로그램의 멘토만 시작 가능
@@ -361,13 +388,18 @@ public class MentoringService {
         }
 
         application.setStatus(ApplicationStatus.ONGOING);
+        notificationCommandService.createMentoringStarted(
+                application,
+                application.getProgram().getMentor().getUser(),
+                application.getMentee()
+        );
         return toApplicationResponse(application);
     }
 
     // 멘토가 수업 완료를 선언 (정산 대기 상태로 진입)
     @Transactional
     public MentoringApplicationResponse finishMentoring(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
                 .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
 
         if (!application.getProgram().getMentor().getId().equals(principal.getUserId())) {
@@ -380,13 +412,19 @@ public class MentoringService {
 
         application.setStatus(ApplicationStatus.FINISHED);
 
+        notificationCommandService.createMentoringFinished(
+                application,
+                application.getProgram().getMentor().getUser(),
+                application.getMentee()
+        );
+
         return toApplicationResponse(application);
     }
 
     // 멘토링 완료 확정 및 정산 (멘티가 수행)
     @Transactional
     public MentoringApplicationResponse completeMentoring(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
                 .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
 
         // 권한 확인: 신청한 멘티만 완료 확정 가능
@@ -405,7 +443,10 @@ public class MentoringService {
         application.setCompletedAt(java.time.OffsetDateTime.now());
 
         // 멘토에게 마일리지 입금 및 트랜잭션 기록
-        MentorProfile mentorProfile = application.getProgram().getMentor();
+        MentorProfile mentorProfile = mentorProfileRepository.findByIdForUpdate(
+                        application.getProgram().getMentor().getId()
+                )
+                .orElseThrow(() -> new RuntimeException("Mentor profile not found."));
         mileageService.addMileage(
             mentorProfile.getUser(),
             application.getAppliedMileage(),
@@ -418,25 +459,34 @@ public class MentoringService {
         // 멘토 통계 업데이트 : 누적 멘티 수 증가
         mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
 
+        notificationCommandService.createMentoringCompleted(
+                application,
+                application.getMentee(),
+                mentorProfile.getUser()
+        );
+
         return toApplicationResponse(application);
 
     }
 
     // 자동 정산 대상 처리
-    @Transactional
+    @Transactional(readOnly = true)
     public void processAutoSettlement() {
         
         OffsetDateTime threshold = OffsetDateTime.now().minusDays(7);
-        List<MentoringApplication> targets = mentoringApplicationRepository.findByStatusAndUpdatedAtBefore(ApplicationStatus.FINISHED, threshold);
+        List<UUID> targetIds = mentoringApplicationRepository.findIdsByStatusAndUpdatedAtBefore(
+                ApplicationStatus.FINISHED,
+                threshold
+        );
 
-        for (MentoringApplication application : targets) {
+        for (UUID applicationId : targetIds) {
             try {
                 // 개별 트랜잭션 호출
-                settlementProcessor.processSingleSettlement(application);
+                settlementProcessor.processSingleSettlement(applicationId, threshold);
 
             } catch (Exception e) {
                 
-                System.err.println("자동 정산 실패 (ID: " + application.getId() + "): " + e.getMessage());
+                System.err.println("자동 정산 실패 (ID: " + applicationId + "): " + e.getMessage());
             }
         }
     }
@@ -445,7 +495,7 @@ public class MentoringService {
     // 리뷰 생성
     @Transactional
     public MentoringReviewResponse createReview(CustomUserPrincipal principal, MentoringReviewRequest request) {
-        MentoringApplication application = mentoringApplicationRepository.findById(request.applicationId())
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(request.applicationId())
                 .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
         
 
@@ -475,7 +525,17 @@ public class MentoringService {
         MentoringReview savedReview = mentoringReviewRepository.save(review);
 
         // 멘토 통계 업데이트
-        updateMentorStats(application.getProgram().getMentor(), request.rating());
+        MentorProfile mentorProfile = mentorProfileRepository.findByIdForUpdate(
+                        application.getProgram().getMentor().getId()
+                )
+                .orElseThrow(() -> new RuntimeException("Mentor profile not found."));
+        updateMentorStats(mentorProfile, request.rating());
+        notificationCommandService.createMentoringReview(
+                application,
+                savedReview,
+                application.getMentee(),
+                mentorProfile.getUser()
+        );
 
         return MentoringReviewResponse.from(savedReview);
     }

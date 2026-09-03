@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.user.repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -21,11 +23,23 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     @Query("select u from User u where u.id = :id and u.deletedAt is null")
     Optional<User> findActiveByIdForUpdate(@Param("id") UUID id);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from User u where u.id = :id")
+    Optional<User> findByIdForUpdate(@Param("id") UUID id);
+
     Optional<User> findByHandle(String handle);
 
     Optional<User> findByHandleAndDeletedAtIsNull(String handle);
 
     boolean existsByHandle(String handle);
+
+    @Query("""
+            select u
+            from User u
+            where u.deletedAt is null
+              and u.handle in :handles
+            """)
+    List<User> findActiveByHandleIn(@Param("handles") Collection<String> handles);
 
     Optional<User> findByEmail(String email);
 

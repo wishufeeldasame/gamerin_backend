@@ -34,7 +34,7 @@ public class MileageService {
 
     @Transactional
     public void useMileage(User user, Long amount, TransactionType type, String description, UUID referenceId) {
-        MileageWallet wallet = getOrCreateWallet(user);
+        MileageWallet wallet = getOrCreateWalletForUpdate(user);
         
         // 1. 잔액 차감 (기존 MileageWallet의 deduct 로직 활용)
         wallet.deduct(amount);
@@ -45,7 +45,7 @@ public class MileageService {
 
     @Transactional
     public void addMileage(User user, Long amount, TransactionType type, String description, UUID referenceId) {
-        MileageWallet wallet = getOrCreateWallet(user);
+        MileageWallet wallet = getOrCreateWalletForUpdate(user);
         
         // 1. 잔액 추가
         wallet.addBalance(amount);
@@ -80,6 +80,21 @@ public class MileageService {
                     newWallet.setBalance(0L);
 
                     return walletRepository.save(newWallet);
+                });
+    }
+
+    private MileageWallet getOrCreateWalletForUpdate(User user) {
+        return walletRepository.findByIdForUpdate(user.getId())
+                .orElseGet(() -> {
+                    User managedUser = userRepository.findByIdForUpdate(user.getId())
+                            .orElseThrow(() -> new RuntimeException("User not found."));
+                    return walletRepository.findByIdForUpdate(user.getId())
+                            .orElseGet(() -> {
+                                MileageWallet wallet = new MileageWallet();
+                                wallet.setUser(managedUser);
+                                wallet.setBalance(0L);
+                                return walletRepository.saveAndFlush(wallet);
+                            });
                 });
     }
 

@@ -4,6 +4,9 @@ import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
+import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
+import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.service.MileageService;
 import org.slf4j.Logger;
@@ -13,6 +16,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.UUID;
 
 @Component
 public class SettlementProcessor {
@@ -21,10 +25,21 @@ public class SettlementProcessor {
 LoggerFactory.getLogger(SettlementProcessor.class);
 
     private final MileageService mileageService;
+    private final MentoringApplicationRepository mentoringApplicationRepository;
+    private final MentorProfileRepository mentorProfileRepository;
+    private final NotificationCommandService notificationCommandService;
 
     // Lombok의 @RequiredArgsConstructor 대신 직접 생성자 작성
-    public SettlementProcessor(MileageService mileageService) {
+    public SettlementProcessor(
+            MileageService mileageService,
+            MentoringApplicationRepository mentoringApplicationRepository,
+            MentorProfileRepository mentorProfileRepository,
+            NotificationCommandService notificationCommandService
+    ) {
         this.mileageService = mileageService;
+        this.mentoringApplicationRepository = mentoringApplicationRepository;
+        this.mentorProfileRepository = mentorProfileRepository;
+        this.notificationCommandService = notificationCommandService;
     }
 
     /**
@@ -33,14 +48,25 @@ LoggerFactory.getLogger(SettlementProcessor.class);
 커밋/롤백됩니다.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void processSingleSettlement(MentoringApplication application) {
+    public void processSingleSettlement(UUID applicationId, OffsetDateTime threshold) {
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
+                .orElse(null);
+        if (application == null
+                || application.getStatus() != ApplicationStatus.FINISHED
+                || !application.getUpdatedAt().isBefore(threshold)) {
+            return;
+        }
+
         // 1. 상태 변경
         application.setStatus(ApplicationStatus.COMPLETED);
         application.setPaymentStatus(PaymentStatus.SETTLED);
         application.setCompletedAt(OffsetDateTime.now());
 
         // 2. 멘토 마일리지 정산
-        MentorProfile mentorProfile = application.getProgram().getMentor();
+        MentorProfile mentorProfile = mentorProfileRepository.findByIdForUpdate(
+                        application.getProgram().getMentor().getId()
+                )
+                .orElseThrow(() -> new IllegalStateException("Mentor profile not found."));
         mileageService.addMileage(
             mentorProfile.getUser(),
             application.getAppliedMileage(),
@@ -51,6 +77,9 @@ LoggerFactory.getLogger(SettlementProcessor.class);
 
         // 3. 멘토 통계 업데이트
         mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
+
+        notificationCommandService.createMentoringCompleted(application, null, mentorProfile.getUser());
+        notificationCommandService.createMentoringCompleted(application, null, application.getMentee());
         
         log.info("자동 정산 성공 - ID: {}", application.getId());
     }
