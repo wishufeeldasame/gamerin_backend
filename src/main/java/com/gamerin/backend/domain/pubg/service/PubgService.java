@@ -5,6 +5,7 @@ import java.math.RoundingMode;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.game.model.GameStatsMode;
+import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
 import com.gamerin.backend.domain.pubg.client.PubgApiClient;
 import com.gamerin.backend.domain.pubg.dto.request.PubgConnectRequest;
 import com.gamerin.backend.domain.pubg.dto.response.PubgConnectionResponse;
@@ -18,11 +19,12 @@ import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
-@Transactional
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
 public class PubgService {
 
     private static final String GAME_NAME = "PUBG";
@@ -31,15 +33,18 @@ public class PubgService {
 
     private final UserRepository userRepository;
     private final PubgApiClient pubgApiClient;
+    private final GameStatsPersistenceService gameStatsPersistenceService;
 
-    public PubgService(UserRepository userRepository, PubgApiClient pubgApiClient) {
+    public PubgService(UserRepository userRepository, PubgApiClient pubgApiClient,
+            GameStatsPersistenceService gameStatsPersistenceService) {
         this.userRepository = userRepository;
         this.pubgApiClient = pubgApiClient;
+        this.gameStatsPersistenceService = gameStatsPersistenceService;
     }
 
     public PubgConnectionResponse connect(CustomUserPrincipal principal, PubgConnectRequest request) {
         User user = getCurrentUser(principal);
-        UserProfile profile = getCurrentProfile(user);
+        getCurrentProfile(user);
 
         String playerName = request.playerName();
 
@@ -47,7 +52,7 @@ public class PubgService {
 
         String accountId = pubgApiClient.findAccountId(playerName);
 
-        profile.connectPubg(playerName, accountId);
+        gameStatsPersistenceService.updateConnection(user.getId(), current -> current.connectPubg(playerName, accountId));
         return new PubgConnectionResponse(true, playerName);
     }
 
@@ -75,6 +80,7 @@ public class PubgService {
             return disconnectedResponse();
         }
         String playerName = profile.getPubgPlayerName();
+        long connectionVersion = profile.getGameConnectionVersion(GAME_NAME);
 
         String seasonId = pubgApiClient.findCurrentSeasonId();
 
@@ -84,31 +90,33 @@ public class PubgService {
         } catch (NoRankedRecordException e) {
             NormalStats normalStats = pubgApiClient.getNormalStats(accountId, seasonId, NORMAL_MODE);
             PubgSummaryResponse response = toNormalSummary(playerName, normalStats);
-            profile.updatePubgSummary(
-                    response.tierLabel(),
-                    response.kd(),
-                    response.winRate(),
-                    response.matches(),
-                    response.statsMode()
-            );
+            saveSummary(user.getId(), accountId, connectionVersion, response);
             return response;
         }
 
         PubgSummaryResponse response = toRankedSummary(playerName, rankedStats);
-        profile.updatePubgSummary(
-                response.tierLabel(),
-                response.kd(),
-                response.winRate(),
-                response.matches(),
-                response.statsMode()
-        );
+        saveSummary(user.getId(), accountId, connectionVersion, response);
         return response;
+    }
+
+    private void saveSummary(UUID userId, String accountId, long connectionVersion, PubgSummaryResponse response) {
+        gameStatsPersistenceService.updateSummary(
+                userId, GAME_NAME, connectionVersion,
+                current -> current.hasConnectedPubg() && accountId.equals(current.getPubgAccountId()),
+                current -> current.updatePubgSummary(
+                        response.tierLabel(),
+                        response.kd(),
+                        response.winRate(),
+                        response.matches(),
+                        response.statsMode()
+                )
+        );
     }
 
     public void disconnect(CustomUserPrincipal principal) {
         User user = getCurrentUser(principal);
-        UserProfile profile = getCurrentProfile(user);
-        profile.disconnectPubg();
+        getCurrentProfile(user);
+        gameStatsPersistenceService.updateConnection(user.getId(), UserProfile::disconnectPubg);
     }
 
     private User getCurrentUser(CustomUserPrincipal principal) {
@@ -116,7 +124,7 @@ public class PubgService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication is required.");
         }
 
-        return userRepository.findById(principal.getUserId())
+        return userRepository.findWithProfileById(principal.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
     }
 

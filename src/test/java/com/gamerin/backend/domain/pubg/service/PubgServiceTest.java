@@ -3,6 +3,7 @@ package com.gamerin.backend.domain.pubg.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -11,6 +12,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.game.model.GameStatsMode;
+import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
 import com.gamerin.backend.domain.pubg.client.PubgApiClient;
 import com.gamerin.backend.domain.pubg.dto.response.PubgSummaryResponse;
 import com.gamerin.backend.domain.pubg.exception.NoRankedRecordException;
@@ -19,6 +21,7 @@ import com.gamerin.backend.domain.pubg.model.RankedStats;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
+import com.gamerin.backend.domain.user.repository.UserProfileRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,11 +41,15 @@ class PubgServiceTest {
     @Mock
     private PubgApiClient pubgApiClient;
 
+    @Mock
+    private UserProfileRepository userProfileRepository;
+
     private PubgService pubgService;
 
     @BeforeEach
     void setUp() {
-        pubgService = new PubgService(userRepository, pubgApiClient);
+        pubgService = new PubgService(userRepository, pubgApiClient,
+                new GameStatsPersistenceService(userProfileRepository));
     }
 
     @Test
@@ -50,7 +57,7 @@ class PubgServiceTest {
         User user = savedUser(UUID.randomUUID(), "tester", "Tester");
         user.getProfile().connectPubg("PubgPlayer", "account-1");
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(pubgApiClient.findCurrentSeasonId()).thenReturn("season-1");
         when(pubgApiClient.getRankedStats("account-1", "season-1", "squad"))
                 .thenThrow(new NoRankedRecordException());
@@ -97,7 +104,7 @@ class PubgServiceTest {
         User user = savedUser(UUID.randomUUID(), "tester", "Tester");
         user.getProfile().connectPubg("PubgPlayer", "account-1");
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(pubgApiClient.findCurrentSeasonId()).thenReturn("season-1");
         when(pubgApiClient.getRankedStats("account-1", "season-1", "squad"))
                 .thenReturn(new RankedStats(3.769230769230769, 16, 5, "Survivor", "1"));
@@ -119,7 +126,7 @@ class PubgServiceTest {
         User user = savedUser(UUID.randomUUID(), "tester", "Tester");
         user.getProfile().connectPubg("PubgPlayer", "account-1");
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(pubgApiClient.findCurrentSeasonId()).thenReturn("season-1");
         when(pubgApiClient.getRankedStats("account-1", "season-1", "squad"))
                 .thenReturn(new RankedStats(null, 16, null, "Gold", "III"));
@@ -138,7 +145,7 @@ class PubgServiceTest {
         User user = savedUser(UUID.randomUUID(), "tester", "Tester");
         user.getProfile().connectPubg("PubgPlayer", "account-1");
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(pubgApiClient.findCurrentSeasonId()).thenReturn("season-1");
         when(pubgApiClient.getRankedStats("account-1", "season-1", "squad"))
                 .thenThrow(new NoRankedRecordException());
@@ -157,7 +164,7 @@ class PubgServiceTest {
     @Test
     void getMySummaryReturnsNullableDisconnectedContract() {
         User user = savedUser(UUID.randomUUID(), "tester", "Tester");
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
 
         PubgSummaryResponse response = pubgService.getMySummary(CustomUserPrincipal.from(user));
 
@@ -175,7 +182,7 @@ class PubgServiceTest {
         User user = savedUser(UUID.randomUUID(), "tester", "Tester");
         user.getProfile().connectPubg("PubgPlayer", "account-1");
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(pubgApiClient.findCurrentSeasonId()).thenReturn("season-1");
         when(pubgApiClient.getRankedStats("account-1", "season-1", "squad"))
                 .thenThrow(new ResponseStatusException(status, "Ranked stats request failed."));
@@ -191,6 +198,7 @@ class PubgServiceTest {
         ReflectionTestUtils.setField(user, "id", id);
         UserProfile profile = UserProfile.createDefault(user);
         user.setProfile(profile);
+        lenient().when(userProfileRepository.findByUserIdForUpdate(id)).thenReturn(Optional.of(profile));
         return user;
     }
 

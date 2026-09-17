@@ -7,6 +7,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.game.model.GameStatsMode;
+import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
 import com.gamerin.backend.domain.r6.client.R6StatsClient;
 import com.gamerin.backend.domain.r6.dto.request.R6ConnectRequest;
 import com.gamerin.backend.domain.r6.dto.response.R6ConnectionResponse;
@@ -20,11 +21,12 @@ import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
-@Transactional
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
 public class R6Service {
 
     private static final String GAME = "R6";
@@ -33,15 +35,18 @@ public class R6Service {
 
     private final UserRepository userRepository;
     private final R6StatsClient r6StatsClient;
+    private final GameStatsPersistenceService gameStatsPersistenceService;
 
-    public R6Service(UserRepository userRepository, R6StatsClient r6StatsClient) {
+    public R6Service(UserRepository userRepository, R6StatsClient r6StatsClient,
+            GameStatsPersistenceService gameStatsPersistenceService) {
         this.userRepository = userRepository;
         this.r6StatsClient = r6StatsClient;
+        this.gameStatsPersistenceService = gameStatsPersistenceService;
     }
 
     public R6ConnectionResponse connect(CustomUserPrincipal principal, R6ConnectRequest request) {
         User user = getCurrentUser(principal);
-        UserProfile profile = getCurrentProfile(user);
+        getCurrentProfile(user);
         String playerName = normalizeInputPlayerName(request.playerName());
 
         R6Profile r6Profile = r6StatsClient.findProfile(playerName);
@@ -51,7 +56,7 @@ public class R6Service {
 
         R6SummaryStats summary = normalizeSummaryMetrics(r6Profile.summary());
         OffsetDateTime updatedAt = OffsetDateTime.now();
-        profile.connectR6(
+        gameStatsPersistenceService.updateConnection(user.getId(), current -> current.connectR6(
                 playerName,
                 normalizePlayerName(playerName),
                 PLATFORM,
@@ -62,7 +67,7 @@ public class R6Service {
                 summary == null ? null : summary.matches(),
                 summary == null ? null : summary.statsMode(),
                 updatedAt
-        );
+        ));
 
         return new R6ConnectionResponse(true, playerName, PLATFORM);
     }
@@ -99,24 +104,29 @@ public class R6Service {
             return disconnectedResponse();
         }
 
+        long connectionVersion = profile.getGameConnectionVersion(GAME);
         R6SummaryStats summary = normalizeSummaryMetrics(r6StatsClient.getSummary(profileRef));
         OffsetDateTime updatedAt = OffsetDateTime.now();
-        profile.updateR6Summary(
-                summary == null ? null : summary.tierLabel(),
-                summary == null ? null : summary.kd(),
-                summary == null ? null : roundWinRate(summary.winRate()),
-                summary == null ? null : summary.matches(),
-                summary == null ? null : summary.statsMode(),
-                updatedAt
+        UserProfile current = gameStatsPersistenceService.updateSummary(
+                user.getId(), GAME, connectionVersion,
+                latest -> latest.hasConnectedR6() && profileRef.accountId().equals(latest.getR6AccountId()),
+                latest -> latest.updateR6Summary(
+                        summary == null ? null : summary.tierLabel(),
+                        summary == null ? null : summary.kd(),
+                        summary == null ? null : roundWinRate(summary.winRate()),
+                        summary == null ? null : summary.matches(),
+                        summary == null ? null : summary.statsMode(),
+                        updatedAt
+                )
         );
 
-        return toSummaryResponse(profile);
+        return current.hasConnectedR6() ? toSummaryResponse(current) : disconnectedResponse();
     }
 
     public void disconnect(CustomUserPrincipal principal) {
         User user = getCurrentUser(principal);
-        UserProfile profile = getCurrentProfile(user);
-        profile.disconnectR6();
+        getCurrentProfile(user);
+        gameStatsPersistenceService.updateConnection(user.getId(), UserProfile::disconnectR6);
     }
 
     private User getCurrentUser(CustomUserPrincipal principal) {
@@ -124,7 +134,7 @@ public class R6Service {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication is required.");
         }
 
-        return userRepository.findById(principal.getUserId())
+        return userRepository.findWithProfileById(principal.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
     }
 

@@ -3,6 +3,7 @@ package com.gamerin.backend.domain.r6.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -14,6 +15,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.game.model.GameStatsMode;
+import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
 import com.gamerin.backend.domain.r6.client.R6StatsClient;
 import com.gamerin.backend.domain.r6.dto.request.R6ConnectRequest;
 import com.gamerin.backend.domain.r6.dto.response.R6ConnectionResponse;
@@ -24,6 +26,7 @@ import com.gamerin.backend.domain.r6.model.R6SummaryStats;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
+import com.gamerin.backend.domain.user.repository.UserProfileRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,11 +46,15 @@ class R6ServiceTest {
     @Mock
     private R6StatsClient r6StatsClient;
 
+    @Mock
+    private UserProfileRepository userProfileRepository;
+
     private R6Service r6Service;
 
     @BeforeEach
     void setUp() {
-        r6Service = new R6Service(userRepository, r6StatsClient);
+        r6Service = new R6Service(userRepository, r6StatsClient,
+                new GameStatsPersistenceService(userProfileRepository));
     }
 
     @Test
@@ -61,7 +68,7 @@ class R6ServiceTest {
     @Test
     void connectRejectsMissingAuthenticatedUser() {
         User user = savedUser(UUID.randomUUID(), "tester", "Tester");
-        when(userRepository.findById(user.getId())).thenReturn(Optional.empty());
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> r6Service.connect(CustomUserPrincipal.from(user), new R6ConnectRequest("PlayerOne")))
                 .isInstanceOf(ResponseStatusException.class)
@@ -72,7 +79,7 @@ class R6ServiceTest {
     @Test
     void connectRejectsMissingUserProfile() {
         User user = savedUserWithoutProfile(UUID.randomUUID(), "tester", "Tester");
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
 
         assertThatThrownBy(() -> r6Service.connect(CustomUserPrincipal.from(user), new R6ConnectRequest("PlayerOne")))
                 .isInstanceOf(ResponseStatusException.class)
@@ -87,7 +94,7 @@ class R6ServiceTest {
         profile.updateGameStats(new HashMap<>(Map.of("PUBG", Map.of("playerName", "pubgPlayer"))));
         Map<String, Object> before = deepCopy(profile.getGameStats());
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(r6StatsClient.findProfile("PlayerOne"))
                 .thenThrow(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "R6 stats API is not configured."));
 
@@ -105,7 +112,7 @@ class R6ServiceTest {
         profile.updateGameStats(new HashMap<>(Map.of("PUBG", Map.of("playerName", "pubgPlayer"))));
         Map<String, Object> before = deepCopy(profile.getGameStats());
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(r6StatsClient.findProfile("MissingPlayer"))
                 .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "R6 public profile not found."));
 
@@ -122,7 +129,7 @@ class R6ServiceTest {
         UserProfile profile = user.getProfile();
         profile.updateGameStats(new HashMap<>(Map.of("PUBG", Map.of("playerName", "pubgPlayer"))));
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(r6StatsClient.findProfile("R6Player")).thenReturn(new R6Profile(
                 "R6Player",
                 "account-1",
@@ -162,7 +169,7 @@ class R6ServiceTest {
         profile.connectPubg("pubgPlayer", "pubg-account");
         Map<String, Object> before = deepCopy(profile.getGameStats());
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(r6StatsClient.findProfile("R6Player")).thenReturn(new R6Profile(
                 "R6Player",
                 "account-1",
@@ -201,7 +208,7 @@ class R6ServiceTest {
                 OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
         );
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(r6StatsClient.findProfile("R6Player")).thenReturn(new R6Profile(
                 "R6Player",
                 "account-1",
@@ -225,7 +232,7 @@ class R6ServiceTest {
         UserProfile profile = user.getProfile();
         Map<String, Object> before = deepCopy(profile.getGameStats());
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(r6StatsClient.findProfile("R6Player")).thenReturn(new R6Profile(
                 "R6Player",
                 null,
@@ -257,7 +264,7 @@ class R6ServiceTest {
                 OffsetDateTime.parse("2026-07-10T12:00:00+09:00")
         );
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
 
         r6Service.disconnect(CustomUserPrincipal.from(user));
 
@@ -268,7 +275,7 @@ class R6ServiceTest {
     @Test
     void getMySummaryReturnsDisconnectedResponseWhenNotConnected() {
         User user = savedUser(UUID.randomUUID(), "tester", "Tester");
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
 
         R6SummaryResponse response = r6Service.getMySummary(CustomUserPrincipal.from(user));
 
@@ -299,7 +306,7 @@ class R6ServiceTest {
         );
         Map<String, Object> before = deepCopy(profile.getGameStats());
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
 
         R6SummaryResponse response = r6Service.getMySummary(CustomUserPrincipal.from(user));
 
@@ -321,7 +328,7 @@ class R6ServiceTest {
         User user = connectedUserWithoutAccountId();
         UserProfile profile = user.getProfile();
         Map<String, Object> before = deepCopy(profile.getGameStats());
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
 
         R6SummaryResponse response = r6Service.getMySummary(CustomUserPrincipal.from(user));
 
@@ -333,7 +340,7 @@ class R6ServiceTest {
     @Test
     void refreshMySummaryReturnsDisconnectedWhenNotConnectedWithoutExternalCall() {
         User user = savedUser(UUID.randomUUID(), "tester", "Tester");
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
 
         R6SummaryResponse response = r6Service.refreshMySummary(CustomUserPrincipal.from(user));
 
@@ -346,7 +353,7 @@ class R6ServiceTest {
         User user = connectedUserWithoutAccountId();
         UserProfile profile = user.getProfile();
         Map<String, Object> before = deepCopy(profile.getGameStats());
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
 
         R6SummaryResponse response = r6Service.refreshMySummary(CustomUserPrincipal.from(user));
 
@@ -372,7 +379,7 @@ class R6ServiceTest {
                 OffsetDateTime.parse("2026-07-09T12:00:00+09:00")
         );
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(r6StatsClient.getSummary(new R6ProfileRef("R6Player", "account-1")))
                 .thenReturn(new R6SummaryStats("Platinum", 1.459, 58.6, 130, GameStatsMode.RANKED));
 
@@ -417,7 +424,7 @@ class R6ServiceTest {
                 OffsetDateTime.parse("2026-07-09T12:00:00+09:00")
         );
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(r6StatsClient.getSummary(new R6ProfileRef("R6Player", "account-1")))
                 .thenReturn(new R6SummaryStats("stale-tier", 1.239, 48.4, 25, GameStatsMode.NORMAL));
 
@@ -476,7 +483,7 @@ class R6ServiceTest {
         );
         Map<String, Object> before = deepCopy(profile.getGameStats());
 
-        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
         when(r6StatsClient.getSummary(new R6ProfileRef("R6Player", "account-1")))
                 .thenThrow(new ResponseStatusException(status, "external failure"));
 
@@ -508,6 +515,7 @@ class R6ServiceTest {
         User user = savedUserWithoutProfile(id, handle, nickname);
         UserProfile profile = UserProfile.createDefault(user);
         user.setProfile(profile);
+        lenient().when(userProfileRepository.findByUserIdForUpdate(id)).thenReturn(Optional.of(profile));
         return user;
     }
 
