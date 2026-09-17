@@ -13,6 +13,11 @@ uploads/
 AGENTS.md
 CLAUDE.md
 
+# Shared repository instructions
+!/AGENTS.md
+!/CLAUDE.md
+!/.codex
+
 ### STS ###
 .apt_generated
 .classpath
