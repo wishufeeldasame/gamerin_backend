@@ -32,6 +32,7 @@ import com.gamerin.backend.domain.post.filter.PostUploadConcurrencyFilter;
 import com.gamerin.backend.domain.user.service.CustomUserDetailsService;
 import com.gamerin.backend.global.logging.ApiRequestLoggingFilter;
 import com.gamerin.backend.global.logging.JsonLogContext;
+import com.gamerin.backend.global.security.filter.UserSuspensionFilter;
 import com.gamerin.backend.global.security.jwt.JwtAuthenticationFilter;
 import com.gamerin.backend.global.security.jwt.JwtTokenProvider;
 import com.gamerin.backend.global.security.oauth2.OAuth2SuccessHandler;
@@ -83,9 +84,11 @@ public class SecurityConfig {
     private final boolean swaggerUiEnabled;
     private final boolean apiDocsEnabled;
     private final PostUploadConcurrencyFilter postUploadConcurrencyFilter;
+    private final UserSuspensionFilter userSuspensionFilter;
 
     public SecurityConfig(
             JwtAuthenticationFilter jwtAuthenticationFilter,
+            UserSuspensionFilter userSuspensionFilter,
             JwtTokenProvider jwtTokenProvider,
             CustomUserDetailsService customUserDetailsService,
             OAuth2SuccessHandler oAuth2SuccessHandler,
@@ -96,6 +99,7 @@ public class SecurityConfig {
             @Value("${springdoc.api-docs.enabled:true}") boolean apiDocsEnabled
     ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.userSuspensionFilter = userSuspensionFilter;
         this.jwtTokenProvider = jwtTokenProvider;
         this.customUserDetailsService = customUserDetailsService;
         this.oAuth2SuccessHandler = oAuth2SuccessHandler;
@@ -162,6 +166,7 @@ public class SecurityConfig {
                 .oauth2Login(oauth2 -> oauth2.successHandler(oAuth2SuccessHandler))
                 .addFilterBefore(new RateLimitFilter(objectMapper), UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(userSuspensionFilter, JwtAuthenticationFilter.class)
                 .addFilterAfter(
                         new PrivateUploadStaticPathDenyFilter(jwtTokenProvider, customUserDetailsService),
                         JwtAuthenticationFilter.class)
