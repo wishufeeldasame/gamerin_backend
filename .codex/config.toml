@@ -1,3 +1,3 @@
 [mcp_servers.gamerin-postgres]
 command = "npx"
-args = ["-y", "@bytebase/dbhub@latest", "--transport", "stdio"]
+args = ["-y", "@bytebase/dbhub@1.2.5", "--transport", "stdio"]
