@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "gamerin-postgres": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@bytebase/dbhub@1.2.5",
+        "--transport",
+        "stdio",
+        "--dsn",
+        "${DSN}"
+      ]
+    }
+  }
+}
