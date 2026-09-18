@@ -1,6 +1,5 @@
 HELP.md
 .gradle
-.codex
 build/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
@@ -10,8 +9,7 @@ uploads/
 .env
 .env.*
 !.env.example
-AGENTS.md
-CLAUDE.md
+.claude/settings.local.json
 
 # Shared repository instructions
 !/AGENTS.md
