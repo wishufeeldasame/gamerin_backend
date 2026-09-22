@@ -7,6 +7,7 @@ package com.gamerin.backend.domain.riot.service;
     import java.util.UUID;
     
     import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
+    import com.gamerin.backend.domain.game.service.GameAccountConflict;
     import com.gamerin.backend.domain.riot.client.RiotApiClient;
     import com.gamerin.backend.domain.riot.dto.external.LeagueEntryResponse;
     import com.gamerin.backend.domain.riot.dto.external.MatchResponse;
@@ -19,6 +20,7 @@ package com.gamerin.backend.domain.riot.service;
     import com.gamerin.backend.domain.user.repository.UserRepository;
     import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
     import org.springframework.http.HttpStatus;
+    import org.springframework.dao.DataIntegrityViolationException;
     import org.springframework.stereotype.Service;
     import org.springframework.transaction.annotation.Propagation;
     import org.springframework.transaction.annotation.Transactional;
@@ -60,8 +62,12 @@ package com.gamerin.backend.domain.riot.service;
             // 다른 유저가 사용 중인지 중복 검사
             validateRiotPuuidDuplicate(user.getId(), puuid);
     
-            // 연동 정보 저장
-            gameStatsPersistenceService.updateConnection(user.getId(), current -> current.connectRiot(riotId, puuid));
+            try {
+                gameStatsPersistenceService.updateConnection(user.getId(), current -> current.connectRiot(riotId, puuid));
+            } catch (DataIntegrityViolationException failure) {
+                // Catch outside the writer's transaction so commit-time conflicts have already rolled back.
+                throw GameAccountConflict.RIOT.translate(failure);
+            }
             return new RiotConnectionResponse(true, riotId);
         }
     
@@ -191,7 +197,7 @@ package com.gamerin.backend.domain.riot.service;
         private void validateRiotPuuidDuplicate(UUID userId, String puuid) {
             boolean duplicated = userRepository.existsConnectedRiotPuuidByOtherUser(userId, puuid);
             if (duplicated) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 다른 유저가 연동한 Riot 계정입니다.");
+                throw GameAccountConflict.RIOT.conflict();
             }
         }
 

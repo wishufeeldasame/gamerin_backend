@@ -8,6 +8,7 @@ import java.util.UUID;
 
 import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
+import com.gamerin.backend.domain.game.service.GameAccountConflict;
 import com.gamerin.backend.domain.r6.client.R6StatsClient;
 import com.gamerin.backend.domain.r6.dto.request.R6ConnectRequest;
 import com.gamerin.backend.domain.r6.dto.response.R6ConnectionResponse;
@@ -20,6 +21,7 @@ import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.springframework.http.HttpStatus;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,18 +58,23 @@ public class R6Service {
 
         R6SummaryStats summary = normalizeSummaryMetrics(r6Profile.summary());
         OffsetDateTime updatedAt = OffsetDateTime.now();
-        gameStatsPersistenceService.updateConnection(user.getId(), current -> current.connectR6(
-                playerName,
-                normalizePlayerName(playerName),
-                PLATFORM,
-                accountId,
-                summary == null ? null : summary.tierLabel(),
-                summary == null ? null : summary.kd(),
-                summary == null ? null : roundWinRate(summary.winRate()),
-                summary == null ? null : summary.matches(),
-                summary == null ? null : summary.statsMode(),
-                updatedAt
-        ));
+        try {
+            gameStatsPersistenceService.updateConnection(user.getId(), current -> current.connectR6(
+                    playerName,
+                    normalizePlayerName(playerName),
+                    PLATFORM,
+                    accountId,
+                    summary == null ? null : summary.tierLabel(),
+                    summary == null ? null : summary.kd(),
+                    summary == null ? null : roundWinRate(summary.winRate()),
+                    summary == null ? null : summary.matches(),
+                    summary == null ? null : summary.statsMode(),
+                    updatedAt
+            ));
+        } catch (DataIntegrityViolationException failure) {
+            // Catch outside the writer's transaction so commit-time conflicts have already rolled back.
+            throw GameAccountConflict.R6.translate(failure);
+        }
 
         return new R6ConnectionResponse(true, playerName, PLATFORM);
     }
@@ -161,10 +168,7 @@ public class R6Service {
         boolean duplicated = userRepository.existsConnectedR6AccountIdByOtherUser(userId, accountId);
 
         if (duplicated) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "이미 다른 유저가 사용 중인 R6 계정입니다."
-            );
+            throw GameAccountConflict.R6.conflict();
         }
     }
 

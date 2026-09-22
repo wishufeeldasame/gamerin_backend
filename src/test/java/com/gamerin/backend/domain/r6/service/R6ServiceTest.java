@@ -13,6 +13,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.sql.SQLException;
 
 import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
@@ -31,6 +32,10 @@ import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.hibernate.exception.ConstraintViolationException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
@@ -509,6 +514,25 @@ class R6ServiceTest {
                 OffsetDateTime.parse("2026-07-09T12:00:00+09:00")
         );
         return user;
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "23505, unrelated_unique_index",
+            "23505, uq_user_profiles_connected_riot_puuid",
+            "23503, uq_user_profiles_connected_r6_account",
+            "23505, ''"
+    })
+    void connectDoesNotMisclassifyUnrelatedIntegrityFailures(String sqlState, String constraint) {
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        when(userRepository.findWithProfileById(user.getId())).thenReturn(Optional.of(user));
+        when(r6StatsClient.findProfile("PlayerOne")).thenReturn(new R6Profile("account", "PlayerOne", null));
+        DataIntegrityViolationException failure = new DataIntegrityViolationException("write failure",
+                new ConstraintViolationException("constraint failure", new SQLException("fixture", sqlState), constraint));
+        when(userProfileRepository.findByUserIdForUpdate(user.getId())).thenThrow(failure);
+
+        assertThatThrownBy(() -> r6Service.connect(CustomUserPrincipal.from(user), new R6ConnectRequest("PlayerOne")))
+                .isSameAs(failure);
     }
 
     private User savedUser(UUID id, String handle, String nickname) {

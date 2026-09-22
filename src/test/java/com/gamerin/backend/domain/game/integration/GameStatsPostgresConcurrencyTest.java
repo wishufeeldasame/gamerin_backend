@@ -6,11 +6,14 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doAnswer;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -45,6 +48,13 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -56,11 +66,13 @@ import com.gamerin.backend.domain.pubg.dto.request.PubgConnectRequest;
 import com.gamerin.backend.domain.pubg.model.RankedStats;
 import com.gamerin.backend.domain.pubg.service.PubgService;
 import com.gamerin.backend.domain.r6.client.R6StatsClient;
+import com.gamerin.backend.domain.r6.controller.R6Controller;
 import com.gamerin.backend.domain.r6.dto.request.R6ConnectRequest;
 import com.gamerin.backend.domain.r6.model.R6Profile;
 import com.gamerin.backend.domain.r6.model.R6SummaryStats;
 import com.gamerin.backend.domain.r6.service.R6Service;
 import com.gamerin.backend.domain.riot.client.RiotApiClient;
+import com.gamerin.backend.domain.riot.controller.RiotController;
 import com.gamerin.backend.domain.riot.dto.external.LeagueEntryResponse;
 import com.gamerin.backend.domain.riot.dto.external.RiotAccountResponse;
 import com.gamerin.backend.domain.riot.dto.request.RiotConnectRequest;
@@ -69,6 +81,8 @@ import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+import com.gamerin.backend.global.exception.GlobalExceptionHandler;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 @Tag("postgresql")
 @EnabledIfEnvironmentVariable(named = "GAME_STATS_POSTGRES_TEST_URL", matches = ".+")
@@ -89,7 +103,7 @@ class GameStatsPostgresConcurrencyTest {
     @Autowired private RiotService riotService;
     @Autowired private R6Service r6Service;
     @Autowired private PubgService pubgService;
-    @Autowired private GameStatsPersistenceService gameStatsPersistenceService;
+    @MockitoSpyBean private GameStatsPersistenceService gameStatsPersistenceService;
     @Autowired private ApplicationContext applicationContext;
     @MockitoBean private RiotApiClient riotApiClient;
     @MockitoBean private R6StatsClient r6StatsClient;
@@ -321,6 +335,132 @@ class GameStatsPostgresConcurrencyTest {
         UserProfile after = profile(fixture);
         assertThat(after.getGameStats()).isEqualTo(before.getGameStats());
         assertThat(after.getGameConnectionVersion("RIOT")).isEqualTo(before.getGameConnectionVersion("RIOT"));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Game.class, names = {"R6", "RIOT"})
+    void simultaneousDuplicateConnectionsReturnOneSuccessAndOneConflict(Game game) throws Exception {
+        duplicateConnections(game, false);
+    }
+
+    @Test
+    void simultaneousR6ConnectionsIgnoreAccountIdCase() throws Exception {
+        duplicateConnections(Game.R6, true);
+    }
+
+    private void duplicateConnections(Game game, boolean differentCase) throws Exception {
+        Fixture first = fixture();
+        Fixture second = fixture();
+        // Both users already have data: the losing replacement must roll back all JSON and its version.
+        for (Fixture fixture : List.of(first, second)) {
+            connect(game, fixture, "original");
+            refresh(game, fixture);
+            connect(Game.PUBG, fixture, "unrelated");
+        }
+        UserProfile firstBefore = profile(first);
+        UserProfile secondBefore = profile(second);
+        String shared = account(first, "SharedAccount");
+        String secondAccount = differentCase ? shared.toUpperCase(Locale.ROOT) : shared;
+        MockMvc mvc = connectionMvc();
+        pauseBothConnectionWrites();
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            Future<MockHttpServletResponse> one = executor.submit(() -> connectHttp(mvc, game, first, shared));
+            Future<MockHttpServletResponse> two = executor.submit(() -> connectHttp(mvc, game, second, secondAccount));
+            MockHttpServletResponse firstResponse = one.get(15, TimeUnit.SECONDS);
+            MockHttpServletResponse secondResponse = two.get(15, TimeUnit.SECONDS);
+            assertThat(List.of(firstResponse.getStatus(), secondResponse.getStatus()))
+                    .containsExactlyInAnyOrder(200, 409);
+            boolean firstWon = firstResponse.getStatus() == 200;
+            MockHttpServletResponse rejected = firstWon ? secondResponse : firstResponse;
+            var body = new ObjectMapper().readTree(rejected.getContentAsByteArray());
+            assertThat(body.get("success").asBoolean()).isFalse();
+            assertThat(body.get("message").asText()).isEqualTo(game == Game.R6
+                    ? "이미 다른 유저가 사용 중인 R6 계정입니다." : "이미 다른 유저가 연동한 Riot 계정입니다.");
+            UserProfile loser = profile(firstWon ? second : first);
+            UserProfile before = firstWon ? secondBefore : firstBefore;
+            assertThat(loser.getGameStats()).isEqualTo(before.getGameStats());
+            assertThat(loser.getGameConnectionVersion(game.name())).isEqualTo(before.getGameConnectionVersion(game.name()));
+            UserProfile winner = profile(firstWon ? first : second);
+            assertThat(section(winner, "PUBG")).isEqualTo(section(firstWon ? firstBefore : secondBefore, "PUBG"));
+        }
+        String identifier = game == Game.R6 ? "LOWER(game_stats -> 'R6' ->> 'accountId')"
+                : "(game_stats -> 'RIOT' ->> 'puuid')";
+        assertThat(jdbcTemplate.queryForObject("select count(*) from user_profiles where " + identifier + " = ?",
+                Integer.class, game == Game.R6 ? shared.toLowerCase(Locale.ROOT) : shared)).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Game.class, names = {"R6", "RIOT"})
+    void disconnectReleasesAccountForAnotherUserAndSameUserCanReconnect(Game game) throws Exception {
+        Fixture first = fixture();
+        Fixture second = fixture();
+        String account = account(first, "reusable");
+        MockMvc mvc = connectionMvc();
+        assertThat(connectHttp(mvc, game, first, account).getStatus()).isEqualTo(200);
+        assertThat(connectHttp(mvc, game, first, account).getStatus()).isEqualTo(200);
+        assertThat(connectHttp(mvc, game, second, account).getStatus()).isEqualTo(409);
+        disconnect(game, first);
+        assertThat(connectHttp(mvc, game, second, account).getStatus()).isEqualTo(200);
+        assertThat(profile(first).getGameStats()).doesNotContainKey(game.name());
+        assertThat(section(profile(second), game.name())).containsEntry("connected", true);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Game.class, names = {"R6", "RIOT"})
+    void simultaneousDistinctAccountsBothSucceed(Game game) throws Exception {
+        Fixture first = fixture();
+        Fixture second = fixture();
+        MockMvc mvc = connectionMvc();
+        pauseBothConnectionWrites();
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            Future<MockHttpServletResponse> one = executor.submit(() -> connectHttp(mvc, game, first, account(first, "one")));
+            Future<MockHttpServletResponse> two = executor.submit(() -> connectHttp(mvc, game, second, account(second, "two")));
+            assertThat(one.get(15, TimeUnit.SECONDS).getStatus()).isEqualTo(200);
+            assertThat(two.get(15, TimeUnit.SECONDS).getStatus()).isEqualTo(200);
+        }
+    }
+
+    @Test
+    void riotIdentifiersRemainCaseSensitiveAndGamesHaveSeparateOwnership() throws Exception {
+        Fixture first = fixture();
+        Fixture second = fixture();
+        String account = account(first, "CaseSensitive");
+        MockMvc mvc = connectionMvc();
+        assertThat(connectHttp(mvc, Game.RIOT, first, account).getStatus()).isEqualTo(200);
+        assertThat(connectHttp(mvc, Game.RIOT, second, account.toUpperCase(Locale.ROOT)).getStatus()).isEqualTo(200);
+        assertThat(connectHttp(mvc, Game.R6, second, account).getStatus()).isEqualTo(200);
+    }
+
+    private void pauseBothConnectionWrites() {
+        CountDownLatch ready = new CountDownLatch(2);
+        // The real duplicate SELECT has completed for each request before either profile is changed.
+        doAnswer(call -> {
+            ready.countDown();
+            await(ready);
+            return call.callRealMethod();
+        }).when(gameStatsPersistenceService).updateConnection(any(), any());
+    }
+
+    private MockMvc connectionMvc() {
+        // Exercise the real controllers and error contract; authentication filters are covered separately.
+        return MockMvcBuilders.standaloneSetup(new R6Controller(r6Service), new RiotController(riotService))
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver()).build();
+    }
+
+    private MockHttpServletResponse connectHttp(MockMvc mvc, Game game, Fixture fixture, String account) throws Exception {
+        SecurityContextHolder.getContext().setAuthentication(
+                UsernamePasswordAuthenticationToken.authenticated(fixture.principal(), null, List.of()));
+        try {
+            String field = game == Game.R6 ? "playerName" : "riotId";
+            String value = game == Game.R6 ? account : account + "#KR1";
+            return mvc.perform(post("/api/v1/" + game.name().toLowerCase(Locale.ROOT) + "/connect")
+                    .contentType("application/json")
+                    .content(new ObjectMapper().writeValueAsBytes(Map.of(field, value))))
+                    .andReturn().getResponse();
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
     }
 
     @ParameterizedTest
