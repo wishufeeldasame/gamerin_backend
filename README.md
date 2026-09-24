@@ -39,6 +39,8 @@ gamerin DB 생성
 
 ## Docker 운영 배포 메모
 
+R6·Riot 중복 연동 방지 V23 적용 전에는 [중복 계정 사전 점검·정리 및 배포 절차](ISSUE_53_GAME_ACCOUNT_UNIQUENESS.md)를 수행한다. 기존 중복 연결은 migration이 자동으로 해제하지 않는다.
+
 개발 서버의 기준 경로는 `~/capstone`을 사용한다.
 
 ```text
