@@ -132,8 +132,9 @@ public class AdminMentoringService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
     }
 
+    // 기존 findById 대신 비관적 락(SELECT FOR UPDATE)을 적용하여 동시 지급/환불 경합 차단
     private MentoringApplication findApplication(UUID applicationId) {
-        return mentoringApplicationRepository.findById(applicationId)
+        return mentoringApplicationRepository.findByIdForUpdate(applicationId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "멘토링 신청 내역을 찾을 수 없습니다."));
     }
 }

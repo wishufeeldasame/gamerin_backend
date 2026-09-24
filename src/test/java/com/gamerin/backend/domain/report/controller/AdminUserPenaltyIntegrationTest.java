@@ -54,6 +54,10 @@ class AdminUserPenaltyIntegrationTest {
     @Autowired
     private JwtTokenProvider jwtTokenProvider;
 
+    @Autowired
+    private com.gamerin.backend.domain.post.repository.PostRepository postRepository;
+
+
     private User admin;
     private User regularUser;
     private String adminToken;
@@ -116,5 +120,86 @@ class AdminUserPenaltyIntegrationTest {
                         .header("Authorization", "Bearer " + userToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.userId").value(regularUser.getId().toString()));
+    }
+
+    @Test
+    @DisplayName("[중복 신고 검증] 동일 유저가 동일 대상을 중복 신고하면 409 Conflict가 반환된다")
+    void createReport_duplicate_returnsConflict() throws Exception {
+        // given: 신고 요청 DTO 준비 (신고 대상을 admin 계정으로 지정)
+        com.gamerin.backend.domain.report.dto.request.ReportCreateRequest request =
+                new com.gamerin.backend.domain.report.dto.request.ReportCreateRequest(
+                        com.gamerin.backend.domain.report.entity.ReportTargetType.USER,
+                        admin.getId(),
+                        com.gamerin.backend.domain.report.entity.ReportReasonCode.INAPPROPRIATE,
+                        "비매너 행위 신고"
+                );
+
+        String requestJson = objectMapper.writeValueAsString(request);
+
+        // when 1: 첫 번째 신고 접수 -> 200 OK 성공
+        mockMvc.perform(post("/api/v1/reports")
+                        .header("Authorization", "Bearer " + userToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.targetId").value(admin.getId().toString()));
+
+        // when 2: 동일 대상에 대해 중복 신고 요청 -> 409 CONFLICT 발생 검증
+        mockMvc.perform(post("/api/v1/reports")
+                        .header("Authorization", "Bearer " + userToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestJson))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("이미 해당 콘텐츠/유저에 대해 신고를 접수하셨습니다")));
+    }
+
+    @Test
+    @DisplayName("[신고 검증] 이미 작성자가 삭제한 게시글을 신고하려고 하면 404 Not Found로 차단된다")
+    void reportAlreadyDeletedPost_throwsNotFound() throws Exception {
+        // given: 작성자가 이미 직접 삭제(softDelete)한 게시글 준비
+        com.gamerin.backend.domain.post.entity.Post post = postRepository.save(
+                com.gamerin.backend.domain.post.entity.Post.create(regularUser, "작성자가 직접 삭제한 게시글")
+        );
+        post.softDelete();
+        post = postRepository.save(post);
+
+        com.gamerin.backend.domain.report.dto.request.ReportCreateRequest request =
+                new com.gamerin.backend.domain.report.dto.request.ReportCreateRequest(
+                        com.gamerin.backend.domain.report.entity.ReportTargetType.POST,
+                        post.getId(),
+                        com.gamerin.backend.domain.report.entity.ReportReasonCode.SPAM,
+                        "이미 삭제된 글 신고 시도"
+                );
+
+        // when & then: 404 NOT_FOUND로 거절되어 자동 숨김 큐에 진입하지 못함을 검증
+        mockMvc.perform(post("/api/v1/reports")
+                        .header("Authorization", "Bearer " + userToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("존재하지 않거나 이미 삭제되었습니다.")));
+    }
+
+    @Test
+    @DisplayName("[제재 유효성 검증] 존재하지 않는 reportId로 제재를 시도하면 404 Not Found로 차단된다")
+    void createPenalty_invalidReportId_throwsNotFound() throws Exception {
+        UUID nonExistentReportId = UUID.randomUUID();
+
+        // given: 존재하지 않는 임의의 reportId를 포함한 제재 요청
+        UserPenaltyCreateRequest request = new UserPenaltyCreateRequest(
+                PenaltyType.WARNING, "허위 신고 연계 제재 시도", 0, nonExistentReportId
+        );
+
+        // when & then: 404 NOT_FOUND 및 정확한 에러 메시지 반환 검증
+        mockMvc.perform(post("/api/v1/admin/users/{userId}/penalties", regularUser.getId())
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("연관된 신고 내역을 찾을 수 없습니다")));
     }
 }

@@ -47,7 +47,7 @@ public class AdminDashboardService {
         long inReviewReports = reportRepository.countByStatus(ReportStatus.IN_REVIEW);
         long resolvedReports = reportRepository.countByStatus(ReportStatus.RESOLVED);
         long rejectedReports = reportRepository.countByStatus(ReportStatus.REJECTED);
-        long activePenalties = userPenaltyRepository.countByIsActiveTrue();
+        long activePenalties = userPenaltyRepository.countDistinctUserIdByIsActiveTrue();
         long hiddenContents = reportCountRepository.countByIsHiddenTrue();
 
         return new AdminDashboardStatsResponse(

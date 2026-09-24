@@ -36,6 +36,7 @@ public interface UserPenaltyRepository extends JpaRepository<UserPenalty, UUID> 
     @Query("SELECT p FROM UserPenalty p WHERE p.isActive = true AND p.endAt IS NOT NULL AND p.endAt<=:now")
     List<UserPenalty> findExpiredPenalties(@Param("now") OffsetDateTime now);
 
-    // 현재 활성 제재 건수 (대시보드 통계용)
-    long countByIsActiveTrue();
+    // 현재 활성화된 제재를 보유한 고유 유저 수 집계
+    @Query("SELECT COUNT(DISTINCT p.user.id) FROM UserPenalty p WHERE p.isActive = true")
+    long countDistinctUserIdByIsActiveTrue();
 }

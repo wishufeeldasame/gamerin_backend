@@ -70,6 +70,19 @@ class AdminDashboardAndMentoringIntegrationTest {
     @Autowired
     private JwtTokenProvider jwtTokenProvider;
 
+    @Autowired
+    private com.gamerin.backend.domain.admin.service.AdminMentoringService adminMentoringService;
+
+    @Autowired
+    private com.gamerin.backend.domain.post.repository.PostRepository postRepository;
+    
+    @Autowired
+    private com.gamerin.backend.domain.report.repository.ReportCountRepository reportCountRepository;
+
+    @Autowired
+    private com.gamerin.backend.domain.report.service.ReportCountInitializer reportCountInitializer;
+
+
     private User admin;
     private User mentorUser;
     private User menteeUser;
@@ -190,5 +203,126 @@ class AdminDashboardAndMentoringIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.content[0].actionType").value("FORCE_SETTLE"))
                 .andExpect(jsonPath("$.data.content[0].targetType").value("MENTORING"));
+    }
+
+    @Test
+    @DisplayName("[중복 방어 검증] 이미 환불 완료된 멘토링 건에 대해 다시 환불을 시도하면 400 Bad Request로 차단된다")
+    void forceRefund_duplicateRequest_blockedWithBadRequest() throws Exception {
+        // given: 10,000P 에스크로 상태의 멘토링 건 생성
+        MentoringApplication application = new MentoringApplication();
+        application.setProgram(program);
+        application.setMentee(menteeUser);
+        application.setAppliedMileage(10000L);
+        application.setStatus(ApplicationStatus.APPLIED);
+        application.setPaymentStatus(PaymentStatus.ESCROW_HELD);
+        application.setMessage("환불 중복 방지 테스트");
+        MentoringApplication savedApplication = mentoringApplicationRepository.save(application);
+
+        AdminForceActionRequest firstRequest = new AdminForceActionRequest("1차 정상 강제 환불");
+
+        // when 1: 첫 번째 관리자 환불 요청 -> 200 OK 성공
+        mockMvc.perform(
+                post("/api/v1/admin/mentoring/applications/{applicationId}/force-refund", savedApplication.getId())
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(firstRequest))
+        )
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.paymentStatus").value("REFUNDED"));
+
+        // when 2: 중복으로 두 번째 관리자 환불 요청 진입 -> 400 BAD REQUEST로 즉각 차단
+        AdminForceActionRequest secondRequest = new AdminForceActionRequest("2차 중복 환불 시도");
+        mockMvc.perform(
+                post("/api/v1/admin/mentoring/applications/{applicationId}/force-refund", savedApplication.getId())
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(secondRequest))
+        )
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("에스크로 보관(ESCROW_HELD) 상태인 멘토링 건만")));
+    }
+
+    @Test
+    @DisplayName("[콘텐츠 복구 감사 로그] 관리자가 숨김 콘텐츠 복구 시 상태가 복원되고 CONTENT_RESTORE 감사 로그가 적재된다")
+    void restoreHiddenContent_auditLogSaved() throws Exception {
+        // given: 숨김(isHidden = true) 처리된 게시글 및 신고 카운트 준비
+        com.gamerin.backend.domain.post.entity.Post post = postRepository.save(
+                com.gamerin.backend.domain.post.entity.Post.create(menteeUser, "자동 숨김 처리된 테스트 게시글")
+        );
+
+        com.gamerin.backend.domain.report.entity.ReportCount reportCount =
+                com.gamerin.backend.domain.report.entity.ReportCount.create(
+                        com.gamerin.backend.domain.report.entity.ReportTargetType.POST,
+                        post.getId()
+                );
+        reportCount.hide(); // 숨김 상태 설정
+        reportCountRepository.save(reportCount);
+
+        // when: 관리자가 콘텐츠 복구 API 호출 (POST /api/v1/admin/contents/{targetType}/{targetId}/restore)
+        mockMvc.perform(post("/api/v1/admin/contents/POST/{targetId}/restore", post.getId())
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.isHidden").value(false)); // <-- $.data.hidden 에서 $.data.isHidden으로 수정
+
+        // then: 감사 로그 조회 API를 통해 CONTENT_RESTORE 로그가 정상 등록되었는지 검증
+        mockMvc.perform(get("/api/v1/admin/audit-logs")
+                        .param("actionType", "CONTENT_RESTORE")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].actionType").value("CONTENT_RESTORE"))
+                .andExpect(jsonPath("$.data.content[0].targetType").value("POST"))
+                .andExpect(jsonPath("$.data.content[0].targetId").value(post.getId().toString()));
+    }
+
+    @Test
+    @DisplayName("[콘텐츠 복구 검증] 숨김 처리되지 않은 정상 콘텐츠 복구 시도 시 400 Bad Request로 차단된다")
+    void restoreHiddenContent_notHidden_throwsBadRequest() throws Exception {
+        // given: 숨김 처리되지 않은(isHidden = false) 게시글 및 신고 카운트 준비
+        com.gamerin.backend.domain.post.entity.Post post = postRepository.save(
+                com.gamerin.backend.domain.post.entity.Post.create(menteeUser, "숨김되지 않은 일반 게시글")
+        );
+
+        com.gamerin.backend.domain.report.entity.ReportCount reportCount =
+                com.gamerin.backend.domain.report.entity.ReportCount.create(
+                        com.gamerin.backend.domain.report.entity.ReportTargetType.POST,
+                        post.getId()
+                );
+        // hide()를 호출하지 않아 isHidden = false 상태 유지
+        reportCountRepository.save(reportCount);
+
+        // when & then: 복구 API 호출 시 400 Bad Request와 작성자님의 에러 메시지 반환 검증
+        mockMvc.perform(post("/api/v1/admin/contents/POST/{targetId}/restore", post.getId())
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value("숨김 처리된 콘텐츠만 복구할 수 있습니다."));
+    }
+
+    @Test
+    @DisplayName("[콘텐츠 복구 검증] USER나 MENTORING 등 자동 숨김 미지원 대상 복구 시도 시 400 Bad Request로 차단된다")
+    void restoreHiddenContent_unsupportedType_throwsBadRequest() throws Exception {
+        // when & then: 콘텐츠가 아닌 유저(USER) 타입으로 복구 API 호출 시 400 Bad Request 발생 검증
+        mockMvc.perform(post("/api/v1/admin/contents/USER/{targetId}/restore", admin.getId())
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value("게시글 및 댓글 콘텐츠만 복구할 수 있습니다."));
+    }
+
+    @Test
+    @DisplayName("[원자적 레코드 생성 검증] 동일 대상에 대해 initIfNotExists를 중복 호출해도 에러 없이 1건만 안전하게 유지된다")
+    void initIfNotExists_duplicate_maintainedSafely() {
+        UUID targetId = UUID.randomUUID();
+        var targetType = com.gamerin.backend.domain.report.entity.ReportTargetType.POST;
+
+        // when: 동일한 (targetType, targetId)로 두 번 연속 초기화 실행 (동시 생성 시뮬레이션)
+        reportCountInitializer.initIfNotExists(targetType, targetId);
+        reportCountInitializer.initIfNotExists(targetType, targetId);
+
+        // then: 트랜잭션 중단 없이 정확히 1건의 레코드만 존재해야 함
+        var result = reportCountRepository.findByTargetTypeAndTargetId(targetType, targetId);
+        org.junit.jupiter.api.Assertions.assertTrue(result.isPresent(), "신고 카운트 레코드가 존재해야 합니다.");
+        org.junit.jupiter.api.Assertions.assertEquals(0L, result.get().getReportCount(), "초기 카운트는 0이어야 합니다.");
     }
 }

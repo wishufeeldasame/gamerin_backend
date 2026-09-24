@@ -44,8 +44,7 @@ public class UserPenaltyService {
             UserRepository userRepository,
             ReportRepository reportRepository,
             AdminAuditLogRepository adminAuditLogRepository,
-            RefreshTokenRepository refreshTokenRepository
-    ) {
+            RefreshTokenRepository refreshTokenRepository) {
         this.userPenaltyRepository = userPenaltyRepository;
         this.userRepository = userRepository;
         this.reportRepository = reportRepository;
@@ -77,7 +76,9 @@ public class UserPenaltyService {
         // 3. 연관 신고 내역 확인 (선택 사항)
         Report report = null;
         if (request.reportId() != null) {
-            report = reportRepository.findById(request.reportId()).orElse(null);
+            report = reportRepository.findById(request.reportId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                            "연관된 신고 내역을 찾을 수 없습니다. ID: " + request.reportId()));
         }
 
         // 4. 제재 만료 시점(endAt) 계산
@@ -91,8 +92,7 @@ public class UserPenaltyService {
                 request.penaltyType(),
                 request.reason(),
                 endAt,
-                admin
-        );
+                admin);
         UserPenalty savedPenalty = userPenaltyRepository.save(penalty);
 
         // 6. 경고가 아닌 정지 제재인 경우 유저 상태를 SUSPENDED로 변경하고 활성 RefreshToken 즉시 무효화
@@ -112,8 +112,7 @@ public class UserPenaltyService {
                 endAt != null ? endAt.toString() : "영구");
 
         adminAuditLogRepository.save(AdminAuditLog.create(
-                admin, actionType, ReportTargetType.USER, targetUserId, null, logDetails
-        ));
+                admin, actionType, ReportTargetType.USER, targetUserId, null, logDetails));
 
         return UserPenaltyResponse.from(savedPenalty);
     }
@@ -156,8 +155,7 @@ public class UserPenaltyService {
                 penaltyId, penalty.getPenaltyType().getDescription());
 
         adminAuditLogRepository.save(AdminAuditLog.create(
-                admin, "USER_UNBAN", ReportTargetType.USER, targetUserId, null, logDetails
-        ));
+                admin, "USER_UNBAN", ReportTargetType.USER, targetUserId, null, logDetails));
 
         return UserPenaltyResponse.from(updatedPenalty);
     }

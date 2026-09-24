@@ -17,7 +17,7 @@ public class Report {
     private UUID id;
 
     // DB 시퀀스 자동 생성 (RPT-1001 등), 읽기 전용
-    @Column(name = "report_code", nullable = false, insertable = false, updatable = false, length = 30)
+    @Column(name = "report_code", nullable = false, insertable = false, updatable = false, length = 30, columnDefinition = "VARCHAR(30) DEFAULT 'RPT-1001'")
     @Generated(event = EventType.INSERT)
     private String reportCode;
 

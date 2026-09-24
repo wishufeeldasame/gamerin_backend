@@ -1,9 +1,9 @@
 package com.gamerin.backend.global.security.filter;
 
+import java.io.IOException;
+import java.util.Map;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.gamerin.backend.domain.user.entity.User;
-import com.gamerin.backend.domain.user.entity.UserStatus;
-import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.logging.JsonLogContext;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import jakarta.servlet.FilterChain;
@@ -16,21 +16,17 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-import java.io.IOException;
-import java.util.Map;
-import java.util.UUID;
-
 /**
  * 정지(SUSPENDED) 유저의 인증 API 호출을 실시간 감지하여 403 Forbidden을 반환하는 보안 필터
+ * (JwtAuthenticationFilter에서 로드된 Principal 상태를 재사용하여 불필요한 중복 DB 조회를 제거)
  */
 @Component
 public class UserSuspensionFilter extends OncePerRequestFilter {
 
-    private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
 
-    public UserSuspensionFilter(UserRepository userRepository, ObjectMapper objectMapper) {
-        this.userRepository = userRepository;
+    // UserRepository 의존성 제거 (중복 SELECT 쿼리 제거로 성능 향상)
+    public UserSuspensionFilter(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
 
@@ -41,12 +37,8 @@ public class UserSuspensionFilter extends OncePerRequestFilter {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
 
         if (isAuthenticated(authentication) && authentication.getPrincipal() instanceof CustomUserPrincipal principal) {
-            UUID userId = principal.getUserId();
-
-            // DB 기준 실시간 계정 상태 조회 (토큰 유효기간이 남아있더라도 즉각 차단)
-            User user = userRepository.findById(userId).orElse(null);
-
-            if (user != null && user.getStatus() == UserStatus.SUSPENDED) {
+            // 직전 JwtAuthenticationFilter에서 조회한 실시간 계정 상태 재사용
+            if (principal.isSuspended()) {
                 SecurityContextHolder.clearContext();
 
                 String message = "이용이 정지된 계정입니다. 고객센터에 문의해주세요.";

@@ -58,7 +58,7 @@ CREATE INDEX idx_user_penalties_active_end ON user_penalties (is_active, end_at)
 -- 4. 관리자 작업 이력 테이블 (admin_audit_logs)
 CREATE TABLE admin_audit_logs (
     id UUID PRIMARY KEY,
-    admin_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    admin_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     action_type VARCHAR(50) NOT NULL, -- CONTENT_HIDE, USER_BAN, REPORT_REJECT, CONTENT_RESTORE, FORCE_REFUND 등
     target_type VARCHAR(20) NOT NULL,
     target_id UUID NOT NULL,
