@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.post.service.LightweightSecurityScanService;
@@ -20,6 +21,8 @@ import com.gamerin.backend.domain.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -129,6 +132,38 @@ class UserServiceGameStatsTest {
         var response = userService.getProfile(null, "target");
 
         assertThat(response.gameStats()).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void publicAndOwnProfilesDoNotExposePreviousAccountsSummaryAfterReplacement(boolean ownProfile) {
+        User user = savedUser(UUID.randomUUID(), "target", "Target");
+        UserProfile profile = user.getProfile();
+        profile.connectRiot("original#KR1", "original-puuid");
+        profile.updateLolSummary("Gold I", 3.5, 60, 20);
+        profile.connectPubg("original", "original-account");
+        profile.updatePubgSummary("Gold III", 1.42, 12, 42, GameStatsMode.RANKED);
+        assertThat(profile.getGameStats()).containsKey("LOL");
+        assertThat(nestedMap(profile.getGameStats(), "PUBG")).containsEntry("matches", 42);
+
+        profile.connectRiot("replacement#KR1", "replacement-puuid");
+        profile.connectPubg("replacement", "replacement-account");
+        if (ownProfile) {
+            when(userRepository.findByIdAndDeletedAtIsNull(user.getId())).thenReturn(Optional.of(user));
+        } else {
+            when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(user));
+        }
+
+        var response = ownProfile ? userService.getMyProfile(user.getId()) : userService.getProfile(null, "target");
+
+        assertThat(response.gameStats()).doesNotContainKey("LOL");
+        assertThat(nestedMap(response.gameStats(), "RIOT"))
+                .containsEntry("connected", true)
+                .containsEntry("riotId", "replacement#KR1");
+        assertThat(nestedMap(response.gameStats(), "PUBG"))
+                .containsEntry("connected", true)
+                .containsEntry("playerName", "replacement")
+                .doesNotContainKeys("tierLabel", "kd", "winRate", "matches", "statsMode");
     }
 
     @SuppressWarnings("unchecked")

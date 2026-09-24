@@ -9,9 +9,84 @@ import java.util.UUID;
 
 import com.gamerin.backend.domain.game.model.GameStatsMode;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class UserProfileTest {
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"old-account", " ", "NEW-ACCOUNT"})
+    void riotReplacementDiscardsCacheWhoseOwnerDoesNotMatch(String oldAccount) {
+        UserProfile profile = savedUser().getProfile();
+        profile.connectRiot("Old#KR1", oldAccount);
+        profile.updateLolSummary("GOLD I", 2.5, 60, 100);
+        profile.connectPubg("Other", "pubg-account");
+        Map<String, Object> before = profile.getGameStats();
+        long version = profile.getGameConnectionVersion("RIOT");
+
+        profile.connectRiot("New#KR1", "new-account");
+
+        assertThat(profile.getRiotPuuid()).isEqualTo("new-account");
+        assertThat(profile.getGameStats()).doesNotContainKey("LOL");
+        assertThat(profile.getGameStats().get("PUBG")).isEqualTo(before.get("PUBG"));
+        assertThat(before).containsKey("LOL");
+        assertThat(profile.getGameConnectionVersion("RIOT")).isEqualTo(version + 1);
+    }
+
+    @Test
+    void riotRenamePreservesCacheForSameAccount() {
+        UserProfile profile = savedUser().getProfile();
+        profile.connectRiot("Old#KR1", "account");
+        profile.updateLolSummary("GOLD I", 2.5, 60, 100);
+        Object cached = profile.getGameStats().get("LOL");
+        long version = profile.getGameConnectionVersion("RIOT");
+
+        profile.connectRiot("Renamed#KR2", "account");
+
+        assertThat(profile.getRiotId()).isEqualTo("Renamed#KR2");
+        assertThat(profile.getGameStats().get("LOL")).isEqualTo(cached);
+        assertThat(profile.getGameConnectionVersion("RIOT")).isEqualTo(version + 1);
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"old-account", " ", "NEW-ACCOUNT"})
+    void pubgReplacementDiscardsPreviousAccountStatistics(String oldAccount) {
+        UserProfile profile = savedUser().getProfile();
+        profile.connectPubg("Old", oldAccount);
+        profile.updatePubgSummary("Gold", 2.5, 60, 100, GameStatsMode.RANKED);
+        profile.connectRiot("Other#KR1", "riot-account");
+        profile.updateLolSummary("Silver", 1.0, 40, 10);
+        Map<String, Object> before = profile.getGameStats();
+        long version = profile.getGameConnectionVersion("PUBG");
+
+        profile.connectPubg("New", "new-account");
+
+        assertThat(nestedMap(profile.getGameStats(), "PUBG")).containsExactlyInAnyOrderEntriesOf(
+                Map.of("connected", true, "playerName", "New", "accountId", "new-account"));
+        assertThat(profile.getGameStats().get("RIOT")).isEqualTo(before.get("RIOT"));
+        assertThat(profile.getGameStats().get("LOL")).isEqualTo(before.get("LOL"));
+        assertThat(nestedMap(before, "PUBG")).containsEntry("tierLabel", "Gold");
+        assertThat(profile.getGameConnectionVersion("PUBG")).isEqualTo(version + 1);
+    }
+
+    @Test
+    void pubgRenamePreservesCacheForSameAccount() {
+        UserProfile profile = savedUser().getProfile();
+        profile.connectPubg("Old", "account");
+        profile.updatePubgSummary("Gold", 2.5, 60, 100, GameStatsMode.RANKED);
+        Map<String, Object> expected = new HashMap<>(nestedMap(profile.getGameStats(), "PUBG"));
+        expected.put("playerName", "Renamed");
+        long version = profile.getGameConnectionVersion("PUBG");
+
+        profile.connectPubg("Renamed", "account");
+
+        assertThat(nestedMap(profile.getGameStats(), "PUBG")).isEqualTo(expected);
+        assertThat(profile.getGameConnectionVersion("PUBG")).isEqualTo(version + 1);
+    }
 
     @Test
     void connectR6PreservesExistingPubgData() {
