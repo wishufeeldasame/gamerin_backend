@@ -3,8 +3,11 @@ package com.gamerin.backend.domain.riot.service;
     import java.math.BigDecimal;
     import java.math.RoundingMode;
     import java.util.List;
+    import java.util.Objects;
     import java.util.UUID;
     
+    import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
+    import com.gamerin.backend.domain.game.service.GameAccountConflict;
     import com.gamerin.backend.domain.riot.client.RiotApiClient;
     import com.gamerin.backend.domain.riot.dto.external.LeagueEntryResponse;
     import com.gamerin.backend.domain.riot.dto.external.MatchResponse;
@@ -17,26 +20,31 @@ package com.gamerin.backend.domain.riot.service;
     import com.gamerin.backend.domain.user.repository.UserRepository;
     import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
     import org.springframework.http.HttpStatus;
+    import org.springframework.dao.DataIntegrityViolationException;
     import org.springframework.stereotype.Service;
+    import org.springframework.transaction.annotation.Propagation;
     import org.springframework.transaction.annotation.Transactional;
     import org.springframework.web.server.ResponseStatusException;
     
     @Service
-    @Transactional
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public class RiotService {
     
         private final UserRepository userRepository;
         private final RiotApiClient riotApiClient;
+        private final GameStatsPersistenceService gameStatsPersistenceService;
     
-        public RiotService(UserRepository userRepository, RiotApiClient riotApiClient) {
+        public RiotService(UserRepository userRepository, RiotApiClient riotApiClient,
+                GameStatsPersistenceService gameStatsPersistenceService) {
             this.userRepository = userRepository;
             this.riotApiClient = riotApiClient;
+            this.gameStatsPersistenceService = gameStatsPersistenceService;
         }
     
         // 1. Riot 계정 연동
         public RiotConnectionResponse connect(CustomUserPrincipal principal, RiotConnectRequest request) {
             User user = getCurrentUser(principal);
-            UserProfile profile = getCurrentProfile(user);
+            getCurrentProfile(user);
     
             String riotId = request.riotId();
             if (!riotId.contains("#")) {
@@ -54,8 +62,12 @@ package com.gamerin.backend.domain.riot.service;
             // 다른 유저가 사용 중인지 중복 검사
             validateRiotPuuidDuplicate(user.getId(), puuid);
     
-            // 연동 정보 저장
-            profile.connectRiot(riotId, puuid);
+            try {
+                gameStatsPersistenceService.updateConnection(user.getId(), current -> current.connectRiot(riotId, puuid));
+            } catch (DataIntegrityViolationException failure) {
+                // Catch outside the writer's transaction so commit-time conflicts have already rolled back.
+                throw GameAccountConflict.RIOT.translate(failure);
+            }
             return new RiotConnectionResponse(true, riotId);
         }
     
@@ -69,6 +81,8 @@ package com.gamerin.backend.domain.riot.service;
             }
     
             String puuid = profile.getRiotPuuid();
+            long connectionVersion = profile.getGameConnectionVersion("RIOT");
+            RiotSummaryResponse response;
             
             try {
                 // [수정] PUUID를 활용해 다이렉트로 리그 정보 조회
@@ -100,17 +114,21 @@ package com.gamerin.backend.domain.riot.service;
                 // 최근 5게임 KDA 계산
                 double kda = calculateLolKda(puuid);
     
-                RiotSummaryResponse response = new RiotSummaryResponse("League of Legends", tierLabel, kda, winRate, games, true);
-                
-                // DB에 LoL 요약 정보 캐싱
-                profile.updateLolSummary(tierLabel, kda, winRate, games);
-                return response;
+                response = new RiotSummaryResponse("League of Legends", tierLabel, kda, winRate, games, true);
             } catch (ResponseStatusException e) {
                 throw e;
             } catch (Exception e) {
                 e.printStackTrace();
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "LoL 전적정보를 가져오는 데 실패했습니다.", e);
             }
+
+            // Persistence failures must reach the existing server-error handler, not become API errors.
+            gameStatsPersistenceService.updateSummary(
+                    user.getId(), "RIOT", connectionVersion,
+                    current -> current.hasConnectedRiot() && Objects.equals(puuid, current.getRiotPuuid()),
+                    current -> current.updateLolSummary(response.tierLabel(), response.kda(), response.winRate(), response.games())
+            );
+            return response;
         }
     
         // 최근 5게임 상세 조회를 통한 KDA 연산
@@ -156,15 +174,15 @@ package com.gamerin.backend.domain.riot.service;
         // 4. Riot 연동 해제
         public void disconnect(CustomUserPrincipal principal) {
             User user = getCurrentUser(principal);
-            UserProfile profile = getCurrentProfile(user);
-            profile.disconnectRiot();
+            getCurrentProfile(user);
+            gameStatsPersistenceService.updateConnection(user.getId(), UserProfile::disconnectRiot);
         }
 
         private User getCurrentUser(CustomUserPrincipal principal) {
             if (principal == null) {
                 throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
             }
-            return userRepository.findById(principal.getUserId())
+            return userRepository.findWithProfileById(principal.getUserId())
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "인증 유저를 찾을 수 없습니다."));
         }
 
@@ -179,7 +197,7 @@ package com.gamerin.backend.domain.riot.service;
         private void validateRiotPuuidDuplicate(UUID userId, String puuid) {
             boolean duplicated = userRepository.existsConnectedRiotPuuidByOtherUser(userId, puuid);
             if (duplicated) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 다른 유저가 연동한 Riot 계정입니다.");
+                throw GameAccountConflict.RIOT.conflict();
             }
         }
 

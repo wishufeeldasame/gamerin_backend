@@ -10,12 +10,17 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.gamerin.backend.domain.user.entity.User;
 
 import jakarta.persistence.LockModeType;
 
 public interface UserRepository extends JpaRepository<User, UUID> {
+
+    @Transactional(readOnly = true)
+    @Query("select u from User u left join fetch u.profile where u.id = :id")
+    Optional<User> findWithProfileById(@Param("id") UUID id);
 
     Optional<User> findByIdAndDeletedAtIsNull(UUID id);
 

@@ -100,6 +100,8 @@
 - 스키마 변경은 `src/main/resources/db/migration/`에 새 `V*.sql` Flyway migration을 추가한다.
 - 이미 적용된 migration을 수정하거나 버전 번호를 재사용하지 않는다.
 - 새 migration 추가 전 현재 파일 목록, 가장 높은 버전, 번호 누락을 다시 확인한다.
+- 앞으로 새로 추가하는 Flyway migration은 홀수 버전 번호만 사용한다. 현재 작업 브랜치와 병합 대상에서 사용 중인 최대 버전보다 큰 미사용 홀수 번호를 선택한다(예: V21, V23, V25).
+- 홀수 번호 규칙에 따른 버전 간격은 정상이며 짝수 번호를 채우지 않는다. 이 규칙을 이유로 기존 migration의 버전 번호를 변경하지 않는다.
 - native SQL, 제약조건, 인덱스, locking, 동시성 변경은 PostgreSQL 동작을 확인한다.
 - H2 결과만으로 PostgreSQL 호환성을 확정하지 않는다.
 - notification, mention 등 연관 쓰기가 포함된 기능은 트랜잭션 롤백, 중복 방지, 알림 생성 시점까지 기존 테스트와 대조한다.

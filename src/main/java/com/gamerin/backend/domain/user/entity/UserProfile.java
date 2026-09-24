@@ -8,6 +8,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.game.model.GameStatsMode;
+import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -24,6 +25,8 @@ import jakarta.persistence.Table;
 
 @Entity
 @Table(name = "user_profiles")
+// Profile edits must not write a stale game_stats value loaded before a game update.
+@DynamicUpdate
 public class UserProfile {
 
     private static final String PUBG_KEY = "PUBG";
@@ -74,6 +77,10 @@ public class UserProfile {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "game_stats", columnDefinition = "jsonb", nullable = false)
     private Map<String, Object> gameStats = new HashMap<>();
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "game_connection_versions", columnDefinition = "jsonb", nullable = false)
+    private Map<String, Long> gameConnectionVersions = new HashMap<>();
 
     @Column(name = "verified_badge", nullable = false)
     private boolean verifiedBadge = false;
@@ -141,6 +148,10 @@ public class UserProfile {
         return gameStats;
     }
 
+    public long getGameConnectionVersion(String gameKey) {
+        return gameConnectionVersions.getOrDefault(gameKey, 0L);
+    }
+
     public boolean isVerifiedBadge() {
         return verifiedBadge;
     }
@@ -201,6 +212,7 @@ public class UserProfile {
         Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
         nextGameStats.put(PUBG_KEY, pubgStats);
         this.gameStats = nextGameStats;
+        advanceGameConnectionVersion(PUBG_KEY);
     }
 
     public void updatePubgSummary(
@@ -227,6 +239,7 @@ public class UserProfile {
         Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
         nextGameStats.remove(PUBG_KEY);
         this.gameStats = nextGameStats;
+        advanceGameConnectionVersion(PUBG_KEY);
     }
 
     public boolean hasConnectedR6() {
@@ -301,6 +314,7 @@ public class UserProfile {
         Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
         nextGameStats.put(R6_KEY, r6Stats);
         this.gameStats = nextGameStats;
+        advanceGameConnectionVersion(R6_KEY);
     }
 
     public void updateR6Summary(
@@ -324,6 +338,7 @@ public class UserProfile {
         Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
         nextGameStats.remove(R6_KEY);
         this.gameStats = nextGameStats;
+        advanceGameConnectionVersion(R6_KEY);
     }
 
     public boolean hasConnectedRiot() {
@@ -350,6 +365,7 @@ public class UserProfile {
         Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
         nextGameStats.put(RIOT_KEY, riotStats);
         this.gameStats = nextGameStats;
+        advanceGameConnectionVersion(RIOT_KEY);
     }
 
     public void updateLolSummary(String tierLabel, double kda, int winRate, int games) {
@@ -370,6 +386,14 @@ public class UserProfile {
         nextGameStats.remove(RIOT_KEY);
         nextGameStats.remove(LOL_KEY);
         this.gameStats = nextGameStats;
+        advanceGameConnectionVersion(RIOT_KEY);
+    }
+
+    private void advanceGameConnectionVersion(String gameKey) {
+        // Retain the counter after disconnect so reconnecting the same account invalidates old requests.
+        Map<String, Long> nextVersions = new HashMap<>(gameConnectionVersions);
+        nextVersions.put(gameKey, Math.incrementExact(getGameConnectionVersion(gameKey)));
+        this.gameConnectionVersions = nextVersions;
     }
 
     private Map<String, Object> getRiotStats() {
