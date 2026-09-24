@@ -12,6 +12,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.hashtag.service.HashtagService;
+import com.gamerin.backend.domain.mention.service.MentionService;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
@@ -52,6 +55,9 @@ public class PostService {
     private final PostCommentRepository postCommentRepository;
     private final PostShareRepository postShareRepository;
     private final PostResponseAssembler postResponseAssembler;
+    private final HashtagService hashtagService;
+    private final MentionService mentionService;
+    private final NotificationCommandService notificationCommandService;
     private final MediaStorageService mediaStorageService;
     private final VideoMetadataService videoMetadataService;
     private final ContentModerationService contentModerationService;
@@ -70,6 +76,9 @@ public class PostService {
             PostCommentRepository postCommentRepository,
             PostShareRepository postShareRepository,
             PostResponseAssembler postResponseAssembler,
+            HashtagService hashtagService,
+            MentionService mentionService,
+            NotificationCommandService notificationCommandService,
             MediaStorageService mediaStorageService,
             VideoMetadataService videoMetadataService,
             ContentModerationService contentModerationService,
@@ -91,6 +100,9 @@ public class PostService {
         this.postCommentRepository = postCommentRepository;
         this.postShareRepository = postShareRepository;
         this.postResponseAssembler = postResponseAssembler;
+        this.hashtagService = hashtagService;
+        this.mentionService = mentionService;
+        this.notificationCommandService = notificationCommandService;
         this.mediaStorageService = mediaStorageService;
         this.videoMetadataService = videoMetadataService;
         this.contentModerationService = contentModerationService;
@@ -111,6 +123,8 @@ public class PostService {
 
         Post post = Post.create(user, content);
         Post savedPost = postRepository.save(post);
+        hashtagService.attachToPost(savedPost);
+        mentionService.attachToPost(savedPost);
 
         return postResponseAssembler.toPostDetail(savedPost, user.getId());
     }
@@ -129,6 +143,8 @@ public class PostService {
         try {
             Post post = Post.create(user, content);
             Post savedPost = postRepository.save(post);
+            hashtagService.attachToPost(savedPost);
+            mentionService.attachToPost(savedPost);
 
             if (!preparedMediaUpload.isEmpty()) {
                 saveUploadedMedia(savedPost, preparedMediaUpload);
@@ -149,23 +165,25 @@ public class PostService {
     }
 
     public void like(CustomUserPrincipal principal, UUID postId) {
-        User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
+        User user = lockCurrentUser(principal);
+        Post post = getActivePostForUpdate(postId);
 
         if (postLikeRepository.existsByPostIdAndUserId(postId, user.getId())) {
             return;
         }
 
-        postLikeRepository.save(PostLike.create(post, user));
+        PostLike savedLike = postLikeRepository.save(PostLike.create(post, user));
         post.increaseLikeCount();
+        notificationCommandService.createLike(savedLike, post, user);
     }
 
     public void unlike(CustomUserPrincipal principal, UUID postId) {
-        User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
+        User user = lockCurrentUser(principal);
+        Post post = getActivePostForUpdate(postId);
 
         postLikeRepository.findByPostIdAndUserId(postId, user.getId())
                 .ifPresent(like -> {
+                    notificationCommandService.removeLike(postId, user.getId());
                     postLikeRepository.delete(like);
                     post.decreaseLikeCount();
                 });
@@ -173,7 +191,7 @@ public class PostService {
 
     public void delete(CustomUserPrincipal principal, UUID postId) {
         User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
+        Post post = getActivePostForUpdate(postId);
 
         if (!post.getAuthor().getId().equals(user.getId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the author can delete this post.");
@@ -192,7 +210,7 @@ public class PostService {
 
     public ShareResponse share(CustomUserPrincipal principal, UUID postId, CreateShareRequest request) {
         User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
+        Post post = getActivePostForUpdate(postId);
         ShareTarget target = request != null ? request.normalizedTarget() : ShareTarget.COPY_LINK;
 
         postShareRepository.save(PostShare.create(post, user, target));
@@ -203,7 +221,7 @@ public class PostService {
 
     public CommentResponse createComment(CustomUserPrincipal principal, UUID postId, CreateCommentRequest request) {
         User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
+        Post post = getActivePostForUpdate(postId);
         String content = normalizeContent(request.content());
 
         if (content == null) {
@@ -214,6 +232,8 @@ public class PostService {
 
         PostComment savedComment = postCommentRepository.save(PostComment.create(post, user, content));
         post.increaseCommentCount();
+        notificationCommandService.createComment(savedComment, post, user);
+        mentionService.attachToComment(savedComment);
         return postResponseAssembler.toCommentResponse(savedComment, user.getId());
     }
 
@@ -230,6 +250,7 @@ public class PostService {
 
     public void deleteComment(CustomUserPrincipal principal, UUID postId, UUID commentId) {
         User user = getCurrentUser(principal);
+        Post post = getActivePostForUpdate(postId);
         PostComment comment = postCommentRepository.findActiveByPostIdAndId(postId, commentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Comment not found."));
 
@@ -237,8 +258,10 @@ public class PostService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the author can delete this comment.");
         }
 
+        notificationCommandService.removeComment(commentId);
+        mentionService.removeForComment(commentId);
         postCommentRepository.delete(comment);
-        comment.getPost().decreaseCommentCount();
+        post.decreaseCommentCount();
     }
 
     private void saveUploadedMedia(
@@ -431,12 +454,26 @@ public class PostService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found."));
     }
 
+    private Post getActivePostForUpdate(UUID postId) {
+        return postRepository.findActiveByIdForUpdate(postId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found."));
+    }
+
     private User getCurrentUser(CustomUserPrincipal principal) {
         if (principal == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication is required.");
         }
 
         return userRepository.findByIdAndDeletedAtIsNull(principal.getUserId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
+    }
+
+    private User lockCurrentUser(CustomUserPrincipal principal) {
+        if (principal == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication is required.");
+        }
+
+        return userRepository.findActiveByIdForUpdate(principal.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
     }
 

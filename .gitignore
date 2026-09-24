@@ -1,6 +1,5 @@
 HELP.md
 .gradle
-.codex
 build/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
@@ -10,6 +9,12 @@ uploads/
 .env
 .env.*
 !.env.example
+.claude/settings.local.json
+
+# Shared repository instructions
+!/AGENTS.md
+!/CLAUDE.md
+!/.codex
 
 ### STS ###
 .apt_generated
@@ -47,3 +52,5 @@ out/
 .DS_Store
 Thumbs.db
 *.pem
+
+/docs

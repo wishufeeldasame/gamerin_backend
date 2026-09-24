@@ -29,6 +29,15 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
         """)
     Optional<Post> findAccessibleById(@Param("id") UUID id);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+        select p
+        from Post p
+        where p.id = :id
+          and p.deletedAt is null
+        """)
+    Optional<Post> findActiveByIdForUpdate(@Param("id") UUID id);
+
     @Lock(LockModeType.PESSIMISTIC_READ)
     @Query("""
         select p

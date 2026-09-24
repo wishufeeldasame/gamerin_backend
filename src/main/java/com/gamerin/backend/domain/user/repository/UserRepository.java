@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.user.repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -8,6 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.gamerin.backend.domain.user.entity.User;
 
@@ -15,17 +18,33 @@ import jakarta.persistence.LockModeType;
 
 public interface UserRepository extends JpaRepository<User, UUID> {
 
+    @Transactional(readOnly = true)
+    @Query("select u from User u left join fetch u.profile where u.id = :id")
+    Optional<User> findWithProfileById(@Param("id") UUID id);
+
     Optional<User> findByIdAndDeletedAtIsNull(UUID id);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select u from User u where u.id = :id and u.deletedAt is null")
     Optional<User> findActiveByIdForUpdate(@Param("id") UUID id);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from User u where u.id = :id")
+    Optional<User> findByIdForUpdate(@Param("id") UUID id);
+
     Optional<User> findByHandle(String handle);
 
     Optional<User> findByHandleAndDeletedAtIsNull(String handle);
 
     boolean existsByHandle(String handle);
+
+    @Query("""
+            select u
+            from User u
+            where u.deletedAt is null
+              and u.handle in :handles
+            """)
+    List<User> findActiveByHandleIn(@Param("handles") Collection<String> handles);
 
     Optional<User> findByEmail(String email);
 

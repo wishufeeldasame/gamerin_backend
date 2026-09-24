@@ -25,6 +25,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.follow.entity.Follow;
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -40,11 +41,14 @@ class FollowServiceTest {
     @Mock
     private FollowRepository followRepository;
 
+    @Mock
+    private NotificationCommandService notificationCommandService;
+
     private FollowService followService;
 
     @BeforeEach
     void setUp() {
-        followService = new FollowService(userRepository, followRepository);
+        followService = new FollowService(userRepository, followRepository, notificationCommandService);
     }
 
     @Test
@@ -52,7 +56,7 @@ class FollowServiceTest {
         UUID userId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(userRepository.findActiveByIdForUpdate(userId)).thenReturn(Optional.of(user));
         when(userRepository.findByHandleAndDeletedAtIsNull("tester")).thenReturn(Optional.of(user));
 
         assertThatThrownBy(() -> followService.follow(CustomUserPrincipal.from(user), "tester"))
@@ -70,32 +74,72 @@ class FollowServiceTest {
         User follower = savedUser(followerId, "me", "Me");
         User followee = savedUser(followeeId, "other", "Other");
 
-        when(userRepository.findByIdAndDeletedAtIsNull(followerId)).thenReturn(Optional.of(follower));
+        when(userRepository.findActiveByIdForUpdate(followerId)).thenReturn(Optional.of(follower));
         when(userRepository.findByHandleAndDeletedAtIsNull("other")).thenReturn(Optional.of(followee));
         when(followRepository.existsByFollowerIdAndFolloweeId(followerId, followeeId)).thenReturn(false);
+        when(followRepository.saveAndFlush(any(Follow.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         followService.follow(CustomUserPrincipal.from(follower), "other");
 
-        verify(followRepository).saveAndFlush(any(Follow.class));
+        var followCaptor = org.mockito.ArgumentCaptor.forClass(Follow.class);
+        verify(followRepository).saveAndFlush(followCaptor.capture());
+        verify(notificationCommandService).createFollow(followCaptor.getValue(), follower, followee);
     }
 
     @Test
-    void followIgnoresDuplicateCreatedByConcurrentRequest() {
+    void followDoesNotSwallowUnexpectedIntegrityViolation() {
         UUID followerId = UUID.randomUUID();
         UUID followeeId = UUID.randomUUID();
         User follower = savedUser(followerId, "me", "Me");
         User followee = savedUser(followeeId, "other", "Other");
 
-        when(userRepository.findByIdAndDeletedAtIsNull(followerId)).thenReturn(Optional.of(follower));
+        when(userRepository.findActiveByIdForUpdate(followerId)).thenReturn(Optional.of(follower));
         when(userRepository.findByHandleAndDeletedAtIsNull("other")).thenReturn(Optional.of(followee));
-        when(followRepository.existsByFollowerIdAndFolloweeId(followerId, followeeId))
-                .thenReturn(false, true);
+        when(followRepository.existsByFollowerIdAndFolloweeId(followerId, followeeId)).thenReturn(false);
         when(followRepository.saveAndFlush(any(Follow.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate follow"));
 
-        followService.follow(CustomUserPrincipal.from(follower), "other");
+        assertThatThrownBy(() -> followService.follow(CustomUserPrincipal.from(follower), "other"))
+                .isInstanceOf(DataIntegrityViolationException.class);
 
         verify(followRepository).saveAndFlush(any(Follow.class));
+        verify(notificationCommandService, never()).createFollow(any(), any(), any());
+    }
+
+    @Test
+    void followDoesNotCreateNotificationWhenRelationshipAlreadyExists() {
+        UUID followerId = UUID.randomUUID();
+        UUID followeeId = UUID.randomUUID();
+        User follower = savedUser(followerId, "me", "Me");
+        User followee = savedUser(followeeId, "other", "Other");
+
+        when(userRepository.findActiveByIdForUpdate(followerId)).thenReturn(Optional.of(follower));
+        when(userRepository.findByHandleAndDeletedAtIsNull("other")).thenReturn(Optional.of(followee));
+        when(followRepository.existsByFollowerIdAndFolloweeId(followerId, followeeId)).thenReturn(true);
+
+        followService.follow(CustomUserPrincipal.from(follower), "other");
+
+        verify(followRepository, never()).saveAndFlush(any(Follow.class));
+        verify(notificationCommandService, never()).createFollow(any(), any(), any());
+    }
+
+    @Test
+    void unfollowRemovesNotificationAndRelationshipWhenPresent() {
+        UUID followerId = UUID.randomUUID();
+        UUID followeeId = UUID.randomUUID();
+        User follower = savedUser(followerId, "me", "Me");
+        User followee = savedUser(followeeId, "other", "Other");
+        Follow follow = Follow.create(follower, followee);
+
+        when(userRepository.findActiveByIdForUpdate(followerId)).thenReturn(Optional.of(follower));
+        when(userRepository.findByHandleAndDeletedAtIsNull("other")).thenReturn(Optional.of(followee));
+        when(followRepository.findByFollowerIdAndFolloweeId(followerId, followeeId))
+                .thenReturn(Optional.of(follow));
+
+        followService.unfollow(CustomUserPrincipal.from(follower), "other");
+
+        verify(notificationCommandService).removeFollow(followerId, followeeId);
+        verify(followRepository).delete(follow);
     }
 
     @Test
