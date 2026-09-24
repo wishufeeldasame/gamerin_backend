@@ -26,6 +26,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamerin.backend.domain.post.filter.PostUploadConcurrencyFilter;
@@ -320,5 +321,18 @@ public class SecurityConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
+    }
+    
+    /**
+     * UserSuspensionFilter의 서블릿 컨테이너 자동 등록 비활성화
+     * (Spring Security 보안 체인 내부에서만 정확한 순서로 동작하도록 이중 등록 방지)
+     */
+    @Bean
+    public FilterRegistrationBean<UserSuspensionFilter> disableUserSuspensionFilterAutoRegistration(
+            UserSuspensionFilter filter
+    ) {
+        FilterRegistrationBean<UserSuspensionFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 }

@@ -8,6 +8,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -18,6 +20,11 @@ public interface UserPenaltyRepository extends JpaRepository<UserPenalty, UUID> 
 
     // 유저의 현재 활성화된 제재 존재 여부 (접근 차단 미들웨어용)
     boolean existsByUserIdAndIsActiveTrue(UUID userId);
+
+    // 제재 해제 동시 요청 및 만료 스케줄러 경합 시 중복 해제/감사로그 방지를 위한 비관적 쓰기 락 조회
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from UserPenalty p where p.id = :id")
+    java.util.Optional<UserPenalty> findByIdForUpdate(@Param("id") UUID id);
 
     // 경고(WARNING)를 제외한 실제 활성 '정지' 제재가 존재하는지 확인 (미들웨어 차단 및 해제 복구 판단용)
     @Query("SELECT COUNT(p) > 0 FROM UserPenalty p WHERE p.user.id = :userId AND p.isActive = true AND p.penaltyType <> com.gamerin.backend.domain.report.entity.PenaltyType.WARNING")

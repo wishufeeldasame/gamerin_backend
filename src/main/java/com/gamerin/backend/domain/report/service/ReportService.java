@@ -96,20 +96,20 @@ public class ReportService {
         User reporter = userRepository.findById(principal.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신고자 유저 정보를 찾을 수 없습니다."));
 
-        // 1. 존재하지 않거나 삭제된 대상 신고 검증 (404 예외)
-        validateTargetExists(request.targetType(), request.targetId());
+        // 1. 존재하지 않거나 삭제된 대상 신고 검증 및 권한 확인 (404 예외)
+            validateTargetExists(reporter.getId(), request.targetType(), request.targetId());
 
-        // 2. 중복 신고 검증 (409 예외)
-        boolean alreadyReported = reportRepository.existsByReporterIdAndTargetTypeAndTargetId(
-                reporter.getId(),
-                request.targetType(),
-                request.targetId());
-        if (alreadyReported) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 해당 콘텐츠/유저에 대해 신고를 접수하셨습니다.");
-        }
+            // 2. 중복 신고 검증 (409 예외)
+            boolean alreadyReported = reportRepository.existsByReporterIdAndTargetTypeAndTargetId(
+                    reporter.getId(),
+                    request.targetType(),
+                    request.targetId());
+            if (alreadyReported) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 해당 콘텐츠/유저에 대해 신고를 접수하셨습니다.");
+            }
 
-        // 3. 신고 접수 시점 스냅샷 생성
-        String targetSnippet = createTargetSnippet(request.targetType(), request.targetId());
+            // 3. 신고 접수 시점 스냅샷 생성 (권한 검증된 데이터에서 생성)
+            String targetSnippet = createTargetSnippet(reporter.getId(), request.targetType(), request.targetId());
 
         // 4. 신고 엔티티 생성 및 DB 저장
         Report report = Report.create(
@@ -243,29 +243,30 @@ public class ReportService {
     /**
      * 신고 대상 실제 존재 여부 검증
      */
-    private void validateTargetExists(ReportTargetType targetType, UUID targetId) {
+    private void validateTargetExists(UUID reporterId, ReportTargetType targetType, UUID targetId) {
         boolean exists = switch (targetType) {
             case POST -> postRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
             case COMMENT -> postCommentRepository.findById(targetId)
                     .map(comment -> comment.getDeletedAt() == null)
                     .orElse(false);
-            case USER -> userRepository.findById(targetId)
-                    .map(User::isActive)
-                    .orElse(false);
+            case USER -> userRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
             case MENTORING -> mentoringApplicationRepository.existsById(targetId);
-            case MESSAGE -> directMessageRepository.existsByIdAndDeletedAtIsNull(targetId);
+            // 메시지(DM)는 본인이 참여 중인 대화방의 메시지만 신고 가능 (제3자의 사적 메시지 탈취 방어)
+            case MESSAGE -> directMessageRepository.findActiveByIdAndParticipantUserId(targetId, reporterId).isPresent();
         };
 
         if (!exists) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
-                    "신고 대상 " + targetType.getDescription() + "이(가) 존재하지 않거나 이미 삭제되었습니다.");
-        }
+                String message = targetType == ReportTargetType.MESSAGE
+                        ? "신고 대상 메시지이(가) 존재하지 않거나 접근 권한이 없습니다."
+                        : "신고 대상 " + targetType.getDescription() + "이(가) 존재하지 않거나 이미 삭제되었습니다.";
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, message);
+            }
     }
 
     /**
      * 신고 대상 원본 스냅샷 생성
      */
-    private String createTargetSnippet(ReportTargetType targetType, UUID targetId) {
+    private String createTargetSnippet(UUID reporterId, ReportTargetType targetType, UUID targetId) {
         return switch (targetType) {
             case POST -> postRepository.findById(targetId)
                     .map(Post::getContent)
@@ -276,7 +277,7 @@ public class ReportService {
             case USER -> userRepository.findById(targetId)
                     .map(user -> "닉네임: " + user.getNickname() + " (@" + user.getHandle() + ")")
                     .orElse("유저 (ID: " + targetId + ")");
-            case MESSAGE -> directMessageRepository.findById(targetId)
+            case MESSAGE -> directMessageRepository.findActiveByIdAndParticipantUserId(targetId, reporterId)
                     .map(DirectMessage::getContent)
                     .orElse("메시지 (ID: " + targetId + ")");
             case MENTORING -> mentoringApplicationRepository.findById(targetId)

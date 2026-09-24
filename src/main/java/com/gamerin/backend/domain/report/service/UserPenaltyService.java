@@ -66,7 +66,8 @@ public class UserPenaltyService {
         }
 
         // 2. 대상 유저 존재 확인
-        User targetUser = userRepository.findById(targetUserId)
+        // 2. 대상 유저 비관적 쓰기 락 획득 (잠금 순서: User -> UserPenalty 일관성 유지)
+        User targetUser = userRepository.findActiveByIdForUpdate(targetUserId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "제재 대상 유저를 찾을 수 없습니다."));
 
         if (targetUser.getStatus() == UserStatus.DELETED) {
@@ -125,7 +126,12 @@ public class UserPenaltyService {
         User admin = userRepository.findById(adminId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
 
-        UserPenalty penalty = userPenaltyRepository.findById(penaltyId)
+        // 1. 잠금 순서 일원화: 대상 유저를 먼저 비관적 락으로 잠가 신규 제재 생성과의 경합 방지
+        User targetUser = userRepository.findActiveByIdForUpdate(targetUserId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "제재 대상 유저를 찾을 수 없습니다."));
+
+        // 2. 해제 대상 제재 비관적 락 조회
+        UserPenalty penalty = userPenaltyRepository.findByIdForUpdate(penaltyId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "해당 제재 내역을 찾을 수 없습니다."));
 
         if (!penalty.getUser().getId().equals(targetUserId)) {
@@ -136,21 +142,18 @@ public class UserPenaltyService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "이미 해제되었거나 만료된 제재입니다.");
         }
 
-        // 제재 비활성화
+        // 3. 제재 비활성화
         penalty.deactivate();
         UserPenalty updatedPenalty = userPenaltyRepository.save(penalty);
 
-        // 해당 유저에게 남아있는 다른 활성 '정지' 제재가 없으면 계정 정상 활성화(ACTIVE)
+        // 4. 유저 락이 유지된 상태에서 다른 활성 정지 제재 여부를 안전하게 검사하고 계정 복구
         boolean hasActiveSuspension = userPenaltyRepository.existsActiveSuspensionByUserId(targetUserId);
-        if (!hasActiveSuspension) {
-            User user = penalty.getUser();
-            if (user.getStatus() == UserStatus.SUSPENDED) {
-                user.activate();
-                userRepository.save(user);
-            }
+        if (!hasActiveSuspension && targetUser.getStatus() == UserStatus.SUSPENDED) {
+            targetUser.activate();
+            userRepository.save(targetUser);
         }
 
-        // 어드민 감사 로그 적재
+        // 5. 어드민 감사 로그 적재
         String logDetails = String.format("제재 수동 해제 (제재 ID: %s, 제재 유형: %s)",
                 penaltyId, penalty.getPenaltyType().getDescription());
 
@@ -192,12 +195,15 @@ public class UserPenaltyService {
             penalty.deactivate();
             userPenaltyRepository.save(penalty);
 
-            User user = penalty.getUser();
-            boolean hasActiveSuspension = userPenaltyRepository.existsActiveSuspensionByUserId(user.getId());
-            if (!hasActiveSuspension && user.getStatus() == UserStatus.SUSPENDED) {
-                user.activate();
-                userRepository.save(user);
-            }
+            UUID userId = penalty.getUser().getId();
+            // 대상 유저 락 획득 후 다른 활성 정지 여부 검증 및 상태 복구
+            userRepository.findActiveByIdForUpdate(userId).ifPresent(user -> {
+                boolean hasActiveSuspension = userPenaltyRepository.existsActiveSuspensionByUserId(userId);
+                if (!hasActiveSuspension && user.getStatus() == UserStatus.SUSPENDED) {
+                    user.activate();
+                    userRepository.save(user);
+                }
+            });
         }
 
         return expiredPenalties.size();

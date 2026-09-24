@@ -57,6 +57,15 @@ class AdminUserPenaltyIntegrationTest {
     @Autowired
     private com.gamerin.backend.domain.post.repository.PostRepository postRepository;
 
+    @Autowired
+        private com.gamerin.backend.domain.message.repository.MessageConversationRepository messageConversationRepository;
+    
+    @Autowired
+    private com.gamerin.backend.domain.message.repository.MessageParticipantRepository messageParticipantRepository;
+    
+    @Autowired
+    private com.gamerin.backend.domain.message.repository.DirectMessageRepository directMessageRepository;
+
 
     private User admin;
     private User regularUser;
@@ -201,5 +210,94 @@ class AdminUserPenaltyIntegrationTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("연관된 신고 내역을 찾을 수 없습니다")));
+    }
+
+    @Test
+    @DisplayName("[정지 유저 신고 검증] SUSPENDED 상태인 유저도 404 거절 없이 정상 신고된다")
+    void reportSuspendedUser_success() throws Exception {
+        // 1. 피신고 대상이 될 유저 생성 후 정지(SUSPENDED) 상태로 저장
+        User suspendedUser = User.createLocal(
+                "suspended@test.com",
+                "suspended_" + UUID.randomUUID().toString().substring(0, 8),
+                "정지유저",
+                "hash"
+        );
+        suspendedUser.setProfile(UserProfile.createDefault(suspendedUser));
+        suspendedUser.suspend();
+        suspendedUser = userRepository.save(suspendedUser);
+
+        // 2. 일반 유저(regularUser)가 정지된 유저(suspendedUser)를 신고하는 요청 생성
+        var request = new com.gamerin.backend.domain.report.dto.request.ReportCreateRequest(
+                com.gamerin.backend.domain.report.entity.ReportTargetType.USER,
+                suspendedUser.getId(),
+                com.gamerin.backend.domain.report.entity.ReportReasonCode.INAPPROPRIATE,
+                "정지 중인 유저의 추가 비매너 행위 신고"
+        );
+
+        // 3. 정지 유저 대상 신고 API 호출 시 404가 아니라 200 OK로 성공해야 함
+        mockMvc.perform(post("/api/v1/reports")
+                        .header("Authorization", "Bearer " + userToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.targetId").value(suspendedUser.getId().toString()));
+    }
+
+    @Test
+    @DisplayName("[보안 검증] 대화 참여자가 아닌 제3자가 메시지를 신고하면 404 차단되고 사적 내용이 노출되지 않는다")
+    void reportMessage_notParticipant_throwsNotFound() throws Exception {
+        // 1. 대화 당사자(발신자, 수신자) 두 명 생성
+        User sender = User.createLocal(
+                "sender@test.com",
+                "sender_" + UUID.randomUUID().toString().substring(0, 8),
+                "발신자",
+                "hash"
+        );
+        sender.setProfile(UserProfile.createDefault(sender));
+        sender = userRepository.save(sender);
+
+        User receiver = User.createLocal(
+                "receiver@test.com",
+                "receiver_" + UUID.randomUUID().toString().substring(0, 8),
+                "수신자",
+                "hash"
+        );
+        receiver.setProfile(UserProfile.createDefault(receiver));
+        receiver = userRepository.save(receiver);
+
+        // 2. 대화방(Conversation) 생성 및 두 명을 참여자로 등록
+        var conversation = messageConversationRepository.save(
+                com.gamerin.backend.domain.message.entity.MessageConversation.createDirect("direct_" + UUID.randomUUID())
+        );
+        messageParticipantRepository.save(com.gamerin.backend.domain.message.entity.MessageParticipant.create(conversation, sender));
+        messageParticipantRepository.save(com.gamerin.backend.domain.message.entity.MessageParticipant.create(conversation, receiver));
+
+        // 3. 비밀 메시지 생성
+        var secretMessage = directMessageRepository.save(
+                com.gamerin.backend.domain.message.entity.DirectMessage.create(
+                        conversation,
+                        sender,
+                        "외부에 노출되면 안 되는 둘만의 비밀 대화입니다.",
+                        null
+                )
+        );
+
+        // 4. 대화 참여자가 아닌 제3자(regularUser)가 해당 messageId로 신고 API 호출
+        var request = new com.gamerin.backend.domain.report.dto.request.ReportCreateRequest(
+                com.gamerin.backend.domain.report.entity.ReportTargetType.MESSAGE,
+                secretMessage.getId(),
+                com.gamerin.backend.domain.report.entity.ReportReasonCode.INAPPROPRIATE,
+                "남의 비밀 메시지 무단 신고 시도"
+        );
+
+        // 5. 참여자가 아니므로 404 Not Found ("접근 권한이 없습니다")로 차단됨을 검증
+        mockMvc.perform(post("/api/v1/reports")
+                        .header("Authorization", "Bearer " + userToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("접근 권한이 없습니다")));
     }
 }

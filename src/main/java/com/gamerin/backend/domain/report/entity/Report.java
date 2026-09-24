@@ -1,12 +1,24 @@
 package com.gamerin.backend.domain.report.entity;
 
-import com.gamerin.backend.domain.user.entity.User;
-import jakarta.persistence.*;
-import org.hibernate.generator.EventType;
-import org.hibernate.annotations.Generated;
-
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+
+import com.gamerin.backend.domain.user.entity.User;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
+import jakarta.persistence.Table;
 
 @Entity
 @Table(name = "reports")
@@ -16,9 +28,8 @@ public class Report {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    // DB 시퀀스 자동 생성 (RPT-1001 등), 읽기 전용
-    @Column(name = "report_code", nullable = false, insertable = false, updatable = false, length = 30, columnDefinition = "VARCHAR(30) DEFAULT 'RPT-1001'")
-    @Generated(event = EventType.INSERT)
+    // DB 방언(PostgreSQL/H2) 시퀀스 종속성을 제거하고 유니크 보장
+    @Column(name = "report_code", nullable = false, updatable = false, length = 30, unique = true)
     private String reportCode;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
@@ -55,14 +66,19 @@ public class Report {
     private OffsetDateTime createdAt;
 
     @Column(name = "updated_at", nullable = false)
-        private OffsetDateTime updatedAt;
+    private OffsetDateTime updatedAt;
 
     protected Report() {
     }
 
-    public static Report create(User reporter,
-            ReportTargetType targetType, UUID targetId, String targetSnippet,
-            ReportReasonCode reasonCode, String details) {
+    public static Report create(
+            User reporter,
+            ReportTargetType targetType,
+            UUID targetId,
+            String targetSnippet,
+            ReportReasonCode reasonCode,
+            String details
+    ) {
         Report report = new Report();
         report.reporter = reporter;
         report.targetType = targetType;
@@ -79,6 +95,12 @@ public class Report {
         OffsetDateTime now = OffsetDateTime.now();
         this.createdAt = now;
         this.updatedAt = now;
+        // 설정 파일이나 DB 시퀀스 없이도 항상 고유 신고 코드(예: RPT-260925-1049) 자동 발급
+        if (this.reportCode == null) {
+            String datePrefix = now.format(DateTimeFormatter.ofPattern("yyMMdd"));
+            int randomSuffix = ThreadLocalRandom.current().nextInt(1000, 10000);
+            this.reportCode = "RPT-" + datePrefix + "-" + randomSuffix;
+        }
     }
 
     @PreUpdate
@@ -86,8 +108,7 @@ public class Report {
         this.updatedAt = OffsetDateTime.now();
     }
 
-    public void updateStatus(ReportStatus status,
-            User admin) {
+    public void updateStatus(ReportStatus status, User admin) {
         this.status = status;
         this.assignedAdmin = admin;
     }
