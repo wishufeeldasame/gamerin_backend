@@ -81,6 +81,8 @@ class RiotServiceTest {
 
     @Test
     void connectRejectsAccountAlreadyLinkedByAnotherUserBeforeWriting() {
+        user.getProfile().updateLolSummary("GOLD I", 2.5, 60, 100);
+        var before = user.getProfile().getGameStats();
         when(riotApiClient.findAccount("player", "KR1"))
                 .thenReturn(new RiotAccountResponse("puuid", "player", "KR1"));
         when(userRepository.existsConnectedRiotPuuidByOtherUser(user.getId(), "puuid")).thenReturn(true);
@@ -91,14 +93,18 @@ class RiotServiceTest {
                     assertThat(exception.getReason()).isEqualTo("이미 다른 유저가 연동한 Riot 계정입니다.");
                 });
         verifyNoInteractions(persistenceService);
+        assertThat(user.getProfile().getGameStats()).isEqualTo(before);
     }
 
     @Test
     void connectExternalFailurePreservesStatusAndDoesNotWrite() {
+        user.getProfile().updateLolSummary("GOLD I", 2.5, 60, 100);
+        var before = user.getProfile().getGameStats();
         ResponseStatusException failure = new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "rate limited");
         when(riotApiClient.findAccount("player", "KR1")).thenThrow(failure);
         assertThatThrownBy(() -> riotService.connect(principal, new RiotConnectRequest("player#KR1"))).isSameAs(failure);
         verifyNoInteractions(persistenceService);
+        assertThat(user.getProfile().getGameStats()).isEqualTo(before);
     }
 
     @ParameterizedTest

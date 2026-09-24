@@ -43,6 +43,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -58,6 +59,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
@@ -235,6 +237,8 @@ class GameStatsPostgresConcurrencyTest {
     void replacementDuringRefreshPreservesNewAccountAndItsCache(Game game) throws Exception {
         Fixture fixture = fixture();
         connect(game, fixture, "original");
+        refresh(game, fixture);
+        assertThat(section(profile(fixture), game.statsKey())).containsEntry(game.matchesKey(), 10);
         AtomicBoolean replacementCommitted = new AtomicBoolean();
         duringRefresh(game, fixture, () -> {
             connect(game, fixture, "replacement");
@@ -251,6 +255,101 @@ class GameStatsPostgresConcurrencyTest {
             assertThat(section(profile, "PUBG")).doesNotContainKey("matches");
         } else {
             assertThat(section(profile, "R6")).containsEntry("tierLabel", "Gold");
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Game.class, names = {"RIOT", "PUBG"})
+    void accountReplacementClearsPreviouslyCommittedSummaryAndPreservesOtherGames(Game game) {
+        Fixture fixture = fixture();
+        connect(game, fixture, "original");
+        refresh(game, fixture);
+        connect(Game.R6, fixture, "unrelated");
+        UserProfile before = profile(fixture);
+        assertThat(section(before, game.statsKey())).containsEntry(game.matchesKey(), 10);
+
+        connect(game, fixture, "replacement");
+
+        UserProfile after = profile(fixture);
+        assertThat(section(after, game.name()))
+                .containsEntry("connected", true)
+                .containsEntry(game == Game.RIOT ? "puuid" : "accountId", account(fixture, "replacement"));
+        assertSummaryAbsent(after, game);
+        assertThat(section(after, "R6")).isEqualTo(section(before, "R6"));
+        assertThat(after.getGameConnectionVersion(game.name()))
+                .isEqualTo(before.getGameConnectionVersion(game.name()) + 1);
+
+        String replacementAccount = account(fixture, "replacement");
+        if (game == Game.RIOT) {
+            when(riotApiClient.findLeagueEntriesByPuuid(replacementAccount)).thenReturn(List.of(
+                    new LeagueEntryResponse("replacement-league", "RANKED_SOLO_5x5", "PLATINUM", "II",
+                            replacementAccount, 50, 15, 5)));
+        } else {
+            when(pubgApiClient.getRankedStats(replacementAccount, "season", "squad"))
+                    .thenReturn(new RankedStats(2.5, 20, 15, "Platinum", "II"));
+        }
+        refresh(game, fixture);
+
+        UserProfile refreshed = profile(fixture);
+        assertThat(section(refreshed, game.statsKey()))
+                .containsEntry(game.matchesKey(), 20)
+                .containsEntry("winRate", 75)
+                .containsEntry("tierLabel", game == Game.RIOT ? "PLATINUM II" : "Platinum II");
+        assertThat(section(refreshed, game.name()))
+                .containsEntry(game == Game.RIOT ? "puuid" : "accountId", replacementAccount);
+        assertThat(section(refreshed, "R6")).isEqualTo(section(before, "R6"));
+        assertThat(refreshed.getGameConnectionVersion(game.name()))
+                .isEqualTo(after.getGameConnectionVersion(game.name()));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Game.class, names = {"RIOT", "PUBG"})
+    void failedReplacementSummaryLookupDoesNotRestorePreviousAccountsCache(Game game) {
+        Fixture fixture = fixture();
+        connect(game, fixture, "original");
+        refresh(game, fixture);
+        assertThat(section(profile(fixture), game.statsKey())).containsEntry(game.matchesKey(), 10);
+        connect(game, fixture, "replacement");
+        UserProfile beforeFailure = profile(fixture);
+        ResponseStatusException failure = new ResponseStatusException(HttpStatus.BAD_GATEWAY, "upstream unavailable");
+        if (game == Game.RIOT) {
+            when(riotApiClient.findLeagueEntriesByPuuid(account(fixture, "replacement"))).thenThrow(failure);
+        } else {
+            when(pubgApiClient.getRankedStats(account(fixture, "replacement"), "season", "squad")).thenThrow(failure);
+        }
+
+        assertThatThrownBy(() -> refresh(game, fixture)).isSameAs(failure);
+
+        UserProfile afterFailure = profile(fixture);
+        assertSummaryAbsent(afterFailure, game);
+        assertThat(afterFailure.getGameStats()).isEqualTo(beforeFailure.getGameStats());
+        assertThat(afterFailure.getGameConnectionVersion(game.name()))
+                .isEqualTo(beforeFailure.getGameConnectionVersion(game.name()));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Game.class, names = {"RIOT", "PUBG"})
+    void reconnectingSameAccountPreservesPreviouslyCommittedSummary(Game game) {
+        Fixture fixture = fixture();
+        connect(game, fixture, "original");
+        refresh(game, fixture);
+        UserProfile before = profile(fixture);
+        assertThat(section(before, game.statsKey())).containsEntry(game.matchesKey(), 10);
+
+        connect(game, fixture, "original");
+
+        UserProfile after = profile(fixture);
+        assertThat(after.getGameStats()).isEqualTo(before.getGameStats());
+        assertThat(after.getGameConnectionVersion(game.name()))
+                .isEqualTo(before.getGameConnectionVersion(game.name()) + 1);
+    }
+
+    private void assertSummaryAbsent(UserProfile profile, Game game) {
+        if (game == Game.RIOT) {
+            assertThat(profile.getGameStats()).doesNotContainKey("LOL");
+        } else {
+            assertThat(section(profile, "PUBG"))
+                    .doesNotContainKeys("tierLabel", "kd", "winRate", "matches", "statsMode");
         }
     }
 

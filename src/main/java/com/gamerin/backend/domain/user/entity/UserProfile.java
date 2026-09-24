@@ -204,7 +204,10 @@ public class UserProfile {
     }
 
     public void connectPubg(String playerName, String accountId) {
-        Map<String, Object> pubgStats = new HashMap<>(getPubgStats());
+        String previousAccountId = getPubgAccountId();
+        // Cached statistics belong to the account, not its display name.
+        Map<String, Object> pubgStats = previousAccountId != null && previousAccountId.equals(accountId)
+                ? new HashMap<>(getPubgStats()) : new HashMap<>();
         pubgStats.put(ACCOUNT_ID_KEY, accountId);
         pubgStats.put(PLAYER_NAME_KEY, playerName);
         pubgStats.put(CONNECTED_KEY, true);
@@ -357,12 +360,17 @@ public class UserProfile {
     }
 
     public void connectRiot(String riotId, String puuid) {
+        String previousPuuid = getRiotPuuid();
         Map<String, Object> riotStats = new HashMap<>(getRiotStats());
         riotStats.put(PUUID_KEY, puuid);
         riotStats.put(RIOT_ID_KEY, riotId);
         riotStats.put(CONNECTED_KEY, true);
 
         Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        // An absent owner cannot establish that a legacy cache belongs to this account.
+        if (previousPuuid == null || !previousPuuid.equals(puuid)) {
+            nextGameStats.remove(LOL_KEY);
+        }
         nextGameStats.put(RIOT_KEY, riotStats);
         this.gameStats = nextGameStats;
         advanceGameConnectionVersion(RIOT_KEY);
