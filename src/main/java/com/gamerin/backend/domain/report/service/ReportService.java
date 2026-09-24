@@ -97,19 +97,19 @@ public class ReportService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신고자 유저 정보를 찾을 수 없습니다."));
 
         // 1. 존재하지 않거나 삭제된 대상 신고 검증 및 권한 확인 (404 예외)
-            validateTargetExists(reporter.getId(), request.targetType(), request.targetId());
+        validateTargetExists(reporter.getId(), request.targetType(), request.targetId());
 
-            // 2. 중복 신고 검증 (409 예외)
-            boolean alreadyReported = reportRepository.existsByReporterIdAndTargetTypeAndTargetId(
-                    reporter.getId(),
-                    request.targetType(),
-                    request.targetId());
-            if (alreadyReported) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 해당 콘텐츠/유저에 대해 신고를 접수하셨습니다.");
-            }
+        // 2. 중복 신고 검증 (409 예외)
+        boolean alreadyReported = reportRepository.existsByReporterIdAndTargetTypeAndTargetId(
+                reporter.getId(),
+                request.targetType(),
+                request.targetId());
+        if (alreadyReported) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 해당 콘텐츠/유저에 대해 신고를 접수하셨습니다.");
+        }
 
-            // 3. 신고 접수 시점 스냅샷 생성 (권한 검증된 데이터에서 생성)
-            String targetSnippet = createTargetSnippet(reporter.getId(), request.targetType(), request.targetId());
+        // 3. 신고 접수 시점 스냅샷 생성 (권한 검증된 데이터에서 생성)
+        String targetSnippet = createTargetSnippet(reporter.getId(), request.targetType(), request.targetId());
 
         // 4. 신고 엔티티 생성 및 DB 저장
         Report report = Report.create(
@@ -217,13 +217,18 @@ public class ReportService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "숨김 처리된 콘텐츠만 복구할 수 있습니다.");
         }
 
+        // 4. 실제 게시글/댓글 원본 엔티티 복구를 먼저 수행하고 성공 여부 검증
+        // (Hard-Delete 등으로 원본 콘텐츠가 존재하지 않는 경우 404 차단하여 유령 복구 방지)
+        boolean successfullyRestored = restoreTargetContent(targetType, targetId);
+        if (!successfullyRestored) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "복구 대상 원본 콘텐츠를 찾을 수 없거나 이미 영구 삭제되었습니다.");
+        }
+
+        // 5. 실제 원본 콘텐츠 복구가 성공한 경우에만 카운트 상태를 복구(isHidden=false)로 갱신
         reportCount.restore();
         ReportCount updated = reportCountRepository.save(reportCount);
 
-        // 실제 게시글/댓글 엔티티의 숨김 해제(복구) 반영
-        restoreTargetContent(targetType, targetId);
-
-        // 복구를 집행한 관리자 정보 조회 및 감사 로그(CONTENT_RESTORE) 적재
+        // 6. 복구를 집행한 관리자 정보 조회 및 감사 로그(CONTENT_RESTORE) 적재
         User admin = userRepository.findById(adminId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 유저 정보를 찾을 수 없습니다."));
 
@@ -252,15 +257,16 @@ public class ReportService {
             case USER -> userRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
             case MENTORING -> mentoringApplicationRepository.existsById(targetId);
             // 메시지(DM)는 본인이 참여 중인 대화방의 메시지만 신고 가능 (제3자의 사적 메시지 탈취 방어)
-            case MESSAGE -> directMessageRepository.findActiveByIdAndParticipantUserId(targetId, reporterId).isPresent();
+            case MESSAGE ->
+                directMessageRepository.findActiveByIdAndParticipantUserId(targetId, reporterId).isPresent();
         };
 
         if (!exists) {
-                String message = targetType == ReportTargetType.MESSAGE
-                        ? "신고 대상 메시지이(가) 존재하지 않거나 접근 권한이 없습니다."
-                        : "신고 대상 " + targetType.getDescription() + "이(가) 존재하지 않거나 이미 삭제되었습니다.";
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, message);
-            }
+            String message = targetType == ReportTargetType.MESSAGE
+                    ? "신고 대상 메시지이(가) 존재하지 않거나 접근 권한이 없습니다."
+                    : "신고 대상 " + targetType.getDescription() + "이(가) 존재하지 않거나 이미 삭제되었습니다.";
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, message);
+        }
     }
 
     /**
@@ -357,18 +363,29 @@ public class ReportService {
         return false;
     }
 
-    /**
-     * 실제 대상 콘텐츠 복구 수행 (삭제 상태인 콘텐츠만 안전하게 복원)
+/**
+     * 실제 대상 콘텐츠 복구 수행 (원본 엔티티 존재 확인 및 소프트 삭제 복원)
+     *
+     * @return 원본 콘텐츠가 존재하여 정상 복원되었으면 true, 영구 삭제 등으로 원본이 없으면 false
      */
-    private void restoreTargetContent(ReportTargetType targetType, UUID targetId) {
+    private boolean restoreTargetContent(ReportTargetType targetType, UUID targetId) {
         if (targetType == ReportTargetType.POST) {
-            postRepository.findById(targetId)
-                    .filter(post -> post.getDeletedAt() != null)
-                    .ifPresent(Post::restore);
+            return postRepository.findById(targetId)
+                    .map(post -> {
+                        if (post.getDeletedAt() != null) {
+                            post.restore();
+                        }
+                        return true;
+                    }).orElse(false);
         } else if (targetType == ReportTargetType.COMMENT) {
-            postCommentRepository.findById(targetId)
-                    .filter(comment -> comment.getDeletedAt() != null)
-                    .ifPresent(PostComment::restore);
+            return postCommentRepository.findById(targetId)
+                    .map(comment -> {
+                        if (comment.getDeletedAt() != null) {
+                            comment.restore();
+                        }
+                        return true;
+                    }).orElse(false);
         }
+        return false;
     }
 }

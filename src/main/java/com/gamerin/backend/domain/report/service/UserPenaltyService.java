@@ -192,12 +192,15 @@ public class UserPenaltyService {
         }
 
         for (UserPenalty penalty : expiredPenalties) {
-            penalty.deactivate();
-            userPenaltyRepository.save(penalty);
-
             UUID userId = penalty.getUser().getId();
-            // 대상 유저 락 획득 후 다른 활성 정지 여부 검증 및 상태 복구
+
+            // 1. 잠금 순서 일원화: 수동 해제/신규 제재와 동일하게 User를 먼저 비관적 락으로 잠금 (교착 상태 방지)
             userRepository.findActiveByIdForUpdate(userId).ifPresent(user -> {
+                // 2. User 락을 획득한 상태에서 제재 비활성화 진행
+                penalty.deactivate();
+                userPenaltyRepository.save(penalty);
+
+                // 3. 잔여 활성 정지 제재 여부 확인 후 계정 정상화
                 boolean hasActiveSuspension = userPenaltyRepository.existsActiveSuspensionByUserId(userId);
                 if (!hasActiveSuspension && user.getStatus() == UserStatus.SUSPENDED) {
                     user.activate();

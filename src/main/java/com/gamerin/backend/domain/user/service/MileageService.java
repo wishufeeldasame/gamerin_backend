@@ -38,7 +38,7 @@ public class MileageService {
     public void useMileage(User user, Long amount, TransactionType type, String description, UUID referenceId) {
         MileageWallet wallet = getOrCreateWalletForUpdate(user);
 
-        // 1. 잔액 차감 (기존 MileageWallet의 deduct 로직 활용)
+        // 1. 잔액 차감
         wallet.deduct(amount);
 
         // 2. 트랜잭션 로그 기록
@@ -59,7 +59,8 @@ public class MileageService {
         saveTransaction(user, amount, wallet.getBalance(), type, description, referenceId);
     }
 
-    private void saveTransaction(User user, Long amount, Long balanceAfter, TransactionType type, String description, UUID referenceId) {
+    private void saveTransaction(User user, Long amount, Long balanceAfter,
+                                 TransactionType type, String description, UUID referenceId) {
         MileageTransaction transaction = MileageTransaction.builder()
                 .user(user)
                 .amount(amount)
@@ -73,13 +74,19 @@ public class MileageService {
 
     /**
      * 비관적 쓰기 락(SELECT FOR UPDATE)을 걸고 지갑 조회 (잔액 변경용)
+     * - 지갑 미존재 시 동시 생성 충돌(PK Unique Violation)을 방지하기 위해 User 락을 활용한 Double-Checked Locking 적용
      */
     public MileageWallet getOrCreateWalletForUpdate(User user) {
         return walletRepository.findByUserIdForUpdate(user.getId())
                 .orElseGet(() -> {
-                    getOrCreateWallet(user);
+                    // 지갑이 없을 때만 User 행 락을 획득하여 동시 생성 직렬화
+                    userRepository.findActiveByIdForUpdate(user.getId());
                     return walletRepository.findByUserIdForUpdate(user.getId())
-                            .orElseThrow(() -> new IllegalStateException("지갑을 찾을 수 없습니다."));
+                            .orElseGet(() -> {
+                                createInitialWallet(user);
+                                return walletRepository.findByUserIdForUpdate(user.getId())
+                                        .orElseThrow(() -> new IllegalStateException("지갑을 찾을 수 없습니다."));
+                            });
                 });
     }
 
@@ -89,23 +96,25 @@ public class MileageService {
     public MileageWallet getOrCreateWallet(User user) {
         return walletRepository.findById(user.getId())
                 .orElseGet(() -> {
-                    MileageWallet newWallet = new MileageWallet();
-
-                    User managedUser = userRepository.findById(user.getId())
-                            .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
-
-                    newWallet.setUser(managedUser);
-                    newWallet.setBalance(0L);
-
-                    return walletRepository.save(newWallet);
+                    userRepository.findActiveByIdForUpdate(user.getId());
+                    return walletRepository.findById(user.getId())
+                            .orElseGet(() -> createInitialWallet(user));
                 });
+    }
+
+    private MileageWallet createInitialWallet(User user) {
+        MileageWallet newWallet = new MileageWallet();
+        User managedUser = userRepository.findById(user.getId())
+                .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+        newWallet.setUser(managedUser);
+        newWallet.setBalance(0L);
+        return walletRepository.saveAndFlush(newWallet);
     }
 
     // 잔액만 조회 (락 없이 빠른 읽기)
     @Transactional(readOnly = true)
     public MyMileageResponse getMyBalance(User user) {
         MileageWallet wallet = getOrCreateWallet(user);
-
         return new MyMileageResponse(wallet.getBalance());
     }
 
@@ -120,7 +129,7 @@ public class MileageService {
     @Transactional
     public MyMileageResponse chargeMileage(User user, Long amount) {
         if (amount <= 0) {
-            throw new RuntimeException("충전 금액은 0원보다 커야 합니다.");
+            throw new IllegalArgumentException("충전 금액은 0원보다 커야 합니다.");
         }
 
         // 마일리지 추가 및 트랜잭션 기록

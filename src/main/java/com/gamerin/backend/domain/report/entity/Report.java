@@ -1,9 +1,7 @@
 package com.gamerin.backend.domain.report.entity;
 
 import java.time.OffsetDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
 
 import com.gamerin.backend.domain.user.entity.User;
 import jakarta.persistence.Column;
@@ -19,6 +17,8 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 
 @Entity
 @Table(name = "reports")
@@ -28,8 +28,17 @@ public class Report {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    // DB 방언(PostgreSQL/H2) 시퀀스 종속성을 제거하고 유니크 보장
-    @Column(name = "report_code", nullable = false, updatable = false, length = 30, unique = true)
+    // DB 시퀀스 자동 생성 (RPT-1001, RPT-1002...), 읽기 전용
+    // 마이그레이션(V24)과 일치하도록 DB 시퀀스 기반으로 단일화하여 난수 충돌 가능성 원천 차단
+    @Column(
+            name = "report_code",
+            nullable = false,
+            insertable = false,
+            updatable = false,
+            length = 30,
+            columnDefinition = "VARCHAR(30) DEFAULT ('RPT-' || lpad(cast(nextval('report_code_seq') as varchar), 4, '0'))"
+    )
+    @Generated(event = EventType.INSERT)
     private String reportCode;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
@@ -95,12 +104,6 @@ public class Report {
         OffsetDateTime now = OffsetDateTime.now();
         this.createdAt = now;
         this.updatedAt = now;
-        // 설정 파일이나 DB 시퀀스 없이도 항상 고유 신고 코드(예: RPT-260925-1049) 자동 발급
-        if (this.reportCode == null) {
-            String datePrefix = now.format(DateTimeFormatter.ofPattern("yyMMdd"));
-            int randomSuffix = ThreadLocalRandom.current().nextInt(1000, 10000);
-            this.reportCode = "RPT-" + datePrefix + "-" + randomSuffix;
-        }
     }
 
     @PreUpdate

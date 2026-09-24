@@ -1,5 +1,10 @@
 package com.gamerin.backend.domain.report.service;
 
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
 import com.gamerin.backend.domain.admin.repository.AdminAuditLogRepository;
 import com.gamerin.backend.domain.auth.repository.RefreshTokenRepository;
 import com.gamerin.backend.domain.report.dto.request.UserPenaltyCreateRequest;
@@ -20,11 +25,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
-
-import java.time.OffsetDateTime;
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -78,7 +78,8 @@ class UserPenaltyServiceTest {
         );
 
         given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
-        given(userRepository.findById(targetUserId)).willReturn(Optional.of(targetUser));
+        // 실제 서비스가 호출하는 비관적 락 메서드(findActiveByIdForUpdate)로 스텁 수정
+        given(userRepository.findActiveByIdForUpdate(targetUserId)).willReturn(Optional.of(targetUser));
         given(userPenaltyRepository.save(any(UserPenalty.class))).willAnswer(invocation -> {
             UserPenalty p = invocation.getArgument(0);
             ReflectionTestUtils.setField(p, "id", UUID.randomUUID());
@@ -124,7 +125,9 @@ class UserPenaltyServiceTest {
         targetUser.suspend();
 
         given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
-        given(userPenaltyRepository.findById(penaltyId)).willReturn(Optional.of(penalty));
+        // 잠금 순서 일원화에 따른 실제 호출 메서드들로 스텁 수정
+        given(userRepository.findActiveByIdForUpdate(targetUserId)).willReturn(Optional.of(targetUser));
+        given(userPenaltyRepository.findByIdForUpdate(penaltyId)).willReturn(Optional.of(penalty));
         given(userPenaltyRepository.save(any(UserPenalty.class))).willReturn(penalty);
         given(userPenaltyRepository.existsActiveSuspensionByUserId(targetUserId)).willReturn(false);
 
@@ -149,6 +152,9 @@ class UserPenaltyServiceTest {
 
         given(userPenaltyRepository.findExpiredPenalties(any(OffsetDateTime.class)))
                 .willReturn(List.of(expiredPenalty));
+        // 스케줄러에서 유저 락 획득 후 계정 복구하므로 스텁 추가
+        given(userRepository.findActiveByIdForUpdate(targetUserId))
+                .willReturn(Optional.of(targetUser));
         given(userPenaltyRepository.existsActiveSuspensionByUserId(targetUserId))
                 .willReturn(false);
 
