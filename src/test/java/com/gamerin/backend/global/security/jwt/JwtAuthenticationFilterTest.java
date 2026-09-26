@@ -18,10 +18,9 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
-
-import java.time.OffsetDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.never;
@@ -122,22 +121,8 @@ class JwtAuthenticationFilterTest {
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
 
-    private CustomUserPrincipal principal(UUID userId, String handle, String nickname) {
-        User user = User.createLocal("user@example.com", handle, nickname, "encoded-password");
-        ReflectionTestUtils.setField(user, "id", userId);
-        return CustomUserPrincipal.from(user);
-    }
-
-    private CustomUserPrincipal principalWithStatus(UUID userId, String handle, String nickname, UserStatus status, OffsetDateTime deletedAt) {
-        User user = User.createLocal("user@example.com", handle, nickname, "encoded-password");
-        ReflectionTestUtils.setField(user, "id", userId);
-        ReflectionTestUtils.setField(user, "status", status);
-        ReflectionTestUtils.setField(user, "deletedAt", deletedAt);
-        return CustomUserPrincipal.from(user);
-    }
-
     @Test
-    void rejectsAuthenticationWhenUserIsSuspended() throws Exception {
+    void passesSuspendedUserToDownstreamSuspensionFilter() throws Exception {
         UUID userId = UUID.randomUUID();
         CustomUserPrincipal suspendedPrincipal = principalWithStatus(
                 userId, "suspended_user", "Suspended", UserStatus.SUSPENDED, null);
@@ -150,8 +135,9 @@ class JwtAuthenticationFilterTest {
 
         jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
 
-        // 필터를 거친 후 SecurityContext에 인증 정보가 없어야 함(인증 거부)
-        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        // 다음 필터인 UserSuspensionFilter가 403 차단할 수 있도록 Authentication이 정상 전달되어야 함
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
+        assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal()).isEqualTo(suspendedPrincipal);
     }
 
     @Test
@@ -189,17 +175,32 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
-    void rejectsSseStreamAuthenticationWhenUserIsNotActive() throws Exception {
+    void rejectsSseStreamAuthenticationWhenUserIsDeleted() throws Exception {
         UUID userId = UUID.randomUUID();
-        CustomUserPrincipal suspendedPrincipal = principalWithStatus(
-                userId, "suspended_user", "Suspended", UserStatus.SUSPENDED, null);
+        CustomUserPrincipal deletedPrincipal = principalWithStatus(
+                userId, "deleted_user", "Deleted", UserStatus.DELETED, null);
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/messages/stream");
 
         when(sseStreamTokenService.resolve(request)).thenReturn(Optional.of(userId));
-        when(customUserDetailsService.loadById(userId)).thenReturn(suspendedPrincipal);
+        when(customUserDetailsService.loadById(userId)).thenReturn(deletedPrincipal);
 
         jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
 
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    private CustomUserPrincipal principal(UUID userId, String handle, String nickname) {
+        User user = User.createLocal("user@example.com", handle, nickname, "encoded-password");
+        ReflectionTestUtils.setField(user, "id", userId);
+        return CustomUserPrincipal.from(user);
+    }
+
+    private CustomUserPrincipal principalWithStatus(UUID userId, String handle, String nickname, UserStatus status,
+            OffsetDateTime deletedAt) {
+        User user = User.createLocal("user@example.com", handle, nickname, "encoded-password");
+        ReflectionTestUtils.setField(user, "id", userId);
+        ReflectionTestUtils.setField(user, "status", status);
+        ReflectionTestUtils.setField(user, "deletedAt", deletedAt);
+        return CustomUserPrincipal.from(user);
     }
 }

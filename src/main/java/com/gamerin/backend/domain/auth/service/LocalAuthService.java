@@ -146,6 +146,12 @@ public class LocalAuthService {
         return tokenService.issueTokens(user);
     }
 
+    /**
+     * 리프레시 토큰으로 Access Token / Refresh Token 재발급
+     * - noRollbackFor: 401(ResponseStatusException)이 발생하더라도 롤백하지 않고
+     * 비활성/만료 계정의 리프레시 토큰 폐기(revoke) 상태를 DB에 정상 커밋(영속화)합니다.
+     */
+    @Transactional(noRollbackFor = ResponseStatusException.class)
     public TokenService.AuthResult refresh(String rawRefreshToken) {
         if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "리프레시 토큰이 없습니다.");
@@ -157,6 +163,7 @@ public class LocalAuthService {
 
         if (savedToken.isExpired() || savedToken.isRevoked()) {
             savedToken.revoke();
+            refreshTokenRepository.saveAndFlush(savedToken); // DB에 폐기 상태 즉시 반영
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "만료된 리프레시 토큰입니다.");
         }
 
@@ -167,10 +174,12 @@ public class LocalAuthService {
         // 차단
         if (user.getStatus() != UserStatus.ACTIVE || user.getDeletedAt() != null) {
             savedToken.revoke(); // 보안 정책: 비활성 계정의 리프레시 토큰은 즉시 폐기
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "활성 상태의 계정이 아닙니다.");
+            refreshTokenRepository.saveAndFlush(savedToken); // 예외가 던져져도 롤백되지 않고 DB에 폐기 상태 영속화
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "사용자 계정이 활성 상태가 아닙니다.");
         }
 
         savedToken.revoke();
+        refreshTokenRepository.saveAndFlush(savedToken);
         return tokenService.issueTokens(user);
     }
 
