@@ -17,6 +17,7 @@ import org.springframework.http.ResponseCookie;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -105,6 +106,7 @@ public class AuthController {
         return ApiResponse.ok(null);
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @GetMapping("/me")
     public ApiResponse<MeResponse> me(@AuthenticationPrincipal CustomUserPrincipal principal) {
         return ApiResponse.ok(localAuthService.getMe(principal));

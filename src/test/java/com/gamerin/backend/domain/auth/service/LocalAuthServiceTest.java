@@ -439,4 +439,89 @@ class LocalAuthServiceTest {
                 1209600L
         );
     }
+
+    @Test
+void refreshRejectsSuspendedUserAndRevokesToken() {
+    UUID userId = UUID.randomUUID();
+    User user = savedUser(userId, "tester@example.com", "tester", "Tester", "encoded-password");
+    ReflectionTestUtils.setField(user, "status", UserStatus.SUSPENDED);
+
+    RefreshToken refreshToken = RefreshToken.issue(
+            userId,
+            "hashed-refresh-token",
+            OffsetDateTime.now().plusDays(1),
+            null,
+            null
+    );
+
+    when(tokenService.sha256("raw-refresh-token")).thenReturn("hashed-refresh-token");
+    when(refreshTokenRepository.findByTokenHashAndRevokedAtIsNull("hashed-refresh-token"))
+            .thenReturn(Optional.of(refreshToken));
+    when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+
+    assertThatThrownBy(() -> localAuthService.refresh("raw-refresh-token"))
+            .isInstanceOf(ResponseStatusException.class)
+            .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+            .isEqualTo(HttpStatus.UNAUTHORIZED.value());
+
+    // 비활성 사용자의 재발급 시도 시 리프레시 토큰이 폐기되었는지 검증
+    assertThat(refreshToken.isRevoked()).isTrue();
+    verify(tokenService, never()).issueTokens(any(User.class));
+}
+
+@Test
+void refreshRejectsDeletedUserAndRevokesToken() {
+    UUID userId = UUID.randomUUID();
+    User user = savedUser(userId, "tester@example.com", "tester", "Tester", "encoded-password");
+    ReflectionTestUtils.setField(user, "status", UserStatus.DELETED);
+
+    RefreshToken refreshToken = RefreshToken.issue(
+            userId,
+            "hashed-refresh-token",
+            OffsetDateTime.now().plusDays(1),
+            null,
+            null
+    );
+
+    when(tokenService.sha256("raw-refresh-token")).thenReturn("hashed-refresh-token");
+    when(refreshTokenRepository.findByTokenHashAndRevokedAtIsNull("hashed-refresh-token"))
+            .thenReturn(Optional.of(refreshToken));
+    when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+
+    assertThatThrownBy(() -> localAuthService.refresh("raw-refresh-token"))
+            .isInstanceOf(ResponseStatusException.class)
+            .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+            .isEqualTo(HttpStatus.UNAUTHORIZED.value());
+
+    assertThat(refreshToken.isRevoked()).isTrue();
+    verify(tokenService, never()).issueTokens(any(User.class));
+}
+
+@Test
+void refreshRejectsWithdrawnUserAndRevokesToken() {
+    UUID userId = UUID.randomUUID();
+    User user = savedUser(userId, "tester@example.com", "tester", "Tester", "encoded-password");
+    ReflectionTestUtils.setField(user, "deletedAt", OffsetDateTime.now());
+
+    RefreshToken refreshToken = RefreshToken.issue(
+            userId,
+            "hashed-refresh-token",
+            OffsetDateTime.now().plusDays(1),
+            null,
+            null
+    );
+
+    when(tokenService.sha256("raw-refresh-token")).thenReturn("hashed-refresh-token");
+    when(refreshTokenRepository.findByTokenHashAndRevokedAtIsNull("hashed-refresh-token"))
+            .thenReturn(Optional.of(refreshToken));
+    when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+
+    assertThatThrownBy(() -> localAuthService.refresh("raw-refresh-token"))
+            .isInstanceOf(ResponseStatusException.class)
+            .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+            .isEqualTo(HttpStatus.UNAUTHORIZED.value());
+
+    assertThat(refreshToken.isRevoked()).isTrue();
+    verify(tokenService, never()).issueTokens(any(User.class));
+}
 }

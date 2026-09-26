@@ -18,8 +18,9 @@ public interface MileageWalletRepository extends JpaRepository<MileageWallet, UU
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select w from MileageWallet w where w.userId = :userId")
     Optional<MileageWallet> findByUserIdForUpdate(@Param("userId") UUID userId);
-}
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select wallet from MileageWallet wallet where wallet.userId = :userId")
     java.util.Optional<MileageWallet> findByIdForUpdate(@Param("userId") UUID userId);
 }
+

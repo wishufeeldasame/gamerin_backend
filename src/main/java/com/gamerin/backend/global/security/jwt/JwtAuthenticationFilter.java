@@ -1,6 +1,7 @@
 package com.gamerin.backend.global.security.jwt;
 
 import com.gamerin.backend.domain.user.service.CustomUserDetailsService;
+import com.gamerin.backend.domain.user.entity.UserStatus;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -53,18 +54,25 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     }
 
     private void authenticate(HttpServletRequest request, UUID userId) {
-        try {
-            CustomUserPrincipal principal = customUserDetailsService.loadById(userId);
-            UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                    principal,
-                    null,
-                    principal.getAuthorities()
-            );
-            authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-            SecurityContextHolder.getContext().setAuthentication(authentication);
-        } catch (UsernameNotFoundException ignored) {
-            // DB에서 더 이상 유효하지 않은 사용자면 익명 상태로 처리한다.
+    try {
+        CustomUserPrincipal principal = customUserDetailsService.loadById(userId);
+
+        // 계정 상태가 ACTIVE가 아니거나 비활성화/잠김(정지, 탈퇴 등)된 경우 인증 부여를 차단하고 컨텍스트를 비움
+        if (principal == null || !principal.isEnabled() || principal.getStatus() != UserStatus.ACTIVE) {
             SecurityContextHolder.clearContext();
+            return;
         }
+
+        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                principal,
+                null,
+                principal.getAuthorities()
+        );
+        authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+    } catch (UsernameNotFoundException ignored) {
+        // DB에서 더 이상 유효하지 않거나 비활성화된 사용자면 익명 상태(인증 해제)로 처리한다.
+        SecurityContextHolder.clearContext();
     }
+}
 }

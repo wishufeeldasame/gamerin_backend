@@ -1,6 +1,7 @@
 package com.gamerin.backend.global.security.jwt;
 
 import com.gamerin.backend.domain.user.entity.User;
+import com.gamerin.backend.domain.user.entity.UserStatus;
 import com.gamerin.backend.domain.user.service.CustomUserDetailsService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.junit.jupiter.api.AfterEach;
@@ -19,6 +20,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Optional;
 import java.util.UUID;
+
+import java.time.OffsetDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.never;
@@ -45,8 +48,7 @@ class JwtAuthenticationFilterTest {
         jwtAuthenticationFilter = new JwtAuthenticationFilter(
                 jwtTokenProvider,
                 customUserDetailsService,
-                sseStreamTokenService
-        );
+                sseStreamTokenService);
     }
 
     @AfterEach
@@ -67,7 +69,8 @@ class JwtAuthenticationFilterTest {
 
         jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
 
-        assertThat(SecurityContextHolder.getContext().getAuthentication()).isInstanceOf(UsernamePasswordAuthenticationToken.class);
+        assertThat(SecurityContextHolder.getContext().getAuthentication())
+                .isInstanceOf(UsernamePasswordAuthenticationToken.class);
         assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal()).isEqualTo(principal);
     }
 
@@ -82,7 +85,8 @@ class JwtAuthenticationFilterTest {
 
         jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
 
-        assertThat(SecurityContextHolder.getContext().getAuthentication()).isInstanceOf(UsernamePasswordAuthenticationToken.class);
+        assertThat(SecurityContextHolder.getContext().getAuthentication())
+                .isInstanceOf(UsernamePasswordAuthenticationToken.class);
         assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal()).isEqualTo(principal);
         verifyNoInteractions(jwtTokenProvider);
     }
@@ -106,8 +110,7 @@ class JwtAuthenticationFilterTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("Authorization", "Bearer stale-token");
         SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken("stale-user", null)
-        );
+                new UsernamePasswordAuthenticationToken("stale-user", null));
 
         when(jwtTokenProvider.validate("stale-token")).thenReturn(true);
         when(jwtTokenProvider.getUserId("stale-token")).thenReturn(userId);
@@ -123,5 +126,80 @@ class JwtAuthenticationFilterTest {
         User user = User.createLocal("user@example.com", handle, nickname, "encoded-password");
         ReflectionTestUtils.setField(user, "id", userId);
         return CustomUserPrincipal.from(user);
+    }
+
+    private CustomUserPrincipal principalWithStatus(UUID userId, String handle, String nickname, UserStatus status, OffsetDateTime deletedAt) {
+        User user = User.createLocal("user@example.com", handle, nickname, "encoded-password");
+        ReflectionTestUtils.setField(user, "id", userId);
+        ReflectionTestUtils.setField(user, "status", status);
+        ReflectionTestUtils.setField(user, "deletedAt", deletedAt);
+        return CustomUserPrincipal.from(user);
+    }
+
+    @Test
+    void rejectsAuthenticationWhenUserIsSuspended() throws Exception {
+        UUID userId = UUID.randomUUID();
+        CustomUserPrincipal suspendedPrincipal = principalWithStatus(
+                userId, "suspended_user", "Suspended", UserStatus.SUSPENDED, null);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("Authorization", "Bearer valid-token");
+
+        when(jwtTokenProvider.validate("valid-token")).thenReturn(true);
+        when(jwtTokenProvider.getUserId("valid-token")).thenReturn(userId);
+        when(customUserDetailsService.loadById(userId)).thenReturn(suspendedPrincipal);
+
+        jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+
+        // 필터를 거친 후 SecurityContext에 인증 정보가 없어야 함(인증 거부)
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    void rejectsAuthenticationWhenUserIsDeleted() throws Exception {
+        UUID userId = UUID.randomUUID();
+        CustomUserPrincipal deletedPrincipal = principalWithStatus(
+                userId, "deleted_user", "Deleted", UserStatus.DELETED, null);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("Authorization", "Bearer valid-token");
+
+        when(jwtTokenProvider.validate("valid-token")).thenReturn(true);
+        when(jwtTokenProvider.getUserId("valid-token")).thenReturn(userId);
+        when(customUserDetailsService.loadById(userId)).thenReturn(deletedPrincipal);
+
+        jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    void rejectsAuthenticationWhenUserIsWithdrawn() throws Exception {
+        UUID userId = UUID.randomUUID();
+        CustomUserPrincipal withdrawnPrincipal = principalWithStatus(
+                userId, "withdrawn_user", "Withdrawn", UserStatus.ACTIVE, OffsetDateTime.now());
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("Authorization", "Bearer valid-token");
+
+        when(jwtTokenProvider.validate("valid-token")).thenReturn(true);
+        when(jwtTokenProvider.getUserId("valid-token")).thenReturn(userId);
+        when(customUserDetailsService.loadById(userId)).thenReturn(withdrawnPrincipal);
+
+        jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    void rejectsSseStreamAuthenticationWhenUserIsNotActive() throws Exception {
+        UUID userId = UUID.randomUUID();
+        CustomUserPrincipal suspendedPrincipal = principalWithStatus(
+                userId, "suspended_user", "Suspended", UserStatus.SUSPENDED, null);
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/messages/stream");
+
+        when(sseStreamTokenService.resolve(request)).thenReturn(Optional.of(userId));
+        when(customUserDetailsService.loadById(userId)).thenReturn(suspendedPrincipal);
+
+        jwtAuthenticationFilter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
 }
