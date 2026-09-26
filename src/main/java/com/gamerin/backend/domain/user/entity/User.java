@@ -139,7 +139,7 @@ public class User {
     }
 
     public boolean isActive() {
-        return this.status == UserStatus.ACTIVE;
+        return this.status == UserStatus.ACTIVE && this.deletedAt == null;
     }
 
     public void changePassword(String passwordHash) {

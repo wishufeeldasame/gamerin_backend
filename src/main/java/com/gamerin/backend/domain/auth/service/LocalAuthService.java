@@ -49,8 +49,7 @@ public class LocalAuthService {
             PasswordEncoder passwordEncoder,
             TokenService tokenService,
             PasswordResetMailService passwordResetMailService,
-            @Value("${app.auth.password-reset.expiration-minutes:30}") long passwordResetExpirationMinutes
-    ) {
+            @Value("${app.auth.password-reset.expiration-minutes:30}") long passwordResetExpirationMinutes) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.passwordResetTokenRepository = passwordResetTokenRepository;
@@ -110,8 +109,7 @@ public class LocalAuthService {
 
         SocialAccount socialAccount = SocialAccount.create(
                 savedUser.getId(), session.getProvider(), session.getProviderUserId(),
-                session.getProviderEmail(), session.getProviderDisplayName()
-        );
+                session.getProviderEmail(), session.getProviderDisplayName());
         socialAccountRepository.save(socialAccount);
         socialSignupSessionRepository.delete(session);
 
@@ -120,25 +118,25 @@ public class LocalAuthService {
 
     public TokenService.AuthResult login(LoginRequest request) {
         String handle = normalizeHandle(request.handle());
-        
+
         loginFailureTracker.checkLockout(handle);
 
         User user = userRepository.findByHandle(handle)
                 .orElseThrow(() -> {
                     loginFailureTracker.recordFailure(handle);
                     int remaining = loginFailureTracker.getRemainingAttempts(handle);
-                    return new ResponseStatusException(HttpStatus.UNAUTHORIZED, 
+                    return new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                             "아이디 또는 비밀번호가 올바르지 않습니다. (5회 연속 실패 시 잠금, 남은 횟수: " + remaining + "회)");
                 });
 
-        if (user.getStatus() != UserStatus.ACTIVE) {
+        if (user.getStatus() != UserStatus.ACTIVE || user.getDeletedAt() != null) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "활성 상태 계정이 아닙니다.");
         }
 
         if (user.getPasswordHash() == null || !passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             loginFailureTracker.recordFailure(handle);
             int remaining = loginFailureTracker.getRemainingAttempts(handle);
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, 
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                     "아이디 또는 비밀번호가 올바르지 않습니다. (5회 연속 실패 시 잠금, 남은 횟수: " + remaining + "회)");
         }
 
@@ -148,6 +146,12 @@ public class LocalAuthService {
         return tokenService.issueTokens(user);
     }
 
+    /**
+     * 리프레시 토큰으로 Access Token / Refresh Token 재발급
+     * - noRollbackFor: 401(ResponseStatusException)이 발생하더라도 롤백하지 않고
+     * 비활성/만료 계정의 리프레시 토큰 폐기(revoke) 상태를 DB에 정상 커밋(영속화)합니다.
+     */
+    @Transactional(noRollbackFor = ResponseStatusException.class)
     public TokenService.AuthResult refresh(String rawRefreshToken) {
         if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "리프레시 토큰이 없습니다.");
@@ -159,18 +163,29 @@ public class LocalAuthService {
 
         if (savedToken.isExpired() || savedToken.isRevoked()) {
             savedToken.revoke();
+            refreshTokenRepository.saveAndFlush(savedToken); // DB에 폐기 상태 즉시 반영
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "만료된 리프레시 토큰입니다.");
         }
 
         User user = userRepository.findById(savedToken.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "사용자를 찾을 수 없습니다."));
 
+        // status != ACTIVE (SUSPENDED, DELETED 등)이거나 탈퇴(deletedAt != null) 계정인 경우 재발급
+        // 차단
+        if (user.getStatus() != UserStatus.ACTIVE || user.getDeletedAt() != null) {
+            savedToken.revoke(); // 보안 정책: 비활성 계정의 리프레시 토큰은 즉시 폐기
+            refreshTokenRepository.saveAndFlush(savedToken); // 예외가 던져져도 롤백되지 않고 DB에 폐기 상태 영속화
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "사용자 계정이 활성 상태가 아닙니다.");
+        }
+
         savedToken.revoke();
+        refreshTokenRepository.saveAndFlush(savedToken);
         return tokenService.issueTokens(user);
     }
 
     public void logout(String rawRefreshToken) {
-        if (rawRefreshToken == null || rawRefreshToken.isBlank()) return;
+        if (rawRefreshToken == null || rawRefreshToken.isBlank())
+            return;
         String tokenHash = tokenService.sha256(rawRefreshToken);
         refreshTokenRepository.findByTokenHashAndRevokedAtIsNull(tokenHash)
                 .ifPresent(RefreshToken::revoke);
@@ -216,8 +231,7 @@ public class LocalAuthService {
         return new MeResponse(
                 principal.getUserId(), principal.getUsername(), principal.getNickname(),
                 principal.getAuthorities().stream().findFirst().map(Object::toString).orElse("ROLE_USER"),
-                "ACTIVE"
-        );
+                "ACTIVE");
     }
 
     private void validatePasswordConfirmation(String password, String passwordConfirm) {
@@ -252,8 +266,7 @@ public class LocalAuthService {
         PasswordResetToken passwordResetToken = PasswordResetToken.issue(
                 user.getId(),
                 tokenService.sha256(rawResetToken),
-                OffsetDateTime.now().plusMinutes(passwordResetExpirationMinutes)
-        );
+                OffsetDateTime.now().plusMinutes(passwordResetExpirationMinutes));
 
         passwordResetTokenRepository.save(passwordResetToken);
         passwordResetMailService.sendPasswordResetMail(email, rawResetToken);
@@ -270,7 +283,8 @@ public class LocalAuthService {
     }
 
     private String maskHandle(String handle) {
-        if (handle == null || handle.length() <= 3) return handle;
+        if (handle == null || handle.length() <= 3)
+            return handle;
         return handle.substring(0, 3) + "*".repeat(handle.length() - 3);
     }
 
@@ -288,18 +302,17 @@ public class LocalAuthService {
             }
         }
 
-        private final java.util.concurrent.ConcurrentHashMap<String, FailureInfo> failureMap = 
-                new java.util.concurrent.ConcurrentHashMap<>();
+        private final java.util.concurrent.ConcurrentHashMap<String, FailureInfo> failureMap = new java.util.concurrent.ConcurrentHashMap<>();
 
         public void checkLockout(String handle) {
             FailureInfo info = failureMap.get(handle);
             if (info != null && info.lockoutUntil != null) {
                 if (info.lockoutUntil.isAfter(java.time.Instant.now())) {
-                    long minutesLeft = java.time.Duration.between(java.time.Instant.now(), info.lockoutUntil).toMinutes() + 1;
+                    long minutesLeft = java.time.Duration.between(java.time.Instant.now(), info.lockoutUntil)
+                            .toMinutes() + 1;
                     throw new org.springframework.web.server.ResponseStatusException(
                             org.springframework.http.HttpStatus.FORBIDDEN,
-                            "반복된 로그인 실패로 계정이 임시 잠금되었습니다. " + minutesLeft + "분 후 다시 시도해 주세요."
-                    );
+                            "반복된 로그인 실패로 계정이 임시 잠금되었습니다. " + minutesLeft + "분 후 다시 시도해 주세요.");
                 } else {
                     failureMap.remove(handle);
                 }
