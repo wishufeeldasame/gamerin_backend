@@ -3,6 +3,9 @@ package com.gamerin.backend.domain.user.entity;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -33,14 +36,18 @@ class MileageWalletTest {
     }
 
     @Test
-    @DisplayName("잔액보다 큰 금액으로 deduct를 호출하면 RuntimeException이 발생한다")
+    @DisplayName("잔액보다 큰 금액으로 deduct를 호출하면 ResponseStatusException(400)이 발생한다")
     void deductThrowsWhenInsufficientBalance() {
         MileageWallet wallet = new MileageWallet();
         wallet.setBalance(500L);
 
         assertThatThrownBy(() -> wallet.deduct(1000L))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("마일리지가 부족합니다");
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(error -> {
+                    ResponseStatusException ex = (ResponseStatusException) error;
+                    assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.BAD_REQUEST.value());
+                    assertThat(ex.getReason()).contains("마일리지가 부족합니다");
+                });
     }
 
     @Test

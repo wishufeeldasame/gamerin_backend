@@ -14,10 +14,13 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+
 @Entity
 @Table(name = "mileage_wallets")
 public class MileageWallet {
-    
+
     @Id
     @Column(name = "user_id")
     private UUID userId;
@@ -48,12 +51,25 @@ public class MileageWallet {
         this.updatedAt = OffsetDateTime.now();
     }
 
-    public UUID getUserId() { return userId; }
-    public Long getBalance() { return balance; }
-    public void setBalance(Long balance) { this.balance = balance; }
-    
-    public User getUser() { return user; }
-    public void setUser(User user) { this.user = user; }
+    public UUID getUserId() {
+        return userId;
+    }
+
+    public Long getBalance() {
+        return balance;
+    }
+
+    public void setBalance(Long balance) {
+        this.balance = balance;
+    }
+
+    public User getUser() {
+        return user;
+    }
+
+    public void setUser(User user) {
+        this.user = user;
+    }
 
     // 마일리지 차감 로직 (도메인 모델 내에 비즈니스 로직 포함)
     public void deduct(Long amount) {
@@ -61,7 +77,10 @@ public class MileageWallet {
             throw new IllegalArgumentException("차감할 마일리지는 0 이상이어야 합니다.");
         }
         if (this.balance < amount) {
-            throw new RuntimeException("마일리지가 부족합니다. (현재 잔액: " + this.balance + ")");
+            // 잔액 부족 시 400 Bad Request 매핑
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "마일리지가 부족합니다. (현재 잔액: " + this.balance + ")");
         }
         this.balance -= amount;
     }
@@ -73,7 +92,5 @@ public class MileageWallet {
         }
         this.balance += amount;
     }
-    
-
 
 }
