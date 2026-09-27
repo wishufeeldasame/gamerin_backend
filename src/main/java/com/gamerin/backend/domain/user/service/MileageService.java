@@ -33,12 +33,18 @@ public class MileageService {
 
     /**
      * 마일리지 차감 (비관적 락을 적용하여 잔액 동시 차감 시 Race Condition 방지)
+     * - 0원(무료 프로그램 등) 결제: 차감액 0으로 정상 통과하며 잔액 변동 없이 0원 사용 이력(원장)을 기록합니다.
+     * - 음수 금액: 유효하지 않은 요청이므로 IllegalArgumentException을 발생시킵니다.
      */
     @Transactional
     public void useMileage(User user, Long amount, TransactionType type, String description, UUID referenceId) {
+        if (amount == null || amount < 0) {
+            throw new IllegalArgumentException("사용할 마일리지는 0 이상이어야 합니다.");
+        }
+
         MileageWallet wallet = getOrCreateWalletForUpdate(user);
 
-        // 1. 잔액 차감
+        // 1. 잔액 차감 (amount가 0이면 잔액 변동 없음)
         wallet.deduct(amount);
 
         // 2. 트랜잭션 로그 기록
@@ -47,9 +53,15 @@ public class MileageService {
 
     /**
      * 마일리지 지급/정산/환불 (비관적 락을 적용하여 동시 정산 시 덮어쓰기/잔액 유실 방지)
+     * - 0원 처리: 잔액 변동 없이 0원 트랜잭션 원장을 기록합니다.
+     * - 음수 금액: 유효하지 않은 요청이므로 IllegalArgumentException을 발생시킵니다.
      */
     @Transactional
     public void addMileage(User user, Long amount, TransactionType type, String description, UUID referenceId) {
+        if (amount == null || amount < 0) {
+            throw new IllegalArgumentException("추가할 마일리지는 0 이상이어야 합니다.");
+        }
+
         MileageWallet wallet = getOrCreateWalletForUpdate(user);
 
         // 1. 잔액 추가

@@ -129,6 +129,10 @@ public class MentoringService {
     @Transactional
     public MentoringProgramResponse registerProgram(CustomUserPrincipal principal, MentoringProgramRequest request) {
         
+        if (request.price() == null || request.price() < 0) {
+            throw new IllegalArgumentException("가격은 0원 이상이어야 합니다.");
+        }
+
         // 현재 사용자의 멘토 프로필 조회 (멘토 등록 여부 확인)
         MentorProfile mentor = mentorProfileRepository.findById(principal.getUserId())
                 .orElseThrow(() -> new RuntimeException("멘토로 등록되지 않은 사용자입니다."));
@@ -174,6 +178,11 @@ public class MentoringService {
         // 권한 확인 (프로그램의 멘토 ID와 현재 접속 유저 ID 비교)
         if (!program.getMentor().getId().equals(principal.getUserId())) {
             throw new RuntimeException("해당 프로그램을 수정할 권한이 없습니다.");
+        }
+
+        // 가격 음수 검증 (서비스 계층 2차 방어)
+        if (request.price() == null || request.price() < 0) {
+            throw new IllegalArgumentException("가격은 0원 이상이어야 합니다.");
         }
 
         // 필드 업데이트

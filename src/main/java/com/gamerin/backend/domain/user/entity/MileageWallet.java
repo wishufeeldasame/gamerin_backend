@@ -57,18 +57,20 @@ public class MileageWallet {
 
     // 마일리지 차감 로직 (도메인 모델 내에 비즈니스 로직 포함)
     public void deduct(Long amount) {
+        if (amount == null || amount < 0) {
+            throw new IllegalArgumentException("차감할 마일리지는 0 이상이어야 합니다.");
+        }
         if (this.balance < amount) {
             throw new RuntimeException("마일리지가 부족합니다. (현재 잔액: " + this.balance + ")");
         }
         this.balance -= amount;
     }
 
-    // 거절 시 마일리지 반환
+    // 마일리지 추가 / 환불 / 정산 로직
     public void addBalance(Long amount) {
-        if (amount < 0) {
-            throw new RuntimeException("충전 금액은 0보다 커야 합니다.");
+        if (amount == null || amount < 0) {
+            throw new IllegalArgumentException("충전/지급 금액은 0 이상이어야 합니다.");
         }
-        
         this.balance += amount;
     }
     
