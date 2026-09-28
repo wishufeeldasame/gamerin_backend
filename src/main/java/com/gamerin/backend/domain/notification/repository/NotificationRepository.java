@@ -170,6 +170,24 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
 
     @Modifying(flushAutomatically = true)
     @Query("""
+            UPDATE Notification n
+            SET n.readAt = :readAt
+            WHERE n.id = :notificationId
+              AND n.recipient.id = :recipientId
+              AND n.readAt IS NULL
+              AND n.eventAt = :eventAt
+              AND ((:messageId IS NULL AND n.message IS NULL) OR n.message.id = :messageId)
+            """)
+    int markReadIfUnchanged(
+            @Param("notificationId") UUID notificationId,
+            @Param("recipientId") UUID recipientId,
+            @Param("eventAt") OffsetDateTime eventAt,
+            @Param("messageId") UUID messageId,
+            @Param("readAt") OffsetDateTime readAt
+    );
+
+    @Modifying(flushAutomatically = true)
+    @Query("""
             DELETE FROM Notification n
             WHERE n.type = com.gamerin.backend.domain.notification.entity.NotificationType.LIKE
               AND n.post.id = :postId

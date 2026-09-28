@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -165,7 +166,7 @@ class NotificationQueryServiceTest {
     }
 
     @Test
-    void markReadIsIdempotentAndRestrictedToRecipient() {
+    void markReadAcknowledgesObservedEventWithoutMutatingManagedEntityOrRetrying() {
         User recipient = savedUser("recipient", "Recipient");
         User actor = savedUser("actor", "Actor");
         Post post = savedPost(recipient);
@@ -182,11 +183,21 @@ class NotificationQueryServiceTest {
                 .thenReturn(Optional.of(notification));
 
         service.markRead(CustomUserPrincipal.from(recipient), notificationId);
-        OffsetDateTime firstReadAt = notification.getReadAt();
-        service.markRead(CustomUserPrincipal.from(recipient), notificationId);
 
-        assertThat(firstReadAt).isNotNull();
-        assertThat(notification.getReadAt()).isEqualTo(firstReadAt);
+        // A zero-row update (the mock default) must not retry against a newer event.
+        verify(notificationRepository).findValidByIdAndRecipientId(notificationId, recipient.getId());
+        verify(notificationRepository).markReadIfUnchanged(
+                eq(notificationId), eq(recipient.getId()), eq(notification.getEventAt()), isNull(), any()
+        );
+        assertThat(notification.getReadAt()).isNull();
+    }
+
+    @Test
+    void markReadRequiresAuthentication() {
+        assertThatThrownBy(() -> service.markRead(null, UUID.randomUUID()))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.UNAUTHORIZED.value());
     }
 
     @Test
@@ -223,6 +234,7 @@ class NotificationQueryServiceTest {
         Notification notification = Notification.like(recipient, actor, post, PostLike.create(post, actor));
         ReflectionTestUtils.setField(notification, "id", notificationId);
         ReflectionTestUtils.setField(notification, "createdAt", createdAt);
+        ReflectionTestUtils.setField(notification, "eventAt", createdAt);
         return notification;
     }
 

@@ -99,7 +99,15 @@ public class NotificationQueryService {
         Notification notification = notificationRepository
                 .findValidByIdAndRecipientId(notificationId, recipientId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Notification not found."));
-        notification.markRead(now());
+        // Only acknowledge the observed event; a newer DM must remain unread.
+        // Do not mutate the managed entity: flushing it could overwrite that newer event.
+        notificationRepository.markReadIfUnchanged(
+                notificationId,
+                recipientId,
+                notification.getEventAt(),
+                notification.getMessage() != null ? notification.getMessage().getId() : null,
+                now()
+        );
     }
 
     @Transactional

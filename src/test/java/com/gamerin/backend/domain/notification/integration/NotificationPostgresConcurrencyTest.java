@@ -2,6 +2,11 @@ package com.gamerin.backend.domain.notification.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mockingDetails;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -26,6 +31,8 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -35,6 +42,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -57,6 +65,7 @@ import com.gamerin.backend.domain.message.repository.MessageParticipantRepositor
 import com.gamerin.backend.domain.message.service.MessageService;
 import com.gamerin.backend.domain.mention.service.MentionService;
 import com.gamerin.backend.domain.notification.service.NotificationQueryService;
+import com.gamerin.backend.domain.notification.repository.NotificationRepository;
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
 import com.gamerin.backend.domain.post.entity.Post;
@@ -116,6 +125,8 @@ class NotificationPostgresConcurrencyTest {
     private MileageService mileageService;
     @Autowired
     private NotificationQueryService notificationQueryService;
+    @MockitoSpyBean
+    private NotificationRepository notificationRepository;
     @Autowired
     private PostCleanupService postCleanupService;
     @Autowired
@@ -383,6 +394,32 @@ class NotificationPostgresConcurrencyTest {
                 "select count(*) from notifications where recipient_id = ? and read_at is null",
                 fixture.recipientId()
         )).isZero();
+    }
+
+    @Test
+    void individualReadOfNonMessageNotificationIsIdempotentAndRestrictedToRecipient() {
+        Fixture fixture = createFixture();
+        postService.like(fixture.actorPrincipal(), fixture.postId());
+        UUID notificationId = singleUuid(
+                "select id from notifications where post_id = ? and actor_id = ?",
+                fixture.postId(), fixture.actorId());
+        assertThat(singleUuid("select message_id from notifications where id = ?", notificationId)).isNull();
+
+        assertThatThrownBy(() -> notificationQueryService.markRead(fixture.actorPrincipal(), notificationId))
+                .isInstanceOfSatisfying(ResponseStatusException.class, error ->
+                        assertThat(error.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+        assertThat(count("select count(*) from notifications where id = ? and read_at is null", notificationId))
+                .isEqualTo(1L);
+
+        notificationQueryService.markRead(fixture.recipientPrincipal(), notificationId);
+        OffsetDateTime firstReadAt = jdbcTemplate.queryForObject(
+                "select read_at from notifications where id = ?", OffsetDateTime.class, notificationId);
+        assertThat(firstReadAt).isNotNull();
+
+        notificationQueryService.markRead(fixture.recipientPrincipal(), notificationId);
+        assertThat(jdbcTemplate.queryForObject(
+                "select read_at from notifications where id = ?", OffsetDateTime.class, notificationId))
+                .isEqualTo(firstReadAt);
     }
 
     @Test
@@ -685,6 +722,246 @@ class NotificationPostgresConcurrencyTest {
                 "select count(*) from notifications where type = 'REPOST' and post_id = ?",
                 fixture.postId()
         )).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void individualReadDoesNotOverwriteMessageCommittedAfterLookup(boolean sameEventAt) throws Exception {
+        MessageFixture fixture = createMessageFixture();
+        UUID firstMessageId = messageService.sendMessage(
+                fixture.senderPrincipal(), fixture.conversationId(), new SendMessageRequest("first", null)
+        ).id();
+        UUID notificationId = directMessageNotificationId(fixture);
+        OffsetDateTime originalEventAt = notificationEventAt(notificationId);
+        CountDownLatch observed = new CountDownLatch(1);
+        CountDownLatch resumeRead = new CountDownLatch(1);
+        pauseIndividualReadAfterLookup(fixture, notificationId, observed, resumeRead);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        try {
+            Future<?> read = executor.submit(() ->
+                    notificationQueryService.markRead(fixture.recipientPrincipal(), notificationId));
+            awaitNotificationRace(observed, read);
+            UUID latestMessageId = transactionTemplate.execute(status -> {
+                UUID messageId = messageService.sendMessage(
+                        fixture.senderPrincipal(), fixture.conversationId(), new SendMessageRequest("latest", null)
+                ).id();
+                // Force timestamp equality to prove that a distinct message cannot be read by the old request.
+                if (sameEventAt) {
+                    jdbcTemplate.update("update direct_messages set created_at = ? where id = ?",
+                            originalEventAt, messageId);
+                }
+                return messageId;
+            });
+            if (sameEventAt) {
+                jdbcTemplate.update("update notifications set event_at = ? where id = ?",
+                        originalEventAt, notificationId);
+            }
+            OffsetDateTime latestEventAt = notificationEventAt(notificationId);
+            assertThat(latestMessageId).isNotEqualTo(firstMessageId);
+            if (sameEventAt) {
+                assertThat(latestEventAt).isEqualTo(originalEventAt);
+            }
+            resumeRead.countDown();
+            read.get(RESULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+            assertUnreadDirectMessage(notificationId, latestMessageId, latestEventAt);
+        } finally {
+            resumeRead.countDown();
+            executor.shutdownNow();
+            executor.awaitTermination(READY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        }
+    }
+
+    @Test
+    void individualReadRechecksObservedEventAfterWaitingForMessageUpdateLock() throws Exception {
+        MessageFixture fixture = createMessageFixture();
+        UUID firstMessageId = messageService.sendMessage(
+                fixture.senderPrincipal(), fixture.conversationId(), new SendMessageRequest("first", null)
+        ).id();
+        UUID notificationId = directMessageNotificationId(fixture);
+        OffsetDateTime originalEventAt = notificationEventAt(notificationId);
+        CountDownLatch observed = new CountDownLatch(1);
+        CountDownLatch resumeRead = new CountDownLatch(1);
+        CountDownLatch messageUpdated = new CountDownLatch(1);
+        CountDownLatch commitMessage = new CountDownLatch(1);
+        AtomicInteger readerPid = new AtomicInteger();
+        AtomicInteger writerPid = new AtomicInteger();
+        AtomicInteger updatedRows = new AtomicInteger(-1);
+        pauseIndividualReadAfterLookup(fixture, notificationId, observed, resumeRead);
+        doAnswer(call -> {
+            int result = (Integer) mockingDetails(notificationRepository)
+                    .getMockCreationSettings().getDefaultAnswer().answer(call);
+            updatedRows.set(result);
+            return result;
+        }).when(notificationRepository).markReadIfUnchanged(
+                eq(notificationId), eq(fixture.recipientId()), eq(originalEventAt), eq(firstMessageId),
+                any(OffsetDateTime.class));
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        try {
+            Future<?> read = executor.submit(() -> transactionTemplate.executeWithoutResult(status -> {
+                jdbcTemplate.execute("set local lock_timeout = '10s'");
+                jdbcTemplate.execute("set local statement_timeout = '12s'");
+                readerPid.set(jdbcTemplate.queryForObject("select pg_backend_pid()", Integer.class));
+                notificationQueryService.markRead(fixture.recipientPrincipal(), notificationId);
+            }));
+            awaitNotificationRace(observed, read);
+            Future<MessageNotificationSnapshot> send = executor.submit(() -> transactionTemplate.execute(status -> {
+                jdbcTemplate.execute("set local lock_timeout = '10s'");
+                jdbcTemplate.execute("set local statement_timeout = '12s'");
+                writerPid.set(jdbcTemplate.queryForObject("select pg_backend_pid()", Integer.class));
+                UUID messageId = messageService.sendMessage(
+                        fixture.senderPrincipal(), fixture.conversationId(), new SendMessageRequest("latest", null)
+                ).id();
+                notificationRepository.flush();
+                MessageNotificationSnapshot snapshot = new MessageNotificationSnapshot(
+                        messageId, notificationEventAt(notificationId));
+                messageUpdated.countDown();
+                try {
+                    awaitNotificationRace(commitMessage);
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Message commit was interrupted", error);
+                }
+                return snapshot;
+            }));
+            awaitNotificationRace(messageUpdated, send);
+            resumeRead.countDown();
+
+            // Verify an actual PostgreSQL UPDATE wait, not just an application-level ordering of requests.
+            await().atMost(READY_TIMEOUT).pollInterval(Duration.ofMillis(25)).untilAsserted(() ->
+                    assertThat(count("""
+                            select count(*) from pg_stat_activity
+                            where pid = ? and wait_event_type = 'Lock'
+                              and ? = any(pg_blocking_pids(pid))
+                              and lower(query) like '%update %notifications%'
+                            """, readerPid.get(), writerPid.get())).isEqualTo(1L));
+            commitMessage.countDown();
+            MessageNotificationSnapshot latest = send.get(RESULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            read.get(RESULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+            assertThat(updatedRows.get()).isZero();
+            assertUnreadDirectMessage(notificationId, latest.messageId(), latest.eventAt());
+        } finally {
+            resumeRead.countDown();
+            commitMessage.countDown();
+            executor.shutdownNow();
+            executor.awaitTermination(READY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        }
+    }
+
+    @Test
+    void messageRefreshAfterIndividualReadCommitMakesNotificationUnreadAgain() throws Exception {
+        MessageFixture fixture = createMessageFixture();
+        messageService.sendMessage(
+                fixture.senderPrincipal(), fixture.conversationId(), new SendMessageRequest("first", null));
+        UUID notificationId = directMessageNotificationId(fixture);
+        CountDownLatch refreshReady = new CountDownLatch(1);
+        CountDownLatch resumeRefresh = new CountDownLatch(1);
+        doAnswer(call -> {
+            refreshReady.countDown();
+            awaitNotificationRace(resumeRefresh);
+            return mockingDetails(notificationRepository).getMockCreationSettings().getDefaultAnswer().answer(call);
+        }).when(notificationRepository).findDirectMessageForUpdate(fixture.recipientId(), fixture.conversationId());
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        try {
+            Future<MessageNotificationSnapshot> send = executor.submit(() -> transactionTemplate.execute(status -> {
+                UUID messageId = messageService.sendMessage(
+                        fixture.senderPrincipal(), fixture.conversationId(), new SendMessageRequest("latest", null)
+                ).id();
+                notificationRepository.flush();
+                return new MessageNotificationSnapshot(messageId, notificationEventAt(notificationId));
+            }));
+            awaitNotificationRace(refreshReady, send);
+            notificationQueryService.markRead(fixture.recipientPrincipal(), notificationId);
+            assertThat(count("select count(*) from notifications where id = ? and read_at is not null",
+                    notificationId)).isEqualTo(1L);
+            resumeRefresh.countDown();
+            MessageNotificationSnapshot latest = send.get(RESULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+            assertUnreadDirectMessage(notificationId, latest.messageId(), latest.eventAt());
+        } finally {
+            resumeRefresh.countDown();
+            executor.shutdownNow();
+            executor.awaitTermination(READY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        }
+    }
+
+    @Test
+    void individualReadCompletesWhenNotificationIsDeletedAfterLookup() throws Exception {
+        MessageFixture fixture = createMessageFixture();
+        messageService.sendMessage(
+                fixture.senderPrincipal(), fixture.conversationId(), new SendMessageRequest("first", null));
+        UUID notificationId = directMessageNotificationId(fixture);
+        CountDownLatch observed = new CountDownLatch(1);
+        CountDownLatch resumeRead = new CountDownLatch(1);
+        pauseIndividualReadAfterLookup(fixture, notificationId, observed, resumeRead);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        try {
+            Future<?> read = executor.submit(() ->
+                    notificationQueryService.markRead(fixture.recipientPrincipal(), notificationId));
+            awaitNotificationRace(observed, read);
+            jdbcTemplate.update("delete from notifications where id = ?", notificationId);
+            resumeRead.countDown();
+            read.get(RESULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+            assertThat(count("select count(*) from notifications where id = ?", notificationId)).isZero();
+        } finally {
+            resumeRead.countDown();
+            executor.shutdownNow();
+            executor.awaitTermination(READY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private void pauseIndividualReadAfterLookup(
+            MessageFixture fixture,
+            UUID notificationId,
+            CountDownLatch observed,
+            CountDownLatch resumeRead
+    ) {
+        doAnswer(call -> {
+            // Spring Data repositories are interface proxies; their spy delegates to the original proxy.
+            Object notification = mockingDetails(notificationRepository)
+                    .getMockCreationSettings().getDefaultAnswer().answer(call);
+            observed.countDown();
+            awaitNotificationRace(resumeRead);
+            return notification;
+        }).when(notificationRepository).findValidByIdAndRecipientId(notificationId, fixture.recipientId());
+    }
+
+    private void awaitNotificationRace(CountDownLatch latch) throws InterruptedException {
+        assertThat(latch.await(RESULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS))
+                .as("Notification race reached its synchronization point").isTrue();
+    }
+
+    private void awaitNotificationRace(CountDownLatch latch, Future<?> operation) throws Exception {
+        boolean reached = latch.await(RESULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        if (!reached && operation.isDone()) {
+            // Preserve the worker's actual exception instead of masking it with a latch timeout.
+            operation.get(RESULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        }
+        assertThat(reached).as("Notification race reached its synchronization point").isTrue();
+    }
+
+    private UUID directMessageNotificationId(MessageFixture fixture) {
+        return singleUuid("select id from notifications where recipient_id = ? and conversation_id = ?",
+                fixture.recipientId(), fixture.conversationId());
+    }
+
+    private OffsetDateTime notificationEventAt(UUID notificationId) {
+        return jdbcTemplate.queryForObject("select event_at from notifications where id = ?",
+                OffsetDateTime.class, notificationId);
+    }
+
+    private void assertUnreadDirectMessage(UUID notificationId, UUID messageId, OffsetDateTime eventAt) {
+        assertThat(singleUuid("select message_id from notifications where id = ?", notificationId))
+                .isEqualTo(messageId);
+        assertThat(notificationEventAt(notificationId)).isEqualTo(eventAt);
+        assertThat(count("select count(*) from notifications where id = ? and read_at is null", notificationId))
+                .isEqualTo(1L);
     }
 
     @Test
@@ -1180,6 +1457,9 @@ class NotificationPostgresConcurrencyTest {
             UUID postId,
             List<Actor> actors
     ) {
+    }
+
+    private record MessageNotificationSnapshot(UUID messageId, OffsetDateTime eventAt) {
     }
 
     private record MessageFixture(
