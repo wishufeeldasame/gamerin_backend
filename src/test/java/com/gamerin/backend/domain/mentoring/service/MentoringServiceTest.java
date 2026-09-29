@@ -44,6 +44,11 @@ import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.domain.user.service.MileageService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.eq;
+import org.junit.jupiter.api.DisplayName;
+import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
+
 @ExtendWith(MockitoExtension.class)
 class MentoringServiceTest {
 
@@ -244,5 +249,74 @@ class MentoringServiceTest {
                 User user = User.createLocal(handle + "@example.com", handle, nickname, "password");
                 ReflectionTestUtils.setField(user, "id", id);
                 return user;
+        }
+
+        @Test
+        @DisplayName("ESCROW_HELD 신청이 있는 프로그램 삭제 시 409 CONFLICT가 발생하고 소프트 삭제가 일어나지 않는다")
+        void deleteProgramRejectedWhenEscrowHeldApplicationExists() {
+            UUID mentorId = UUID.randomUUID();
+            UUID programId = UUID.randomUUID();
+            MentoringApplication application = application(mentorId, UUID.randomUUID(), programId, UUID.randomUUID());
+            MentoringProgram program = application.getProgram();
+    
+            when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+            // ESCROW_HELD 신청이 존재하는 상황 (APPLIED/ACCEPTED/ONGOING/FINISHED 상태)
+            when(mentoringApplicationRepository.existsByProgramIdAndPaymentStatus(
+                    eq(programId), eq(PaymentStatus.ESCROW_HELD))).thenReturn(true);
+    
+            assertThatThrownBy(() -> mentoringService.deleteProgram(
+                    CustomUserPrincipal.from(application.getProgram().getMentor().getUser()),
+                    programId))
+                    .isInstanceOf(ResponseStatusException.class)
+                    .satisfies(error -> {
+                        ResponseStatusException ex = (ResponseStatusException) error;
+                        assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.CONFLICT.value());
+                        assertThat(ex.getReason()).contains("진행 중인 멘토링 신청이 있어 삭제할 수 없습니다.");
+                    });
+    
+            // 소프트 삭제가 일어나지 않았으므로 deleted_at이 null이어야 함
+            assertThat(program.getDeletedAt()).isNull();
+        }
+
+        @Test
+        @DisplayName("완료·정산된 신청만 있는 프로그램은 소프트 삭제되고 deleted_at이 기록된다")
+        void deleteProgramSoftDeletesWhenNoEscrowHeldApplicationExists() {
+                UUID mentorId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication application = application(mentorId, UUID.randomUUID(), programId,
+                                UUID.randomUUID());
+                MentoringProgram program = application.getProgram();
+
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+                // ESCROW_HELD 신청 없음 (전부 SETTLED 또는 REFUNDED)
+                when(mentoringApplicationRepository.existsByProgramIdAndPaymentStatus(
+                                eq(programId), eq(PaymentStatus.ESCROW_HELD))).thenReturn(false);
+
+                assertThatCode(() -> mentoringService.deleteProgram(
+                                CustomUserPrincipal.from(application.getProgram().getMentor().getUser()),
+                                programId))
+                                .doesNotThrowAnyException();
+
+                // 물리 삭제가 아닌 소프트 삭제 — deleted_at이 현재 시각으로 기록됨
+                assertThat(program.getDeletedAt()).isNotNull();
+                assertThat(program.isDeleted()).isTrue();
+        }
+
+        @Test
+        @DisplayName("소프트 삭제된 프로그램에 신청 시 NOT_FOUND 404가 반환된다")
+        void applyToSoftDeletedProgramReturns404() {
+                UUID programId = UUID.randomUUID();
+
+                // findByIdForUpdate에 deletedAt IS NULL 조건이 있으므로 소프트 삭제된 프로그램은 빈 값 반환
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.empty());
+
+                assertThatThrownBy(() -> mentoringService.applyToProgram(
+                                CustomUserPrincipal.from(savedUser(UUID.randomUUID(), "mentee", "Mentee")),
+                                new MentoringApplicationRequest(programId, "message")))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> {
+                                        ResponseStatusException ex = (ResponseStatusException) error;
+                                        assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.NOT_FOUND.value());
+                                });
         }
 }

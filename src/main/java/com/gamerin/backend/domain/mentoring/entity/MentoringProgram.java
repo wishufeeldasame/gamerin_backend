@@ -28,7 +28,7 @@ public class MentoringProgram {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
-    
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "mentor_id")
     private MentorProfile mentor;
@@ -50,7 +50,7 @@ public class MentoringProgram {
 
     @Column(nullable = false)
     private Long price;
-    
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(columnDefinition = "jsonb")
     private List<String> tags;
@@ -60,6 +60,10 @@ public class MentoringProgram {
 
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
+
+    // 소프트 삭제 시각. NULL = 정상 운영, NOT NULL = 멘토가 삭제 처리한 프로그램
+    @Column(name = "deleted_at")
+    private OffsetDateTime deletedAt;
 
     @PrePersist
     protected void onCreate() {
@@ -74,34 +78,101 @@ public class MentoringProgram {
     }
 
     // Getters & Setters
-    public UUID getId() { return id; }
-    public void setId(UUID id) { this.id = id; }
+    public UUID getId() {
+        return id;
+    }
 
-    public MentorProfile getMentor() { return mentor; }
-    public void setMentor(MentorProfile mentor) { this.mentor = mentor; }
+    public void setId(UUID id) {
+        this.id = id;
+    }
 
-    public String getGameName() { return gameName; }
-    public void setGameName(String gameName) { this.gameName = gameName; }
+    public MentorProfile getMentor() {
+        return mentor;
+    }
 
-    public String getTitle() { return title; }
-    public void setTitle(String title) { this.title = title; }
+    public void setMentor(MentorProfile mentor) {
+        this.mentor = mentor;
+    }
 
-    public String getContent() { return content; }
-    public void setContent(String content) { this.content = content; }
+    public String getGameName() {
+        return gameName;
+    }
 
-    public String getAvailableTimeDesc() { return availableTimeDesc; }
-    public void setAvailableTimeDesc(String availableTimeDesc) { this.availableTimeDesc = availableTimeDesc; }
+    public void setGameName(String gameName) {
+        this.gameName = gameName;
+    }
 
-    public ProgramStatus getStatus() { return status; }
-    public void setStatus(ProgramStatus status) { this.status = status; }
+    public String getTitle() {
+        return title;
+    }
 
-    public Long getPrice() { return price; }
-    public void setPrice(Long price) { this.price = price; }
+    public void setTitle(String title) {
+        this.title = title;
+    }
 
-    public List<String> getTags() { return tags; }
-    public void setTags(List<String> tags) { this.tags = tags; }
+    public String getContent() {
+        return content;
+    }
 
-    public OffsetDateTime getCreatedAt() { return createdAt; }
-    public OffsetDateTime getUpdatedAt() { return updatedAt; }
+    public void setContent(String content) {
+        this.content = content;
+    }
+
+    public String getAvailableTimeDesc() {
+        return availableTimeDesc;
+    }
+
+    public void setAvailableTimeDesc(String availableTimeDesc) {
+        this.availableTimeDesc = availableTimeDesc;
+    }
+
+    public ProgramStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(ProgramStatus status) {
+        this.status = status;
+    }
+
+    public Long getPrice() {
+        return price;
+    }
+
+    public void setPrice(Long price) {
+        this.price = price;
+    }
+
+    public List<String> getTags() {
+        return tags;
+    }
+
+    public void setTags(List<String> tags) {
+        this.tags = tags;
+    }
+
+    public OffsetDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public OffsetDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public OffsetDateTime getDeletedAt() {
+        return deletedAt;
+    }
+
+    /**
+     * 소프트 삭제 처리. deleted_at을 현재 시각으로 설정한다.
+     * 
+     * @Transactional 범위 안에서 Dirty Checking에 의해 자동으로 UPDATE 쿼리가 발행된다.
+     */
+    public void softDelete() {
+        this.deletedAt = OffsetDateTime.now();
+    }
+
+    public boolean isDeleted() {
+        return this.deletedAt != null;
+    }
 
 }

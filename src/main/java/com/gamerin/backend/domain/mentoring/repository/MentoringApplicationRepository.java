@@ -2,7 +2,6 @@ package com.gamerin.backend.domain.mentoring.repository;
 
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 import jakarta.persistence.LockModeType;
@@ -15,8 +14,7 @@ import org.springframework.data.repository.query.Param;
 
 import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
-
-import jakarta.persistence.LockModeType;
+import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
 
 public interface MentoringApplicationRepository extends JpaRepository<MentoringApplication, UUID> {
 
@@ -33,15 +31,21 @@ public interface MentoringApplicationRepository extends JpaRepository<MentoringA
     java.util.Optional<MentoringApplication> findByIdForUpdate(@Param("id") UUID id);
 
     @Query("""
-        select application.id
-        from MentoringApplication application
-        where application.status = :status
-          and application.updatedAt < :threshold
-        order by application.updatedAt asc, application.id asc
-        """)
+            select application.id
+            from MentoringApplication application
+            where application.status = :status
+              and application.updatedAt < :threshold
+            order by application.updatedAt asc, application.id asc
+            """)
     List<UUID> findIdsByStatusAndUpdatedAtBefore(
             @Param("status") ApplicationStatus status,
-            @Param("threshold") OffsetDateTime threshold
-    );
-    
-} 
+            @Param("threshold") OffsetDateTime threshold);
+
+    /**
+     * 특정 프로그램에 에스크로가 활성화된 신청이 존재하는지 확인한다.
+     * paymentStatus = ESCROW_HELD 인 신청이 하나라도 있으면 소프트 삭제를 거부해야 한다.
+     * APPLIED, ACCEPTED, ONGOING, FINISHED 상태는 모두 ESCROW_HELD에 해당한다.
+     */
+    boolean existsByProgramIdAndPaymentStatus(UUID programId, PaymentStatus paymentStatus);
+
+}

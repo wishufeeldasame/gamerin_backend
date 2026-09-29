@@ -16,20 +16,19 @@ import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
 
 public interface MentoringProgramRepository extends JpaRepository<MentoringProgram, UUID> {
 
-    // 게임 이름별 필터링 조회
-    Page<MentoringProgram> findByGameName(String gameName, Pageable pageable);
-
+    // 소프트 삭제된 프로그램은 목록에 노출하지 않는다
     @Query("SELECT p FROM MentoringProgram p " +
-       "WHERE (:gameName IS NULL OR p.gameName = :gameName) " +
-       "AND (:mentorId IS NULL OR p.mentor.userId = :mentorId)")
+            "WHERE (:gameName IS NULL OR p.gameName = :gameName) " +
+            "AND (:mentorId IS NULL OR p.mentor.userId = :mentorId) " +
+            "AND p.deletedAt IS NULL")
     Page<MentoringProgram> findByFilters(
-        @Param("gameName") String gameName, 
-        @Param("mentorId") UUID mentorId, 
-        Pageable pageable
-    );
+            @Param("gameName") String gameName,
+            @Param("mentorId") UUID mentorId,
+            Pageable pageable);
 
+    // 소프트 삭제된 프로그램은 락 대상에서 제외 (삭제 후 신청 불가)
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select program from MentoringProgram program where program.id = :id")
-    Optional<MentoringProgram> findByIdForUpdate(@Param("id") UUID id);
+        @Query("select program from MentoringProgram program where program.id = :id and program.deletedAt IS NULL")
+        Optional<MentoringProgram> findByIdForUpdate(@Param("id") UUID id);
 
 }
