@@ -164,7 +164,6 @@ public class MentoringProgram {
 
     /**
      * 소프트 삭제 처리. deleted_at을 현재 시각으로 설정한다.
-     * 
      * @Transactional 범위 안에서 Dirty Checking에 의해 자동으로 UPDATE 쿼리가 발행된다.
      */
     public void softDelete() {

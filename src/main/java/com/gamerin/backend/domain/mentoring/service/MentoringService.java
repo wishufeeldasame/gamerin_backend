@@ -154,16 +154,19 @@ public class MentoringService {
 
     @Transactional(readOnly = true)
     public MentoringProgramDetailResponse getProgramDetail(UUID id) {
-        MentoringProgram program = mentoringProgramRepository.findById(id)
+        MentoringProgram program = mentoringProgramRepository.findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
+
         return MentoringProgramDetailResponse.from(program);
     }
 
     @Transactional
-    public MentoringProgramResponse updateProgram(CustomUserPrincipal principal, UUID programId,
+    public MentoringProgramResponse updateProgram(
+            CustomUserPrincipal principal,
+            UUID programId,
             MentoringProgramUpdateRequest request) {
-        // 프로그램 존재 여부 확인
-        MentoringProgram program = mentoringProgramRepository.findById(programId)
+        // 프로그램 존재 여부 확인 (소프트 삭제된 프로그램은 404)
+        MentoringProgram program = mentoringProgramRepository.findByIdAndDeletedAtIsNull(programId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
 
         // 권한 확인 (프로그램의 멘토 ID와 현재 접속 유저 ID 비교)

@@ -171,5 +171,4 @@ class MentoringControllerExceptionTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value("서버 처리 중 오류가 발생했습니다."));
     }
-    
 }
