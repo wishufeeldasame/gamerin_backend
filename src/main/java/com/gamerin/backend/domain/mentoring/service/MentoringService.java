@@ -44,6 +44,7 @@ import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+
 @Service
 public class MentoringService {
 
@@ -153,16 +154,19 @@ public class MentoringService {
 
     @Transactional(readOnly = true)
     public MentoringProgramDetailResponse getProgramDetail(UUID id) {
-        MentoringProgram program = mentoringProgramRepository.findById(id)
+        MentoringProgram program = mentoringProgramRepository.findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
+
         return MentoringProgramDetailResponse.from(program);
     }
 
     @Transactional
-    public MentoringProgramResponse updateProgram(CustomUserPrincipal principal, UUID programId,
+    public MentoringProgramResponse updateProgram(
+            CustomUserPrincipal principal,
+            UUID programId,
             MentoringProgramUpdateRequest request) {
-        // 프로그램 존재 여부 확인
-        MentoringProgram program = mentoringProgramRepository.findById(programId)
+        // 프로그램 존재 여부 확인 (소프트 삭제된 프로그램은 404)
+        MentoringProgram program = mentoringProgramRepository.findByIdAndDeletedAtIsNull(programId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
 
         // 권한 확인 (프로그램의 멘토 ID와 현재 접속 유저 ID 비교)
@@ -187,16 +191,29 @@ public class MentoringService {
 
     @Transactional
     public void deleteProgram(CustomUserPrincipal principal, UUID programId) {
-        // 프로그램 존재 여부 확인
-        MentoringProgram program = mentoringProgramRepository.findById(programId)
+        // 비관적 락으로 프로그램 조회 — 삭제 판단 중 신규 신청이 끼어드는 경합을 방지
+        // findByIdForUpdate 쿼리에 deletedAt IS NULL 조건이 포함되어 있으므로
+        // 이미 소프트 삭제된 프로그램이면 NOT_FOUND(404) 반환
+        MentoringProgram program = mentoringProgramRepository.findByIdForUpdate(programId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
 
-        // 권한 확인
+        // 권한 확인 (소유자만 삭제 가능)
         if (!program.getMentor().getId().equals(principal.getUserId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "해당 프로그램을 삭제할 권한이 없습니다.");
         }
 
-        mentoringProgramRepository.delete(program);
+        // 활성 거래(에스크로) 차단 확인
+        // ESCROW_HELD 상태인 신청이 하나라도 있으면 멘티 마일리지 손실 위험이 있으므로 거부
+        if (mentoringApplicationRepository.existsByProgramIdAndPaymentStatus(programId, PaymentStatus.ESCROW_HELD)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "진행 중인 멘토링 신청이 있어 삭제할 수 없습니다. 모든 거래를 완료하거나 취소한 뒤 시도해 주세요.");
+        }
+
+        // 소프트 삭제 처리 — DB에서 행을 지우지 않고 deleted_at을 기록한다
+        // 완료·정산된 신청, 리뷰, 마일리지 원장은 DB에 그대로 보존됨
+        // @Transactional 범위 안에서 Dirty Checking이 UPDATE 쿼리를 자동 발행한다
+        program.softDelete();
     }
 
     // 신청
