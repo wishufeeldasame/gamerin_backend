@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.global.logging.JsonLogContext;
+import com.gamerin.backend.domain.user.exception.InsufficientMileageException;
 
 class GlobalExceptionHandlerTest {
 
@@ -115,6 +116,14 @@ class GlobalExceptionHandlerTest {
                 .andExpect(content().string(not(containsString("서버 처리 중 오류가 발생했습니다."))));
     }
 
+    @Test
+    void insufficientMileageExceptionReturnsBadRequest() throws Exception {
+        mockMvc.perform(get("/test/insufficient-mileage"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value("마일리지가 부족합니다. (현재 잔액: 0)"));
+    }
+
     @RestController
     private static class ThrowingController {
 
@@ -139,6 +148,11 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/test/illegal-argument")
         void illegalArgument() {
             throw new IllegalArgumentException("잘못된 요청입니다.");
+        }
+
+        @GetMapping("/test/insufficient-mileage")
+        void insufficientMileage() {
+            throw new InsufficientMileageException(0L);
         }
 
         @GetMapping("/test/response-status")

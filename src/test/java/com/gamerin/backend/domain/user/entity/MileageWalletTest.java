@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.user.entity;
 
+import com.gamerin.backend.domain.user.exception.InsufficientMileageException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -33,14 +34,14 @@ class MileageWalletTest {
     }
 
     @Test
-    @DisplayName("잔액보다 큰 금액으로 deduct를 호출하면 RuntimeException이 발생한다")
+    @DisplayName("잔액보다 큰 금액으로 deduct를 호출하면 InsufficientMileageException이 발생한다")
     void deductThrowsWhenInsufficientBalance() {
         MileageWallet wallet = new MileageWallet();
         wallet.setBalance(500L);
 
         assertThatThrownBy(() -> wallet.deduct(1000L))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("마일리지가 부족합니다");
+                .isInstanceOf(InsufficientMileageException.class)
+                .hasMessage("마일리지가 부족합니다. (현재 잔액: 500)");
     }
 
     @Test
