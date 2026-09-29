@@ -44,9 +44,6 @@ import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
-
 @Service
 public class MentoringService {
 

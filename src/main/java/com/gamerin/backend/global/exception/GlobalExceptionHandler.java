@@ -17,6 +17,7 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.global.logging.JsonLogContext;
+import com.gamerin.backend.domain.user.exception.InsufficientMileageException;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -36,6 +37,20 @@ public class GlobalExceptionHandler {
         JsonLogContext.setFailureReason(request, message);
 
         return ResponseEntity.status(status).body(Map.of(
+                "success", false,
+                "message", message
+        ));
+    }
+
+    @ExceptionHandler(InsufficientMileageException.class)
+    public ResponseEntity<Map<String, Object>> handleInsufficientMileageException(
+            InsufficientMileageException e,
+            HttpServletRequest request
+    ) {
+        String message = e.getMessage() != null ? e.getMessage() : "마일리지가 부족합니다.";
+        JsonLogContext.setFailureReason(request, message);
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
                 "success", false,
                 "message", message
         ));

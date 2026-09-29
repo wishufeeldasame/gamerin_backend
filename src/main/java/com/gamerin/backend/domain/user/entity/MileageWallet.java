@@ -14,8 +14,7 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
+import com.gamerin.backend.domain.user.exception.InsufficientMileageException;
 
 @Entity
 @Table(name = "mileage_wallets")
@@ -71,16 +70,13 @@ public class MileageWallet {
         this.user = user;
     }
 
-    // 마일리지 차감 로직 (도메인 모델 내에 비즈니스 로직 포함)
     public void deduct(Long amount) {
         if (amount == null || amount < 0) {
             throw new IllegalArgumentException("차감할 마일리지는 0 이상이어야 합니다.");
         }
         if (this.balance < amount) {
-            // 잔액 부족 시 400 Bad Request 매핑
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "마일리지가 부족합니다. (현재 잔액: " + this.balance + ")");
+            // Spring Web(ResponseStatusException) 대신 도메인 예외 발생
+            throw new InsufficientMileageException(this.balance);
         }
         this.balance -= amount;
     }
