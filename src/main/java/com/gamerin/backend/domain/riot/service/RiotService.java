@@ -57,7 +57,7 @@ package com.gamerin.backend.domain.riot.service;
     
             // Riot API를 호출하여 PUUID 획득
             RiotAccountResponse account = riotApiClient.findAccount(gameName, tagLine);
-            String puuid = account.puuid();
+            String puuid = requirePuuid(account);
     
             // 다른 유저가 사용 중인지 중복 검사
             validateRiotPuuidDuplicate(user.getId(), puuid);
@@ -199,6 +199,13 @@ package com.gamerin.backend.domain.riot.service;
             if (duplicated) {
                 throw GameAccountConflict.RIOT.conflict();
             }
+        }
+
+        private String requirePuuid(RiotAccountResponse account) {
+            if (account == null || account.puuid() == null || account.puuid().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Unexpected Riot account API response.");
+            }
+            return account.puuid().strip();
         }
 
         private double truncate2(double value) {

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doAnswer;
@@ -22,6 +23,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.hibernate.exception.ConstraintViolationException;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -105,6 +108,37 @@ class RiotServiceTest {
         assertThatThrownBy(() -> riotService.connect(principal, new RiotConnectRequest("player#KR1"))).isSameAs(failure);
         verifyNoInteractions(persistenceService);
         assertThat(user.getProfile().getGameStats()).isEqualTo(before);
+    }
+
+    @Test
+    void connectRejectsMissingAccountResponseBeforeDuplicateCheckOrWrite() {
+        when(riotApiClient.findAccount("player", "KR1")).thenReturn(null);
+
+        assertThatThrownBy(() -> riotService.connect(principal, new RiotConnectRequest("player#KR1")))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception -> {
+                    assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+                    assertThat(exception.getReason()).isEqualTo("Unexpected Riot account API response.");
+                });
+
+        verify(userRepository, never()).existsConnectedRiotPuuidByOtherUser(any(), any());
+        verifyNoInteractions(persistenceService);
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"", " ", "\t"})
+    void connectRejectsMissingOrBlankPuuidBeforeDuplicateCheckOrWrite(String puuid) {
+        when(riotApiClient.findAccount("player", "KR1"))
+                .thenReturn(new RiotAccountResponse(puuid, "player", "KR1"));
+
+        assertThatThrownBy(() -> riotService.connect(principal, new RiotConnectRequest("player#KR1")))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception -> {
+                    assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+                    assertThat(exception.getReason()).isEqualTo("Unexpected Riot account API response.");
+                });
+
+        verify(userRepository, never()).existsConnectedRiotPuuidByOtherUser(any(), any());
+        verifyNoInteractions(persistenceService);
     }
 
     @ParameterizedTest
