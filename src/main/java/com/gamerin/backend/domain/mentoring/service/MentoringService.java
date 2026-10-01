@@ -14,6 +14,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 
+import com.gamerin.backend.domain.game.model.GameType;
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
@@ -133,7 +134,7 @@ public class MentoringService {
 
         MentoringProgram program = new MentoringProgram();
         program.setMentor(mentor);
-        program.setGameName(request.gameName());
+        program.setGameName(request.gameName().name());
         program.setTitle(request.title());
         program.setContent(request.content());
         program.setAvailableTimeDesc(request.availableTimeDesc());
@@ -145,9 +146,9 @@ public class MentoringService {
     }
 
     @Transactional(readOnly = true)
-    public Page<MentoringProgramResponse> getPrograms(String gameName, UUID mentorId, Pageable pageable) {
+    public Page<MentoringProgramResponse> getPrograms(GameType gameName, UUID mentorId, Pageable pageable) {
 
-        Page<MentoringProgram> programs = mentoringProgramRepository.findByFilters(gameName, mentorId, pageable);
+        Page<MentoringProgram> programs = mentoringProgramRepository.findByFilters(gameName == null ? null : gameName.name(), mentorId, pageable);
 
         return programs.map(MentoringProgramResponse::from);
     }

@@ -3,6 +3,7 @@ package com.gamerin.backend.global.exception;
 import java.util.HashMap;
 import java.util.Map;
 
+import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -94,7 +95,7 @@ public class GlobalExceptionHandler {
             MethodArgumentTypeMismatchException e,
             HttpServletRequest request
     ) {
-        String message = "입력값 타입이 올바르지 않습니다: " + e.getName();
+        String message = "입력값 타입이 올바르지 않습니다: " + e.getName() + allowedValues(e.getRequiredType());
         JsonLogContext.setFailureReason(request, message);
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
@@ -109,12 +110,24 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         String message = "요청 본문을 읽을 수 없습니다.";
+        if (e.getCause() instanceof InvalidFormatException ife && ife.getTargetType().isEnum()) {
+            String field = ife.getPath().isEmpty() ? "" : ife.getPath().get(ife.getPath().size() - 1).getFieldName();
+            message = "허용되지 않는 값입니다: " + field + allowedValues(ife.getTargetType());
+        }
         JsonLogContext.setFailureReason(request, message);
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
                 "success", false,
                 "message", message
         ));
+    }
+
+    private static String allowedValues(Class<?> type) {
+        if (type == null || !type.isEnum()) {
+            return "";
+        }
+        return " (허용 값: " + java.util.Arrays.stream(type.getEnumConstants()).map(Object::toString)
+                .collect(java.util.stream.Collectors.joining(", ")) + ")";
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
