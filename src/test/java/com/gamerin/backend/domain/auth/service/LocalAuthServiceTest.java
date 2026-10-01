@@ -89,29 +89,29 @@ class LocalAuthServiceTest {
 
         @Test
         void checkHandleAvailabilityNormalizesHandleBeforeLookup() {
-                when(userRepository.existsByHandle("test.user")).thenReturn(false);
+                when(userRepository.existsByHandle("test_user")).thenReturn(false);
 
-                var response = localAuthService.checkHandleAvailability("  Test.User  ");
+                var response = localAuthService.checkHandleAvailability("  Test_User  ");
 
-                assertThat(response.handle()).isEqualTo("test.user");
+                assertThat(response.handle()).isEqualTo("test_user");
                 assertThat(response.available()).isTrue();
-                verify(userRepository).existsByHandle("test.user");
+                verify(userRepository).existsByHandle("test_user");
         }
 
         @Test
         void signUpCreatesLocalUserAndIssuesTokens() {
                 UUID userId = UUID.randomUUID();
                 SignUpRequest request = new SignUpRequest(
-                                "Test.User",
+                                "Test_User",
                                 "  Tester  ",
                                 " Test@Example.com ",
                                 "Password1!",
                                 "Password1!",
                                 true,
                                 true);
-                TokenService.AuthResult authResult = authResult(userId, "test.user", "Tester");
+                TokenService.AuthResult authResult = authResult(userId, "test_user", "Tester");
 
-                when(userRepository.existsByHandle("test.user")).thenReturn(false);
+                when(userRepository.existsByHandle("test_user")).thenReturn(false);
                 when(userRepository.existsByEmail("test@example.com")).thenReturn(false);
                 when(passwordEncoder.encode("Password1!")).thenReturn("encoded-password");
                 when(userRepository.save(any(User.class))).thenAnswer(invocation -> {
@@ -128,7 +128,7 @@ class LocalAuthServiceTest {
 
                 User savedUser = userCaptor.getValue();
                 assertThat(savedUser.getEmail()).isEqualTo("test@example.com");
-                assertThat(savedUser.getHandle()).isEqualTo("test.user");
+                assertThat(savedUser.getHandle()).isEqualTo("test_user");
                 assertThat(savedUser.getNickname()).isEqualTo("Tester");
                 assertThat(savedUser.getPasswordHash()).isEqualTo("encoded-password");
                 assertThat(result).isEqualTo(authResult);
