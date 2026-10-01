@@ -88,6 +88,16 @@ class LocalAuthServiceTest {
         }
 
         @Test
+        void checkHandleAvailabilityRejectsHandleBreakingSignUpRule() {
+                for (String handle : new String[] {"ab", "a.b", "a b", "abcdefghijklmnopqrstu"}) {
+                        assertThatThrownBy(() -> localAuthService.checkHandleAvailability(handle))
+                                        .isInstanceOf(ResponseStatusException.class)
+                                        .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                                        .isEqualTo(HttpStatus.BAD_REQUEST);
+                }
+        }
+
+        @Test
         void checkHandleAvailabilityNormalizesHandleBeforeLookup() {
                 when(userRepository.existsByHandle("test_user")).thenReturn(false);
 

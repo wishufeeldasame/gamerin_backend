@@ -24,10 +24,14 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 @Service
 @Transactional
 public class LocalAuthService {
+    // SignUpRequest·SocialSignUpRequest의 handle 규칙과 동일하게 유지한다
+    private static final Pattern HANDLE_PATTERN = Pattern.compile("^[a-z0-9_]{3,20}$");
+
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
@@ -64,6 +68,9 @@ public class LocalAuthService {
     @Transactional(readOnly = true)
     public HandleAvailabilityResponse checkHandleAvailability(String rawHandle) {
         String handle = normalizeHandle(rawHandle);
+        if (!HANDLE_PATTERN.matcher(handle).matches()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "핸들은 영문 소문자, 숫자, 밑줄(_)만 사용해 3~20자로 입력해주세요.");
+        }
         return new HandleAvailabilityResponse(handle, !userRepository.existsByHandle(handle));
     }
 
