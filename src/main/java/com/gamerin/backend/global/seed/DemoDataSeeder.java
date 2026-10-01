@@ -67,7 +67,7 @@ public class DemoDataSeeder implements ApplicationRunner {
     public static final String PASSWORD = "Demo1234!";
 
     private static final Logger log = LoggerFactory.getLogger(DemoDataSeeder.class);
-    private static final String[] GAMES = {"PUBG", "R6", "LOL"};
+    private static final GameType[] GAMES = {GameType.PUBG, GameType.R6, GameType.LOL};
     private static final String[] TIERS = {"Bronze", "Silver", "Gold", "Platinum", "Diamond"};
 
     private final UserRepository userRepository;
@@ -203,7 +203,7 @@ public class DemoDataSeeder implements ApplicationRunner {
         List<Post> posts = new ArrayList<>();
         for (int i = 0; i < USER_COUNT; i++) {
             for (int p = 0; p < POSTS_PER_USER; p++) {
-                String game = GAMES[(i + p) % GAMES.length];
+                String game = GAMES[(i + p) % GAMES.length].name();
                 String content = "오늘 " + game + " 랭크 " + (p + 3) + "판 달렸습니다. @"
                         + handle((i + p + 1) % USER_COUNT) + " 다음엔 같이 해요! #" + game + " #GamerIN";
                 Post post = postRepository.save(Post.create(users.get(i), content));
@@ -279,9 +279,10 @@ public class DemoDataSeeder implements ApplicationRunner {
         for (int m = 0; m < MENTOR_COUNT; m++) {
             mentoringService.registerMentor(principals.get(m), new MentorRegistrationRequest(handle(m) + " 멘토입니다."));
             for (int p = 0; p < PROGRAMS_PER_MENTOR; p++) {
-                String game = GAMES[(m + p) % GAMES.length];
+                GameType gameType = GAMES[(m + p) % GAMES.length];
+                String game = gameType.name();
                 programIds.add(mentoringService.registerProgram(principals.get(m), new MentoringProgramRequest(
-                        GameType.valueOf(game), game + " 실력 향상 코칭 " + (p + 1), "리플레이 분석과 1:1 피드백을 제공합니다.",
+                        gameType, game + " 실력 향상 코칭 " + (p + 1), "리플레이 분석과 1:1 피드백을 제공합니다.",
                         "평일 저녁 협의", 5_000L + (m * 2 + p) * 1_000L, List.of(game, "데모")
                 )).id());
             }

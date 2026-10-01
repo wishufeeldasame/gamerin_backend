@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.r6.service;
 
+import com.gamerin.backend.domain.game.model.GameType;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
@@ -31,7 +32,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 public class R6Service {
 
-    private static final String GAME = "R6";
+    private static final String GAME = GameType.R6.name();
     private static final String PLATFORM = "PC";
     private static final int MAX_PLAYER_NAME_LENGTH = 100;
 

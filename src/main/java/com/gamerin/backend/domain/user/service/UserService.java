@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.user.service;
 
+import com.gamerin.backend.domain.game.model.GameType;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
@@ -135,7 +136,7 @@ public class UserService {
             }
         }
 
-        removeInternalFields(publicGameStats, "R6", "accountId");
+        removeInternalFields(publicGameStats, GameType.R6.name(), "accountId");
         return publicGameStats;
     }
 

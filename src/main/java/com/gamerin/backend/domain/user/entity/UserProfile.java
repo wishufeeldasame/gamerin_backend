@@ -8,6 +8,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.game.model.GameStatsMode;
+import com.gamerin.backend.domain.game.model.GameType;
 import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -29,8 +30,8 @@ import jakarta.persistence.Table;
 @DynamicUpdate
 public class UserProfile {
 
-    private static final String PUBG_KEY = "PUBG";
-    private static final String R6_KEY = "R6";
+    private static final String PUBG_KEY = GameType.PUBG.name();
+    private static final String R6_KEY = GameType.R6.name();
     private static final String ACCOUNT_ID_KEY = "accountId";
     private static final String PLAYER_NAME_KEY = "playerName";
     private static final String PLAYER_NAME_NORMALIZED_KEY = "playerNameNormalized";
@@ -46,7 +47,7 @@ public class UserProfile {
     private static final String UPDATED_AT_KEY = "updatedAt";
 
     private static final String RIOT_KEY = "RIOT";
-    private static final String LOL_KEY = "LOL";
+    private static final String LOL_KEY = GameType.LOL.name();
     private static final String PUUID_KEY = "puuid";
     private static final String RIOT_ID_KEY = "riotId";
 
