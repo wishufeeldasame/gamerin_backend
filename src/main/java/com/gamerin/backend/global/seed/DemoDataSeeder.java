@@ -18,6 +18,7 @@ import com.gamerin.backend.domain.bookmark.dto.request.CreateBookmarkCollectionR
 import com.gamerin.backend.domain.bookmark.service.BookmarkCollectionService;
 import com.gamerin.backend.domain.follow.service.FollowService;
 import com.gamerin.backend.domain.game.model.GameStatsMode;
+import com.gamerin.backend.domain.game.model.GameType;
 import com.gamerin.backend.domain.hashtag.service.HashtagService;
 import com.gamerin.backend.domain.mention.service.MentionService;
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
@@ -280,7 +281,7 @@ public class DemoDataSeeder implements ApplicationRunner {
             for (int p = 0; p < PROGRAMS_PER_MENTOR; p++) {
                 String game = GAMES[(m + p) % GAMES.length];
                 programIds.add(mentoringService.registerProgram(principals.get(m), new MentoringProgramRequest(
-                        game, game + " 실력 향상 코칭 " + (p + 1), "리플레이 분석과 1:1 피드백을 제공합니다.",
+                        GameType.valueOf(game), game + " 실력 향상 코칭 " + (p + 1), "리플레이 분석과 1:1 피드백을 제공합니다.",
                         "평일 저녁 협의", 5_000L + (m * 2 + p) * 1_000L, List.of(game, "데모")
                 )).id());
             }

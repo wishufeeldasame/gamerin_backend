@@ -1,4 +1,7 @@
 spring:
+  jackson:
+    deserialization:
+      fail-on-numbers-for-enums: true  # enum 순번(2, "2")을 코드로 받지 않는다
   application:
     name: backend
 
