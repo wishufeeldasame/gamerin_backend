@@ -86,6 +86,14 @@ class GameCodeIntegrationTest {
         registerProgram("League of Legends")
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("gameName")))
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("PUBG, R6, LOL")));
+        for (Object ordinal : new Object[] {2, "2"}) {
+            mockMvc.perform(post("/api/v1/mentoring/programs")
+                            .header(HttpHeaders.AUTHORIZATION, token)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(
+                                    Map.of("gameName", ordinal, "title", "t", "content", "c", "price", 1000))))
+                    .andExpect(status().isBadRequest());
+        }
         mockMvc.perform(post("/api/v1/mentoring/programs")
                         .header(HttpHeaders.AUTHORIZATION, token)
                         .contentType(MediaType.APPLICATION_JSON)
