@@ -7,8 +7,8 @@ import jakarta.validation.constraints.Size;
 
 public record SignUpRequest(
         @NotBlank
-        @Size(min = 4, max = 20)
-        @Pattern(regexp = "^[a-z0-9._]+$", message = "아이디는 영문 소문자, 숫자, 점(.), 밑줄(_)만 사용할 수 있습니다.")
+        @Size(min = 3, max = 20)
+        @Pattern(regexp = "^[a-z0-9_]{3,20}$", message = "핸들은 영문 소문자, 숫자, 밑줄(_)만 사용할 수 있습니다.")
         String handle,
 
         @NotBlank
