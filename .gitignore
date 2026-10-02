@@ -52,5 +52,3 @@ out/
 .DS_Store
 Thumbs.db
 *.pem
-
-/docs
