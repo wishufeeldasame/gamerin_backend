@@ -36,6 +36,15 @@ public class ReportController {
         return ApiResponse.ok(reportService.getReportReasons());
     }
 
+    @GetMapping("/my")
+    @Operation(summary = "내 신고 내역 목록 조회", description = "로그인한 유저가 본인이 접수한 신고 목록을 최신순으로 페이징 조회합니다.")
+    public ApiResponse<org.springframework.data.domain.Page<ReportResponse>> getMyReports(
+                @AuthenticationPrincipal CustomUserPrincipal principal,
+                @org.springframework.data.web.PageableDefault(sort = "createdAt", direction = org.springframework.data.domain.Sort.Direction.DESC) org.springframework.data.domain.Pageable pageable
+        ) {
+            return ApiResponse.ok(reportService.getMyReports(principal, pageable));
+        }
+
     @PostMapping
     @Operation(summary = "통합 신고 접수", description = "게시글, 댓글, 유저, 멘토링, 메시지에 대한 신고를 접수합니다.")
     public ApiResponse<ReportResponse> createReport(

@@ -1,19 +1,27 @@
-// 신고/어드민 시스템 통합 서비스 (유저 신고 접수 + 어드민 관리 및 숨김 콘텐츠 실시간 연동 복구)
+// 신고/어드민 시스템 통합 서비스 (유저 신고 접수 + 어드민 관리 및 숨김 콘텐츠 실시간 연동 복구 + 원클릭 통합 판정)
 package com.gamerin.backend.domain.report.service;
 
-import com.gamerin.backend.domain.admin.repository.SystemConfigRepository;
 import com.gamerin.backend.domain.admin.entity.AdminAuditLog;
 import com.gamerin.backend.domain.admin.repository.AdminAuditLogRepository;
+import com.gamerin.backend.domain.admin.repository.SystemConfigRepository;
+import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
+import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
+import com.gamerin.backend.domain.message.entity.DirectMessage;
+import com.gamerin.backend.domain.message.repository.DirectMessageRepository;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostComment;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
+import com.gamerin.backend.domain.report.dto.request.AdminReportResolutionRequest;
 import com.gamerin.backend.domain.report.dto.request.ReportCreateRequest;
 import com.gamerin.backend.domain.report.dto.request.ReportSearchCondition;
 import com.gamerin.backend.domain.report.dto.request.ReportStatusUpdateRequest;
+import com.gamerin.backend.domain.report.dto.request.UserPenaltyCreateRequest;
+import com.gamerin.backend.domain.report.dto.response.AdminReportDetailResponse;
 import com.gamerin.backend.domain.report.dto.response.HiddenContentResponse;
 import com.gamerin.backend.domain.report.dto.response.ReportReasonResponse;
 import com.gamerin.backend.domain.report.dto.response.ReportResponse;
+import com.gamerin.backend.domain.report.dto.response.UserPenaltyResponse;
 import com.gamerin.backend.domain.report.entity.Report;
 import com.gamerin.backend.domain.report.entity.ReportCount;
 import com.gamerin.backend.domain.report.entity.ReportReasonCode;
@@ -23,12 +31,10 @@ import com.gamerin.backend.domain.report.repository.ReportCountRepository;
 import com.gamerin.backend.domain.report.repository.ReportRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
-import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
-import com.gamerin.backend.domain.message.entity.DirectMessage;
-import com.gamerin.backend.domain.message.repository.DirectMessageRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -53,6 +59,7 @@ public class ReportService {
     private final MentoringApplicationRepository mentoringApplicationRepository;
     private final DirectMessageRepository directMessageRepository;
     private final ReportCountInitializer reportCountInitializer;
+    private final UserPenaltyService userPenaltyService;
 
     public ReportService(
             ReportRepository reportRepository,
@@ -64,7 +71,8 @@ public class ReportService {
             AdminAuditLogRepository adminAuditLogRepository,
             MentoringApplicationRepository mentoringApplicationRepository,
             DirectMessageRepository directMessageRepository,
-            ReportCountInitializer reportCountInitializer) {
+            ReportCountInitializer reportCountInitializer,
+            UserPenaltyService userPenaltyService) {
         this.reportRepository = reportRepository;
         this.reportCountRepository = reportCountRepository;
         this.systemConfigRepository = systemConfigRepository;
@@ -75,6 +83,7 @@ public class ReportService {
         this.mentoringApplicationRepository = mentoringApplicationRepository;
         this.directMessageRepository = directMessageRepository;
         this.reportCountInitializer = reportCountInitializer;
+        this.userPenaltyService = userPenaltyService;
     }
 
     // ================= [유저 신고 관련] =================
@@ -86,6 +95,14 @@ public class ReportService {
         return Arrays.stream(ReportReasonCode.values())
                 .map(ReportReasonResponse::from)
                 .toList();
+    }
+
+    /**
+     * 일반 유저 본인의 접수 신고 목록 페이징 조회
+     */
+    public Page<ReportResponse> getMyReports(CustomUserPrincipal principal, Pageable pageable) {
+        return reportRepository.findByReporterIdOrderByCreatedAtDesc(principal.getUserId(), pageable)
+                .map(ReportResponse::from);
     }
 
     /**
@@ -135,7 +152,7 @@ public class ReportService {
         return ReportResponse.from(savedReport);
     }
 
-    // ================= [어드민 신고 관리 - 4단계] =================
+    // ================= [어드민 신고 관리] =================
 
     /**
      * 어드민 전용 신고 목록 검색 및 페이징 조회
@@ -151,7 +168,17 @@ public class ReportService {
     }
 
     /**
-     * 어드민 전용 신고 처리 상태 변경 (담당 어드민 할당)
+     * 어드민 전용 신고 상세 단건 조회 (기본 정보)
+     */
+    public ReportResponse getAdminReportById(UUID reportId) {
+        Report report = reportRepository.findById(reportId)
+                .orElseThrow(
+                        () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신고 내역을 찾을 수 없습니다. ID: " + reportId));
+        return ReportResponse.from(report);
+    }
+
+    /**
+     * 어드민 전용 신고 처리 상태 단순 변경 (담당 어드민 할당)
      */
     @Transactional
     public ReportResponse updateReportStatus(UUID reportId, ReportStatusUpdateRequest request,
@@ -166,7 +193,6 @@ public class ReportService {
         ReportStatus previousStatus = report.getStatus();
         report.updateStatus(request.status(), admin);
 
-        // 변경된 상태에 따른 감사 로그 액션 타입 매핑
         String actionType = switch (request.status()) {
             case IN_REVIEW -> "REPORT_IN_REVIEW";
             case RESOLVED -> "REPORT_RESOLVE";
@@ -180,7 +206,6 @@ public class ReportService {
                 request.status().getDescription(),
                 admin.getNickname());
 
-        // 동일 트랜잭션 내에서 관리자 감사 로그 적재
         adminAuditLogRepository.save(AdminAuditLog.create(
                 admin,
                 actionType,
@@ -192,7 +217,150 @@ public class ReportService {
         return ReportResponse.from(report);
     }
 
-    // ================= [어드민 숨김 콘텐츠 관리 - 4단계] =================
+    // ================= [어드민 신고 상세 및 원클릭 통합 판정] =================
+
+    /**
+     * 신고 코드(RPT-1001 등) 또는 UUID로 신고 상세 정보 조회 (프론트엔드 연동)
+     */
+    public AdminReportDetailResponse getAdminReportDetail(String reportIdOrCode) {
+        Report report = findReportByIdOrCode(reportIdOrCode);
+
+        // 1. 신고자 요약 정보
+        AdminReportDetailResponse.ReportUserSummary reporterSummary = createReporterSummary(report.getReporter());
+
+        // 2. 피신고자(대상자) 요약 정보 식별
+        User targetUser = resolveTargetUser(report.getTargetType(), report.getTargetId());
+        AdminReportDetailResponse.ReportUserSummary targetUserSummary = (targetUser != null)
+                ? createReporterSummary(targetUser)
+                : null;
+
+        // 3. 콘텐츠 숨김 여부
+        boolean isHidden = reportCountRepository
+                .findByTargetTypeAndTargetId(report.getTargetType(), report.getTargetId())
+                .map(ReportCount::isHidden)
+                .orElse(false);
+
+        return new AdminReportDetailResponse(
+                ReportResponse.from(report),
+                reporterSummary,
+                targetUserSummary,
+                isHidden);
+    }
+
+    /**
+     * 어드민 신고 검토 시작 (상태 -> IN_REVIEW 및 관리자 할당)
+     */
+    @Transactional
+    public AdminReportDetailResponse startReportReview(UUID adminId, String reportIdOrCode) {
+        Report report = findReportByIdOrCode(reportIdOrCode);
+        User admin = userRepository.findById(adminId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
+
+        report.updateStatus(ReportStatus.IN_REVIEW, admin);
+        reportRepository.save(report);
+
+        adminAuditLogRepository.save(AdminAuditLog.create(
+                admin,
+                "REPORT_IN_REVIEW",
+                report.getTargetType(),
+                report.getTargetId(),
+                null,
+                String.format("신고 검토 시작 (%s, 담당 관리자: %s)", report.getReportCode(), admin.getNickname())));
+
+        return getAdminReportDetail(reportIdOrCode);
+    }
+
+    /**
+     * 어드민 신고 원클릭 통합 판정 처리 (상태 변경 + 콘텐츠 숨김 + 유저 제재 + 감사 로그)
+     */
+    @Transactional
+    public AdminReportDetailResponse resolveReport(UUID adminId, String reportIdOrCode,
+            AdminReportResolutionRequest request) {
+
+        // [변경] 일반 조회 → 비관적 쓰기 락 조회로 교체 (동시 요청 중복 처리 방지)
+        Report report;
+        try {
+            UUID reportId = UUID.fromString(reportIdOrCode);
+            report = reportRepository.findByIdForUpdate(reportId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신고 건을 찾을 수 없습니다."));
+        } catch (IllegalArgumentException e) {
+            // UUID 형식이 아니면 신고 코드로 조회
+            report = reportRepository.findByReportCodeForUpdate(reportIdOrCode)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                            "신고 코드를 찾을 수 없습니다: " + reportIdOrCode));
+        }
+
+        // 이미 종결된 신고 중복 처리 방어 (락 획득 후 상태 재확인)
+        if (report.getStatus() == ReportStatus.RESOLVED || report.getStatus() == ReportStatus.REJECTED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 처리 완료되었거나 반려된 신고입니다.");
+        }
+
+        // 허용된 판정 상태 검증
+        if (request.decision() != ReportStatus.RESOLVED && request.decision() != ReportStatus.REJECTED) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "처리 결정은 RESOLVED(처리 완료) 또는 REJECTED(반려)만 가능합니다.");
+        }
+
+        User admin = userRepository.findById(adminId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
+
+        // 1. 신고 상태 변경
+        report.updateStatus(request.decision(), admin);
+        reportRepository.save(report);
+
+        // 2. 콘텐츠 숨김 처리 (처리 완료이고 숨김 체크된 경우)
+        if (request.decision() == ReportStatus.RESOLVED && request.hideTargetContent()
+                && isAutoHideSupported(report.getTargetType())) {
+            boolean hidden = hideTargetContent(report.getTargetType(), report.getTargetId());
+            if (hidden) {
+                ReportCount reportCount = getOrCreateReportCount(report.getTargetType(), report.getTargetId());
+                reportCount.hide();
+                reportCountRepository.save(reportCount);
+
+                adminAuditLogRepository.save(AdminAuditLog.create(
+                        admin,
+                        "CONTENT_HIDE",
+                        report.getTargetType(),
+                        report.getTargetId(),
+                        null,
+                        String.format("신고 처리에 따른 콘텐츠 관리자 숨김 (%s, ID: %s)", report.getTargetType(),
+                                report.getTargetId())));
+            }
+        }
+
+        // 3. 피신고자 제재 부여 (처리 완료이고 제재 유형이 선택된 경우)
+        if (request.decision() == ReportStatus.RESOLVED && request.penaltyType() != null) {
+            User targetUser = resolveTargetUser(report.getTargetType(), report.getTargetId());
+            if (targetUser != null) {
+                UserPenaltyCreateRequest penaltyRequest = new UserPenaltyCreateRequest(
+                        request.penaltyType(),
+                        request.reason(),
+                        null,
+                        report.getId());
+                userPenaltyService.createPenalty(adminId, targetUser.getId(), penaltyRequest);
+            }
+        }
+
+        // 4. 신고 처리 감사 로그 적재
+        String actionType = (request.decision() == ReportStatus.RESOLVED) ? "REPORT_RESOLVE" : "REPORT_REJECT";
+        String logDetails = String.format("신고 판정 완료 (%s: %s, 사유: %s%s)",
+                report.getReportCode(),
+                request.decision().getDescription(),
+                request.reason(),
+                request.internalMemo() != null ? ", 내부메모: " + request.internalMemo() : "");
+
+        adminAuditLogRepository.save(AdminAuditLog.create(
+                admin,
+                actionType,
+                report.getTargetType(),
+                report.getTargetId(),
+                null,
+                logDetails));
+
+        return getAdminReportDetail(reportIdOrCode);
+    }
+
+    // ================= [어드민 숨김 콘텐츠 관리] =================
 
     /**
      * 임계값 초과로 자동 숨김 처리된 콘텐츠 목록 조회
@@ -204,7 +372,6 @@ public class ReportService {
 
     @Transactional
     public HiddenContentResponse restoreHiddenContent(ReportTargetType targetType, UUID targetId, UUID adminId) {
-        // 게시글/댓글 등 실제 자동 숨김을 지원하는 콘텐츠 유형만 복구 허용
         if (!isAutoHideSupported(targetType)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "게시글 및 댓글 콘텐츠만 복구할 수 있습니다.");
         }
@@ -212,23 +379,18 @@ public class ReportService {
         ReportCount reportCount = reportCountRepository.findByTargetTypeAndTargetId(targetType, targetId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "해당 콘텐츠의 신고 카운트 정보를 찾을 수 없습니다."));
 
-        // 숨김 처리된 콘텐츠만 복구 허용 (중복 복구 및 미숨김 콘텐츠 임의 복구 차단)
         if (!reportCount.isHidden()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "숨김 처리된 콘텐츠만 복구할 수 있습니다.");
         }
 
-        // 4. 실제 게시글/댓글 원본 엔티티 복구를 먼저 수행하고 성공 여부 검증
-        // (Hard-Delete 등으로 원본 콘텐츠가 존재하지 않는 경우 404 차단하여 유령 복구 방지)
         boolean successfullyRestored = restoreTargetContent(targetType, targetId);
         if (!successfullyRestored) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "복구 대상 원본 콘텐츠를 찾을 수 없거나 이미 영구 삭제되었습니다.");
         }
 
-        // 5. 실제 원본 콘텐츠 복구가 성공한 경우에만 카운트 상태를 복구(isHidden=false)로 갱신
         reportCount.restore();
         ReportCount updated = reportCountRepository.save(reportCount);
 
-        // 6. 복구를 집행한 관리자 정보 조회 및 감사 로그(CONTENT_RESTORE) 적재
         User admin = userRepository.findById(adminId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 유저 정보를 찾을 수 없습니다."));
 
@@ -245,6 +407,53 @@ public class ReportService {
 
     // ================= [내부 헬퍼 메서드] =================
 
+    private Report findReportByIdOrCode(String reportIdOrCode) {
+        try {
+            UUID id = UUID.fromString(reportIdOrCode);
+            return reportRepository.findById(id)
+                    .orElseGet(() -> reportRepository.findByReportCode(reportIdOrCode)
+                            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                    "신고 내역을 찾을 수 없습니다: " + reportIdOrCode)));
+        } catch (IllegalArgumentException e) {
+            return reportRepository.findByReportCode(reportIdOrCode)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                            "신고 내역을 찾을 수 없습니다: " + reportIdOrCode));
+        }
+    }
+
+    private AdminReportDetailResponse.ReportUserSummary createReporterSummary(User user) {
+        long reportsCount = reportRepository.countByTargetTypeAndTargetId(ReportTargetType.USER, user.getId());
+        List<UserPenaltyResponse> penalties = userPenaltyService.getUserPenalties(user.getId(), PageRequest.of(0, 5))
+                .getContent();
+        String activeSanction = penalties.stream()
+                .filter(UserPenaltyResponse::isActive)
+                .findFirst()
+                .map(p -> p.penaltyType().getDescription())
+                .orElse("없음");
+
+        return new AdminReportDetailResponse.ReportUserSummary(
+                user.getId(),
+                user.getNickname(),
+                user.getHandle(),
+                user.getCreatedAt(),
+                reportsCount,
+                activeSanction);
+    }
+
+    private User resolveTargetUser(ReportTargetType targetType, UUID targetId) {
+        return switch (targetType) {
+            case USER -> userRepository.findById(targetId).orElse(null);
+            case POST -> postRepository.findById(targetId).map(Post::getAuthor).orElse(null);
+            case COMMENT -> postCommentRepository.findById(targetId).map(PostComment::getAuthor).orElse(null);
+            case MESSAGE -> directMessageRepository.findById(targetId).map(DirectMessage::getSender).orElse(null);
+            case MENTORING -> mentoringApplicationRepository.findById(targetId)
+                    .map(app -> (app.getProgram() != null && app.getProgram().getMentor() != null)
+                            ? app.getProgram().getMentor().getUser()
+                            : app.getMentee())
+                    .orElse(null);
+        };
+    }
+
     /**
      * 신고 대상 실제 존재 여부 검증
      */
@@ -256,7 +465,6 @@ public class ReportService {
                     .orElse(false);
             case USER -> userRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
             case MENTORING -> mentoringApplicationRepository.existsById(targetId);
-            // 메시지(DM)는 본인이 참여 중인 대화방의 메시지만 신고 가능 (제3자의 사적 메시지 탈취 방어)
             case MESSAGE ->
                 directMessageRepository.findActiveByIdAndParticipantUserId(targetId, reporterId).isPresent();
         };
@@ -300,15 +508,19 @@ public class ReportService {
         reportCount.incrementCount();
 
         long threshold = systemConfigRepository.findByConfigKey("AUTO_HIDE_THRESHOLD")
-                .map(config -> Long.parseLong(config.getConfigValue()))
+                .map(config -> {
+                    try {
+                        return Long.parseLong(config.getConfigValue().trim());
+                    } catch (NumberFormatException e) {
+                        return 5L; // 파싱 실패 시 기본값 5로 안전하게 대체
+                    }
+                })
                 .orElse(5L);
 
         boolean autoHideEnabled = systemConfigRepository.findByConfigKey("AUTO_HIDE_ENABLED")
                 .map(config -> Boolean.parseBoolean(config.getConfigValue()))
                 .orElse(true);
 
-        // 실제 활성 상태(deletedAt == null)인 콘텐츠를 시스템이 성공적으로 숨긴 경우에만 isHidden=true 설정
-        // (작성자가 이미 직접 삭제한 콘텐츠가 자동 숨김 목록에 들어가서 오복구되는 현상 방지)
         if (autoHideEnabled && isAutoHideSupported(targetType) && reportCount.getReportCount() >= threshold
                 && !reportCount.isHidden()) {
             boolean successfullyHidden = hideTargetContent(targetType, targetId);
@@ -331,19 +543,14 @@ public class ReportService {
      * 독립 트랜잭션 초기화와 비관적 락을 결합하여 트랜잭션 중단 없이 안전하게 ReportCount 조회/생성
      */
     private ReportCount getOrCreateReportCount(ReportTargetType targetType, UUID targetId) {
-        // 1. 레코드가 없으면 독립 트랜잭션(REQUIRES_NEW)으로 안전하게 생성 시도 (충돌 발생 시에도 메인 트랜잭션 보호)
         reportCountInitializer.initIfNotExists(targetType, targetId);
 
-        // 2. 비관적 쓰기 락(FOR UPDATE)으로 행 잠금을 획득하고 최신 상태 조회
         return reportCountRepository.findByTargetTypeAndTargetId(targetType, targetId)
                 .orElseThrow(() -> new IllegalStateException("신고 카운트 레코드를 초기화할 수 없습니다."));
     }
 
     /**
      * 실제 대상 콘텐츠 숨김(소프트 삭제) 수행
-     * 
-     * @return 실제 활성 콘텐츠를 시스템이 소프트 삭제했으면 true, 이미 삭제된 상태였으면
-     *         false
      */
     private boolean hideTargetContent(ReportTargetType targetType, UUID targetId) {
         if (targetType == ReportTargetType.POST) {
@@ -363,10 +570,8 @@ public class ReportService {
         return false;
     }
 
-/**
+    /**
      * 실제 대상 콘텐츠 복구 수행 (원본 엔티티 존재 확인 및 소프트 삭제 복원)
-     *
-     * @return 원본 콘텐츠가 존재하여 정상 복원되었으면 true, 영구 삭제 등으로 원본이 없으면 false
      */
     private boolean restoreTargetContent(ReportTargetType targetType, UUID targetId) {
         if (targetType == ReportTargetType.POST) {

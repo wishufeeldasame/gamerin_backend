@@ -39,6 +39,8 @@ class GameCodeIntegrationTest {
     private JwtTokenProvider jwtTokenProvider;
     @Autowired
     private UserRepository userRepository;
+    @Autowired
+    private com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository mentorProfileRepository;
 
     private String token;
 
@@ -55,6 +57,10 @@ class GameCodeIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"about\":\"멘토\"}"))
                 .andExpect(status().isOk());
+
+        com.gamerin.backend.domain.mentoring.entity.MentorProfile mentorProfile = mentorProfileRepository.findById(user.getId()).orElseThrow();
+        mentorProfile.setStatus(com.gamerin.backend.domain.mentoring.entity.MentorStatus.ACTIVE);
+        mentorProfileRepository.saveAndFlush(mentorProfile);
     }
 
     @Test

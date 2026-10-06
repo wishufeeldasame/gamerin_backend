@@ -30,8 +30,8 @@ public interface UserPenaltyRepository extends JpaRepository<UserPenalty, UUID> 
     @Query("SELECT COUNT(p) > 0 FROM UserPenalty p WHERE p.user.id = :userId AND p.isActive = true AND p.penaltyType <> com.gamerin.backend.domain.report.entity.PenaltyType.WARNING")
     boolean existsActiveSuspensionByUserId(@Param("userId") UUID userId);
 
-    // 특정 유저의 현재 제재 정보 조회
-    List<UserPenalty> findByUserIdAndIsActiveTrue(UUID userId);
+    // 특정 유저의 현재 제재 정보 조회 내림차순 정렬
+    List<UserPenalty> findByUserIdAndIsActiveTrueOrderByCreatedAtDesc(UUID userId);
 
     // 특정 유저의 전체 제재 내역 조회
     Page<UserPenalty> findByUserIdOrderByCreatedAtDesc(UUID userId, Pageable pageable);

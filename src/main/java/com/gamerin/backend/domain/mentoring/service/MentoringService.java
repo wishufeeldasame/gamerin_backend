@@ -27,6 +27,7 @@ import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramRespons
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringReviewResponse;
 import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
+import com.gamerin.backend.domain.mentoring.entity.MentorStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
 import com.gamerin.backend.domain.mentoring.entity.MentoringReview;
@@ -84,27 +85,28 @@ public class MentoringService {
     }
 
     @Transactional
-    public MentorProfileResponse registerMentor(CustomUserPrincipal principal, MentorRegistrationRequest request) {
-        // 멘토 등록 확인
-        if (mentorProfileRepository.existsById(principal.getUserId())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 멘토로 등록된 사용자입니다.");
+        public MentorProfileResponse registerMentor(CustomUserPrincipal principal, MentorRegistrationRequest request) {
+           // 멘토 등록 확인
+            if (mentorProfileRepository.existsById(principal.getUserId())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 멘토로 등록된 사용자입니다.");
+            }
+
+           // 유저 엔티티 조회
+            User user = userRepository.findById(principal.getUserId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
+
+           // 멘토 등록 시 마일리지 지갑 생성 확인
+            mileageService.getOrCreateWallet(user);
+
+           // 멘토 프로필 생성 및 저장
+            MentorProfile profile = new MentorProfile();
+            profile.setUser(user);
+            profile.setAbout(request.about());
+            profile.setStatus(MentorStatus.PENDING_APPROVAL);// <- [추가] 승인 대기 상태로 등록
+
+            MentorProfile savedProfile = mentorProfileRepository.save(profile);
+            return MentorProfileResponse.from(savedProfile);
         }
-
-        // 유저 엔티티 조회
-        User user = userRepository.findById(principal.getUserId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
-
-        // 멘토 등록 시 마일리지 지갑 생성 확인
-        mileageService.getOrCreateWallet(user);
-
-        // 멘토 프로필 생성 및 저장
-        MentorProfile profile = new MentorProfile();
-        profile.setUser(user);
-        profile.setAbout(request.about());
-
-        MentorProfile savedProfile = mentorProfileRepository.save(profile);
-        return MentorProfileResponse.from(savedProfile);
-    }
 
     // 멘토 프로필 조회
     @Transactional(readOnly = true)
@@ -123,14 +125,19 @@ public class MentoringService {
     }
 
     @Transactional
-    public MentoringProgramResponse registerProgram(CustomUserPrincipal principal, MentoringProgramRequest request) {
-        if (request.price() == null || request.price() < 0) {
-            throw new IllegalArgumentException("가격은 0원 이상이어야 합니다.");
-        }
+        public MentoringProgramResponse registerProgram(CustomUserPrincipal principal, MentoringProgramRequest request) {
+            if (request.price() == null || request.price() < 0) {
+                throw new IllegalArgumentException("가격은 0원 이상이어야 합니다.");
+            }
 
-        // 현재 사용자의 멘토 프로필 조회 (멘토 등록 여부 확인)
-        MentorProfile mentor = mentorProfileRepository.findById(principal.getUserId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "멘토로 등록되지 않은 사용자입니다."));
+            // 현재 사용자의 멘토 프로필 조회 (멘토 등록 여부 확인)
+            MentorProfile mentor = mentorProfileRepository.findById(principal.getUserId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "멘토로 등록되지 않은 사용자입니다."));
+
+            // [추가] 관리자 승인이 완료된 멘토만 프로그램 등록 가능
+            if (mentor.getStatus() != MentorStatus.ACTIVE) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 승인이 완료된 멘토만 프로그램을 등록할 수 있습니다.");
+            }
 
         MentoringProgram program = new MentoringProgram();
         program.setMentor(mentor);
