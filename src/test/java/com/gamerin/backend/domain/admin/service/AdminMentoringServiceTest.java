@@ -248,9 +248,16 @@ class AdminMentoringServiceTest {
 
         given(mentoringProgramRepository.searchProgramsForAdmin(ProgramStatus.ACTIVE, "코칭", pageable))
                 .willReturn(programPage);
-        given(mentoringApplicationRepository.countByProgramId(programId)).willReturn(8L);
-        given(reportRepository.countByTargetTypeAndTargetId(ReportTargetType.MENTORING, programId))
-                .willReturn(2L);
+        // 서비스는 일괄 집계 메서드를 사용하므로 Object[] 형태로 stub
+        List<Object[]> sessionRows = new java.util.ArrayList<>();
+        sessionRows.add(new Object[]{programId, 8L});
+        List<Object[]> reportRows = new java.util.ArrayList<>();
+        reportRows.add(new Object[]{programId, 2L});
+        given(mentoringApplicationRepository.countByProgramIdIn(List.of(programId)))
+                .willReturn(sessionRows);
+        given(reportRepository.countByTargetTypeAndTargetIdIn(ReportTargetType.MENTORING, List.of(programId)))
+                .willReturn(reportRows);
+
 
         // when
         Page<AdminMentoringProgramResponse> result = adminMentoringService.getPrograms(ProgramStatus.ACTIVE, "코칭", pageable);

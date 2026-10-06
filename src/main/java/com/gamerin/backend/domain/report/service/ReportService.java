@@ -270,31 +270,43 @@ public class ReportService {
         return getAdminReportDetail(reportIdOrCode);
     }
 
-/**
-         * 어드민 신고 원클릭 통합 판정 처리 (상태 변경 + 콘텐츠 숨김 + 유저 제재 + 감사 로그)
-         */
-        @Transactional
-        public AdminReportDetailResponse resolveReport(UUID adminId, String reportIdOrCode,
-                AdminReportResolutionRequest request) {
-            Report report = findReportByIdOrCode(reportIdOrCode);
+    /**
+     * 어드민 신고 원클릭 통합 판정 처리 (상태 변경 + 콘텐츠 숨김 + 유저 제재 + 감사 로그)
+     */
+    @Transactional
+    public AdminReportDetailResponse resolveReport(UUID adminId, String reportIdOrCode,
+            AdminReportResolutionRequest request) {
 
-            // [5번 이슈] 이미 종결된 신고 중복 처리 방어
-            if (report.getStatus() == ReportStatus.RESOLVED || report.getStatus() == ReportStatus.REJECTED) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 처리 완료되었거나 반려된 신고입니다.");
-            }
+        // [변경] 일반 조회 → 비관적 쓰기 락 조회로 교체 (동시 요청 중복 처리 방지)
+        Report report;
+        try {
+            UUID reportId = UUID.fromString(reportIdOrCode);
+            report = reportRepository.findByIdForUpdate(reportId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신고 건을 찾을 수 없습니다."));
+        } catch (IllegalArgumentException e) {
+            // UUID 형식이 아니면 신고 코드로 조회
+            report = reportRepository.findByReportCodeForUpdate(reportIdOrCode)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                            "신고 코드를 찾을 수 없습니다: " + reportIdOrCode));
+        }
 
-            User admin = userRepository.findById(adminId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
+        // 이미 종결된 신고 중복 처리 방어 (락 획득 후 상태 재확인)
+        if (report.getStatus() == ReportStatus.RESOLVED || report.getStatus() == ReportStatus.REJECTED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 처리 완료되었거나 반려된 신고입니다.");
+        }
 
-            // [12번 이슈] 허용된 판정 상태(RESOLVED, REJECTED)만 통과
-            if (request.decision() != ReportStatus.RESOLVED && request.decision() != ReportStatus.REJECTED) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "처리 결정은 RESOLVED(처리 완료) 또는 REJECTED(반려)만 가능합니다.");
-            }
+        // 허용된 판정 상태 검증
+        if (request.decision() != ReportStatus.RESOLVED && request.decision() != ReportStatus.REJECTED) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "처리 결정은 RESOLVED(처리 완료) 또는 REJECTED(반려)만 가능합니다.");
+        }
 
-            // 1. 신고 상태 변경 (RESOLVED 또는 REJECTED)
-            report.updateStatus(request.decision(), admin);
-            reportRepository.save(report);
+        User admin = userRepository.findById(adminId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
+
+        // 1. 신고 상태 변경
+        report.updateStatus(request.decision(), admin);
+        reportRepository.save(report);
 
         // 2. 콘텐츠 숨김 처리 (처리 완료이고 숨김 체크된 경우)
         if (request.decision() == ReportStatus.RESOLVED && request.hideTargetContent()

@@ -81,31 +81,45 @@ public class AdminSettingsService {
         public List<SystemConfigResponse> updateMultipleConfigs(UUID adminId, Map<String, String> configs) {
             User admin = userRepository.findById(adminId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 유저 정보를 찾을 수 없습니다."));
-    
-            // [추가] 일괄 수정 대상 전체에 대해 사전 유효성 검증 (하나라도 오류 시 전체 롤백)
+
+            // [사전 검증 1] 값 유효성 검증 (하나라도 오류 시 전체 롤백)
             for (Map.Entry<String, String> entry : configs.entrySet()) {
                 validateConfigValue(entry.getKey(), entry.getValue());
             }
-    
+
+            // [사전 검증 2] 키 존재 여부 일괄 확인 (쿼리 1번) — 없는 키가 있으면 즉시 404
+            Map<String, SystemConfig> configMap = systemConfigRepository
+                    .findByConfigKeyIn(configs.keySet())
+                    .stream()
+                    .collect(java.util.stream.Collectors.toMap(SystemConfig::getConfigKey, c -> c));
+
+            List<String> missingKeys = configs.keySet().stream()
+                    .filter(key -> !configMap.containsKey(key))
+                    .toList();
+            if (!missingKeys.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "존재하지 않는 설정 키입니다: " + missingKeys);
+            }
+
+            // 검증 통과 후 일괄 수정 (조회 결과 재사용, 추가 쿼리 없음)
             for (Map.Entry<String, String> entry : configs.entrySet()) {
                 String key = entry.getKey();
                 String newValue = entry.getValue().trim();
-    
-                systemConfigRepository.findByConfigKey(key).ifPresent(config -> {
-                    String oldValue = config.getConfigValue();
-                    config.updateValue(newValue);
-                    systemConfigRepository.save(config);
-    
-                    adminAuditLogRepository.save(AdminAuditLog.create(
-                            admin,
-                            "SYSTEM_CONFIG_UPDATE",
-                            ReportTargetType.USER,
-                            admin.getId(),
-                            null,
-                            String.format("시스템 설정 변경 [%s: %s -> %s]", key, oldValue, newValue)));
-                });
+                SystemConfig config = configMap.get(key);
+
+                String oldValue = config.getConfigValue();
+                config.updateValue(newValue);
+                systemConfigRepository.save(config);
+
+                adminAuditLogRepository.save(AdminAuditLog.create(
+                        admin,
+                        "SYSTEM_CONFIG_UPDATE",
+                        ReportTargetType.USER,
+                        admin.getId(),
+                        null,
+                        String.format("시스템 설정 변경 [%s: %s -> %s]", key, oldValue, newValue)));
             }
-    
+
             return getAllConfigs();
         }
 

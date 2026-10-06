@@ -38,9 +38,16 @@ public interface MentoringProgramRepository extends JpaRepository<MentoringProgr
 
         long countByStatusAndDeletedAtIsNull(ProgramStatus status);
 
-        @Query("SELECT p FROM MentoringProgram p " +
+        @Query(value = "SELECT DISTINCT p FROM MentoringProgram p " +
+                        "JOIN FETCH p.mentor m " +
+                        "JOIN FETCH m.user " +
                         "WHERE (:status IS NULL OR p.status = :status) " +
-                        "AND (:keyword IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR LOWER(p.mentor.user.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')))")
+                        "AND (:keyword IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR LOWER(m.user.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')))",
+                        countQuery = "SELECT COUNT(DISTINCT p) FROM MentoringProgram p " +
+                        "JOIN p.mentor m " +
+                        "JOIN m.user u " +
+                        "WHERE (:status IS NULL OR p.status = :status) " +
+                        "AND (:keyword IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR LOWER(u.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')))")
 
         Page<MentoringProgram> searchProgramsForAdmin(
                         @Param("status") ProgramStatus status,

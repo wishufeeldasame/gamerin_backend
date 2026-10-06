@@ -220,13 +220,15 @@ class AdminReportServiceTest {
                     true, // hideTargetContent
                     PenaltyType.SUSPENSION_7D, // 제재 7일 정지
                     "반복적인 욕설 및 비방 행위 확인",
-                    "1차 7일 정지 부여함",
-                    false);
+                    "1차 7일 정지 부여함");
+
     
-            given(reportRepository.findById(reportId)).willReturn(Optional.of(report));
+            given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
+            given(reportRepository.findById(reportId)).willReturn(Optional.of(report)); // getAdminReportDetail 재조회용
             given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
             given(postRepository.findByIdAndDeletedAtIsNull(postId)).willReturn(Optional.of(post));
             mockCommonReportDetailDependencies();
+
     
             // when
             AdminReportDetailResponse response = reportService.resolveReport(adminId, reportId.toString(),request);
@@ -257,12 +259,14 @@ class AdminReportServiceTest {
                 false,
                 null,
                 "정상적인 게임 공략 게시글로 확인됨",
-                null,
-                false);
+                null);
 
-        given(reportRepository.findById(reportId)).willReturn(Optional.of(report));
+
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
+        given(reportRepository.findById(reportId)).willReturn(Optional.of(report)); // getAdminReportDetail 재조회용
         given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
         mockCommonReportDetailDependencies();
+
 
         // when
         AdminReportDetailResponse response = reportService.resolveReport(adminId, reportId.toString(),

@@ -99,8 +99,8 @@ class AdminSettingsServiceTest {
         SystemConfig c2 = SystemConfig.create("AUTO_HIDE_THRESHOLD", "5", "설명2");
 
         given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
-        given(systemConfigRepository.findByConfigKey("AUTO_HIDE_ENABLED")).willReturn(Optional.of(c1));
-        given(systemConfigRepository.findByConfigKey("AUTO_HIDE_THRESHOLD")).willReturn(Optional.of(c2));
+        // 서비스는 findByConfigKeyIn으로 일괄 조회하므로 anyCollection() stub 사용
+        given(systemConfigRepository.findByConfigKeyIn(any())).willReturn(List.of(c1, c2));
         given(systemConfigRepository.findAll()).willReturn(List.of(c1, c2));
 
         Map<String, String> updateMap = Map.of(
