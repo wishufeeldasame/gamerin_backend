@@ -41,19 +41,10 @@ public class AdminUserService {
      */
     public Page<AdminUserResponse> getAdminUsers(String query, UserStatus status, Boolean hasSanction,
             Pageable pageable) {
-        Page<User> usersPage = userRepository.searchUsersForAdmin(query, status, pageable);
+        // [변경] hasSanction을 DB 쿼리 조건으로 위임하여 정확한 페이지 결과 보장
+        Page<User> usersPage = userRepository.searchUsersForAdmin(query, status, hasSanction, pageable);
 
-        List<AdminUserResponse> content = usersPage.getContent().stream()
-                .map(this::mapToAdminUserResponse)
-                .filter(res -> {
-                    if (hasSanction == null)
-                        return true;
-                    boolean hasActive = !"없음".equals(res.activeSanction());
-                    return hasSanction ? hasActive : !hasActive;
-                })
-                .toList();
-
-        return new PageImpl<>(content, pageable, usersPage.getTotalElements());
+        return usersPage.map(this::mapToAdminUserResponse);
     }
 
     /**
@@ -85,7 +76,7 @@ public class AdminUserService {
         long reportsCount = reportRepository.countByTargetTypeAndTargetId(ReportTargetType.USER, user.getId());
 
         // 2. 현재 활성 제재 정보 조회
-        List<UserPenalty> activePenalties = userPenaltyRepository.findByUserIdAndIsActiveTrue(user.getId());
+        List<UserPenalty> activePenalties = userPenaltyRepository.findByUserIdAndIsActiveTrueOrderByCreatedAtDesc(user.getId());
         String activeSanction = null;
         UUID activePenaltyId = null;
 

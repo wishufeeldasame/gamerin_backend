@@ -6,6 +6,7 @@ import com.gamerin.backend.domain.admin.entity.SystemConfig;
 import com.gamerin.backend.domain.admin.repository.AdminAuditLogRepository;
 import com.gamerin.backend.domain.admin.repository.SystemConfigRepository;
 import com.gamerin.backend.domain.report.entity.ReportTargetType;
+import com.gamerin.backend.domain.report.entity.PenaltyType;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import org.springframework.http.HttpStatus;
@@ -44,60 +45,112 @@ public class AdminSettingsService {
     }
 
     /**
-     * 단건 시스템 설정값 수정
-     */
-    @Transactional
-    public SystemConfigResponse updateConfig(UUID adminId, String configKey, String newValue) {
-        User admin = userRepository.findById(adminId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 유저 정보를 찾을 수 없습니다."));
-
-        SystemConfig config = systemConfigRepository.findByConfigKey(configKey)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "설정 키를 찾을 수 없습니다: " +
-                        configKey));
-
-        String oldValue = config.getConfigValue();
-        config.updateValue(newValue);
-        SystemConfig saved = systemConfigRepository.save(config);
-
-        // 감사 로그 적재
-        adminAuditLogRepository.save(AdminAuditLog.create(
-                admin,
-                "SYSTEM_CONFIG_UPDATE",
-                ReportTargetType.USER, // 시스템 설정은 별도 TargetType이 없으므로 USER 또는 기본 식별자 활용
-                admin.getId(),
-                null,
-                String.format("시스템 설정 변경 [%s: %s -> %s]", configKey, oldValue, newValue)));
-
-        return SystemConfigResponse.from(saved);
-    }
-
-    /**
-     * 다건 시스템 설정값 일괄 수정 (프론트엔드 일괄 저장 화면 대응)
-     */
-    @Transactional
-    public List<SystemConfigResponse> updateMultipleConfigs(UUID adminId, Map<String, String> configs) {
-        User admin = userRepository.findById(adminId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 유저 정보를 찾을 수 없습니다."));
-
-        for (Map.Entry<String, String> entry : configs.entrySet()) {
-            String key = entry.getKey();
-            String newValue = entry.getValue();
-
-            systemConfigRepository.findByConfigKey(key).ifPresent(config -> {
-                String oldValue = config.getConfigValue();
-                config.updateValue(newValue);
-                systemConfigRepository.save(config);
-
-                adminAuditLogRepository.save(AdminAuditLog.create(
-                        admin,
-                        "SYSTEM_CONFIG_UPDATE",
-                        ReportTargetType.USER,
-                        admin.getId(),
-                        null,
-                        String.format("시스템 설정 변경 [%s: %s -> %s]", key, oldValue, newValue)));
-            });
+         * 단건 시스템 설정값 수정
+         */
+        @Transactional
+        public SystemConfigResponse updateConfig(UUID adminId, String configKey, String newValue) {
+            User admin = userRepository.findById(adminId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 유저 정보를 찾을 수 없습니다."));
+    
+            SystemConfig config = systemConfigRepository.findByConfigKey(configKey)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "설정 키를 찾을 수 없습니다: " + configKey));
+    
+            // [추가] 값 유효성 검증
+            validateConfigValue(configKey, newValue);
+    
+            String oldValue = config.getConfigValue();
+            config.updateValue(newValue.trim());
+            SystemConfig saved = systemConfigRepository.save(config);
+    
+            // 감사 로그 적재
+            adminAuditLogRepository.save(AdminAuditLog.create(
+                    admin,
+                    "SYSTEM_CONFIG_UPDATE",
+                    ReportTargetType.USER,
+                    admin.getId(),
+                    null,
+                    String.format("시스템 설정 변경 [%s: %s -> %s]", configKey, oldValue, newValue.trim())));
+    
+            return SystemConfigResponse.from(saved);
         }
 
-        return getAllConfigs();
-    }
+    /**
+         * 다건 시스템 설정값 일괄 수정 (프론트엔드 일괄 저장 화면 대응)
+         */
+        @Transactional
+        public List<SystemConfigResponse> updateMultipleConfigs(UUID adminId, Map<String, String> configs) {
+            User admin = userRepository.findById(adminId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 유저 정보를 찾을 수 없습니다."));
+    
+            // [추가] 일괄 수정 대상 전체에 대해 사전 유효성 검증 (하나라도 오류 시 전체 롤백)
+            for (Map.Entry<String, String> entry : configs.entrySet()) {
+                validateConfigValue(entry.getKey(), entry.getValue());
+            }
+    
+            for (Map.Entry<String, String> entry : configs.entrySet()) {
+                String key = entry.getKey();
+                String newValue = entry.getValue().trim();
+    
+                systemConfigRepository.findByConfigKey(key).ifPresent(config -> {
+                    String oldValue = config.getConfigValue();
+                    config.updateValue(newValue);
+                    systemConfigRepository.save(config);
+    
+                    adminAuditLogRepository.save(AdminAuditLog.create(
+                            admin,
+                            "SYSTEM_CONFIG_UPDATE",
+                            ReportTargetType.USER,
+                            admin.getId(),
+                            null,
+                            String.format("시스템 설정 변경 [%s: %s -> %s]", key, oldValue, newValue)));
+                });
+            }
+    
+            return getAllConfigs();
+        }
+
+    /**
+         * [신규 추가] 시스템 설정 키별 타입 및 범위 검증
+         */
+        private void validateConfigValue(String configKey, String newValue) {
+            if (newValue == null || newValue.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "설정값은 비어 있을 수 없습니다.");
+            }
+    
+            String value = newValue.trim();
+            switch (configKey) {
+                case "AUTO_HIDE_THRESHOLD" -> {
+                    try {
+                        long val = Long.parseLong(value);
+                        if (val < 1) {
+                            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "자동 숨김 임계값은 1 이상의 정수여야 합니다.");
+                        }
+                    } catch (NumberFormatException e) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "자동 숨김 임계값은 올바른 숫자여야 합니다: " + value);
+                    }
+                }
+                case "AUTO_HIDE_ENABLED", "NEW_REPORT_ALERT" -> {
+                    if (!value.equalsIgnoreCase("true") && !value.equalsIgnoreCase("false")) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, configKey + " 설정값은 true 또는 false여야 합니다.");
+                    }
+                }
+                case "RE_REVIEW_DEADLINE_DAYS" -> {
+                    try {
+                        long days = Long.parseLong(value);
+                        if (days < 1) {
+                            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "신고 재검토 기한은 1일 이상이어야 합니다.");
+                        }
+                    } catch (NumberFormatException e) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "재검토 기한은 올바른 숫자여야 합니다: " + value);
+                    }
+                }
+                case "DEFAULT_SANCTION_LEVEL" -> {
+                    try {
+                        PenaltyType.valueOf(value);
+                    } catch (IllegalArgumentException e) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "유효하지 않은 기본 제재 수준입니다: " + value);
+                    }
+                }
+            }
+        }
 }

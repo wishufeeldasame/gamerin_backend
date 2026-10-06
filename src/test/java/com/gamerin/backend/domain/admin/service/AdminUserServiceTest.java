@@ -74,13 +74,13 @@ class AdminUserServiceTest {
         Pageable pageable = PageRequest.of(0, 10);
         Page<User> userPage = new PageImpl<>(List.of(user1, user2), pageable, 2);
 
-        given(userRepository.searchUsersForAdmin("user", UserStatus.ACTIVE, pageable))
-                .willReturn(userPage);
+        given(userRepository.searchUsersForAdmin("user", UserStatus.ACTIVE, null, pageable))
+            .willReturn(userPage);
 
         // user1은 신고 3회, 제재 없음
         given(reportRepository.countByTargetTypeAndTargetId(ReportTargetType.USER, user1Id))
                 .willReturn(3L);
-        given(userPenaltyRepository.findByUserIdAndIsActiveTrue(user1Id))
+        given(userPenaltyRepository.findByUserIdAndIsActiveTrueOrderByCreatedAtDesc(user1Id))
                 .willReturn(List.of());
 
         // user2는 신고 5회, 7일 정지 제재 있음
@@ -89,7 +89,7 @@ class AdminUserServiceTest {
         UserPenalty activePenalty = UserPenalty.create(
                 user2, null, PenaltyType.SUSPENSION_7D, "욕설", OffsetDateTime.now().plusDays(7), null);
         ReflectionTestUtils.setField(activePenalty, "id", UUID.randomUUID());
-        given(userPenaltyRepository.findByUserIdAndIsActiveTrue(user2Id))
+        given(userPenaltyRepository.findByUserIdAndIsActiveTrueOrderByCreatedAtDesc(user2Id))
                 .willReturn(List.of(activePenalty));
 
         // when
@@ -115,7 +115,7 @@ class AdminUserServiceTest {
         // given
         given(userRepository.findByHandle("user01")).willReturn(Optional.of(user1));
         given(reportRepository.countByTargetTypeAndTargetId(ReportTargetType.USER, user1Id)).willReturn(2L);
-        given(userPenaltyRepository.findByUserIdAndIsActiveTrue(user1Id)).willReturn(List.of());
+        given(userPenaltyRepository.findByUserIdAndIsActiveTrueOrderByCreatedAtDesc(user1Id)).willReturn(List.of());
 
         // when
         AdminUserResponse response = adminUserService.getAdminUserByHandle("@user01");

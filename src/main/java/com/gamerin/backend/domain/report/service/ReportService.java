@@ -270,19 +270,31 @@ public class ReportService {
         return getAdminReportDetail(reportIdOrCode);
     }
 
-    /**
-     * 어드민 신고 원클릭 통합 판정 처리 (상태 변경 + 콘텐츠 숨김 + 유저 제재 + 감사 로그)
-     */
-    @Transactional
-    public AdminReportDetailResponse resolveReport(UUID adminId, String reportIdOrCode,
-            AdminReportResolutionRequest request) {
-        Report report = findReportByIdOrCode(reportIdOrCode);
-        User admin = userRepository.findById(adminId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
+/**
+         * 어드민 신고 원클릭 통합 판정 처리 (상태 변경 + 콘텐츠 숨김 + 유저 제재 + 감사 로그)
+         */
+        @Transactional
+        public AdminReportDetailResponse resolveReport(UUID adminId, String reportIdOrCode,
+                AdminReportResolutionRequest request) {
+            Report report = findReportByIdOrCode(reportIdOrCode);
 
-        // 1. 신고 상태 변경 (RESOLVED 또는 REJECTED)
-        report.updateStatus(request.decision(), admin);
-        reportRepository.save(report);
+            // [5번 이슈] 이미 종결된 신고 중복 처리 방어
+            if (report.getStatus() == ReportStatus.RESOLVED || report.getStatus() == ReportStatus.REJECTED) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 처리 완료되었거나 반려된 신고입니다.");
+            }
+
+            User admin = userRepository.findById(adminId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
+
+            // [12번 이슈] 허용된 판정 상태(RESOLVED, REJECTED)만 통과
+            if (request.decision() != ReportStatus.RESOLVED && request.decision() != ReportStatus.REJECTED) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "처리 결정은 RESOLVED(처리 완료) 또는 REJECTED(반려)만 가능합니다.");
+            }
+
+            // 1. 신고 상태 변경 (RESOLVED 또는 REJECTED)
+            report.updateStatus(request.decision(), admin);
+            reportRepository.save(report);
 
         // 2. 콘텐츠 숨김 처리 (처리 완료이고 숨김 체크된 경우)
         if (request.decision() == ReportStatus.RESOLVED && request.hideTargetContent()
@@ -484,7 +496,13 @@ public class ReportService {
         reportCount.incrementCount();
 
         long threshold = systemConfigRepository.findByConfigKey("AUTO_HIDE_THRESHOLD")
-                .map(config -> Long.parseLong(config.getConfigValue()))
+                .map(config -> {
+                    try {
+                        return Long.parseLong(config.getConfigValue().trim());
+                    } catch (NumberFormatException e) {
+                        return 5L; // 파싱 실패 시 기본값 5로 안전하게 대체
+                    }
+                })
                 .orElse(5L);
 
         boolean autoHideEnabled = systemConfigRepository.findByConfigKey("AUTO_HIDE_ENABLED")

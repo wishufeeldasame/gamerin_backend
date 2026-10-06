@@ -24,6 +24,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -102,46 +104,47 @@ public class AdminMentoringService {
          * 멘토 신청 승인
          */
         public AdminMentorResponse approveMentor(UUID adminId, UUID userId) {
-            User admin = findAdmin(adminId);
-            MentorProfile profile = mentorProfileRepository.findById(userId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "멘토 프로필 정보를 찾을 수 없습니다."));
-    
-            profile.setStatus(MentorStatus.ACTIVE);
-            MentorProfile saved = mentorProfileRepository.save(profile);
-    
-            adminAuditLogRepository.save(AdminAuditLog.create(
-                    admin,
-                    "MENTOR_APPROVE",
-                    ReportTargetType.USER,
-                    userId,
-                    null,
-                    String.format("멘토 신청 승인 (@%s, %s)", profile.getUser().getHandle(), profile.getUser().getNickname())
-            ));
-    
-            return AdminMentorResponse.from(saved);
+                User admin = findAdmin(adminId);
+                MentorProfile profile = mentorProfileRepository.findById(userId)
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                "멘토 프로필 정보를 찾을 수 없습니다."));
+
+                profile.setStatus(MentorStatus.ACTIVE);
+                MentorProfile saved = mentorProfileRepository.save(profile);
+
+                adminAuditLogRepository.save(AdminAuditLog.create(
+                                admin,
+                                "MENTOR_APPROVE",
+                                ReportTargetType.USER,
+                                userId,
+                                null,
+                                String.format("멘토 신청 승인 (@%s, %s)", profile.getUser().getHandle(),
+                                                profile.getUser().getNickname())));
+
+                return AdminMentorResponse.from(saved);
         }
 
         /**
          * 멘토 신청 반려 또는 비활성화
          */
         public AdminMentorResponse rejectMentor(UUID adminId, UUID userId, String reason) {
-            User admin = findAdmin(adminId);
-            MentorProfile profile = mentorProfileRepository.findById(userId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "멘토 프로필 정보를 찾을 수 없습니다."));
-    
-            profile.setStatus(MentorStatus.INACTIVE);
-            MentorProfile saved = mentorProfileRepository.save(profile);
-    
-            adminAuditLogRepository.save(AdminAuditLog.create(
-                    admin,
-                    "MENTOR_REJECT",
-                    ReportTargetType.USER,
-                    userId,
-                    null,
-                    String.format("멘토 신청 반려/비활성화 (@%s, 사유: %s)", profile.getUser().getHandle(),reason)
-            ));
-    
-            return AdminMentorResponse.from(saved);
+                User admin = findAdmin(adminId);
+                MentorProfile profile = mentorProfileRepository.findById(userId)
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                "멘토 프로필 정보를 찾을 수 없습니다."));
+
+                profile.setStatus(MentorStatus.INACTIVE);
+                MentorProfile saved = mentorProfileRepository.save(profile);
+
+                adminAuditLogRepository.save(AdminAuditLog.create(
+                                admin,
+                                "MENTOR_REJECT",
+                                ReportTargetType.USER,
+                                userId,
+                                null,
+                                String.format("멘토 신청 반려/비활성화 (@%s, 사유: %s)", profile.getUser().getHandle(), reason)));
+
+                return AdminMentorResponse.from(saved);
         }
 
         // ================= [3. 멘토링 프로그램 관리] =================
@@ -152,79 +155,98 @@ public class AdminMentoringService {
         @Transactional(readOnly = true)
         public Page<AdminMentoringProgramResponse> getPrograms(ProgramStatus status, String keyword,
                         Pageable pageable) {
-                return mentoringProgramRepository.searchProgramsForAdmin(status, keyword, pageable)
-                                .map(program -> {
-                                        long sessions = mentoringApplicationRepository
-                                                        .countByProgramId(program.getId());
-                                        long reports = reportRepository.countByTargetTypeAndTargetId(
-                                                        ReportTargetType.MENTORING,
-                                                        program.getId());
-                                        Double rating = (program.getMentor().getRatingAvg() != null)
-                                                        ? program.getMentor().getRatingAvg().doubleValue()
-                                                        : null;
-                                        return AdminMentoringProgramResponse.of(program, sessions, rating, reports);
-                                });
+                Page<MentoringProgram> page = mentoringProgramRepository.searchProgramsForAdmin(status, keyword,
+                                pageable);
+
+                // 페이지에 있는 프로그램 ID 목록 추출
+                List<UUID> programIds = page.getContent().stream()
+                                .map(MentoringProgram::getId)
+                                .toList();
+
+                // 신청 건수 일괄 조회 (쿼리 1번)
+                Map<UUID, Long> sessionMap = new java.util.HashMap<>();
+                for (Object[] row : mentoringApplicationRepository.countByProgramIdIn(programIds)) {
+                        sessionMap.put((UUID) row[0], (Long) row[1]);
+                }
+
+                // 신고 건수 일괄 조회 (쿼리 1번)
+                Map<UUID, Long> reportMap = new java.util.HashMap<>();
+                for (Object[] row : reportRepository.countByTargetTypeAndTargetIdIn(ReportTargetType.MENTORING,
+                                programIds)) {
+                        reportMap.put((UUID) row[0], (Long) row[1]);
+                }
+
+                return page.map(program -> {
+                        long sessions = sessionMap.getOrDefault(program.getId(), 0L);
+                        long reports = reportMap.getOrDefault(program.getId(), 0L);
+                        Double rating = (program.getMentor().getRatingAvg() != null)
+                                        ? program.getMentor().getRatingAvg().doubleValue()
+                                        : null;
+                        return AdminMentoringProgramResponse.of(program, sessions, rating, reports);
+                });
         }
 
         /**
          * 프로그램 운영 상태 변경 (운영 중 ACTIVE <-> 일시정지 CLOSED)
          */
-        public AdminMentoringProgramResponse updateProgramStatus(UUID adminId, UUID programId, ProgramStatus newStatus) {
-            User admin = findAdmin(adminId);
-            MentoringProgram program = mentoringProgramRepository.findById(programId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "멘토링 프로그램을 찾을 수 없습니다."));
-    
-            ProgramStatus oldStatus = program.getStatus();
-            program.setStatus(newStatus);
-            MentoringProgram saved = mentoringProgramRepository.save(program);
-    
-            adminAuditLogRepository.save(AdminAuditLog.create(
-                    admin,
-                    "PROGRAM_STATUS_CHANGE",
-                    ReportTargetType.MENTORING,
-                    programId,
-                    null,
-                    String.format("프로그램 상태 변경 (%s -> %s, 제목: %s)", oldStatus, newStatus, program.getTitle())
-            ));
-    
-            long sessions = mentoringApplicationRepository.countByProgramId(saved.getId());
-            long reports = reportRepository.countByTargetTypeAndTargetId(ReportTargetType.MENTORING, saved.getId());
-            Double rating = (saved.getMentor().getRatingAvg() != null)
-                    ? saved.getMentor().getRatingAvg().doubleValue()
-                    : null;
-            return AdminMentoringProgramResponse.of(saved, sessions, rating, reports);
+        public AdminMentoringProgramResponse updateProgramStatus(UUID adminId, UUID programId,
+                        ProgramStatus newStatus) {
+                User admin = findAdmin(adminId);
+                MentoringProgram program = mentoringProgramRepository.findById(programId)
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                "멘토링 프로그램을 찾을 수 없습니다."));
+
+                ProgramStatus oldStatus = program.getStatus();
+                program.setStatus(newStatus);
+                MentoringProgram saved = mentoringProgramRepository.save(program);
+
+                adminAuditLogRepository.save(AdminAuditLog.create(
+                                admin,
+                                "PROGRAM_STATUS_CHANGE",
+                                ReportTargetType.MENTORING,
+                                programId,
+                                null,
+                                String.format("프로그램 상태 변경 (%s -> %s, 제목: %s)", oldStatus, newStatus,
+                                                program.getTitle())));
+
+                long sessions = mentoringApplicationRepository.countByProgramId(saved.getId());
+                long reports = reportRepository.countByTargetTypeAndTargetId(ReportTargetType.MENTORING, saved.getId());
+                Double rating = (saved.getMentor().getRatingAvg() != null)
+                                ? saved.getMentor().getRatingAvg().doubleValue()
+                                : null;
+                return AdminMentoringProgramResponse.of(saved, sessions, rating, reports);
         }
 
         /**
          * 프로그램 관리자 강제 숨김 (소프트 삭제 및 감사 로그)
          */
         public AdminMentoringProgramResponse hideProgram(UUID adminId, UUID programId, String reason) {
-            User admin = findAdmin(adminId);
-            MentoringProgram program = mentoringProgramRepository.findById(programId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "멘토링 프로그램을 찾을 수 없습니다."));
-    
-            if (program.getDeletedAt() != null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "이미 숨김 처리된 프로그램입니다.");
-            }
-    
-            program.softDelete();
-            MentoringProgram saved = mentoringProgramRepository.save(program);
-    
-            adminAuditLogRepository.save(AdminAuditLog.create(
-                    admin,
-                    "PROGRAM_HIDE",
-                    ReportTargetType.MENTORING,
-                    programId,
-                    null,
-                    String.format("관리자 강제 숨김 처리 (제목: %s, 사유: %s)", program.getTitle(), reason)
-            ));
-    
-            long sessions = mentoringApplicationRepository.countByProgramId(saved.getId());
-            long reports = reportRepository.countByTargetTypeAndTargetId(ReportTargetType.MENTORING, saved.getId());
-            Double rating = (saved.getMentor().getRatingAvg() != null)
-                    ? saved.getMentor().getRatingAvg().doubleValue()
-                    : null;
-            return AdminMentoringProgramResponse.of(saved, sessions, rating, reports);
+                User admin = findAdmin(adminId);
+                MentoringProgram program = mentoringProgramRepository.findById(programId)
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                "멘토링 프로그램을 찾을 수 없습니다."));
+
+                if (program.getDeletedAt() != null) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "이미 숨김 처리된 프로그램입니다.");
+                }
+
+                program.softDelete();
+                MentoringProgram saved = mentoringProgramRepository.save(program);
+
+                adminAuditLogRepository.save(AdminAuditLog.create(
+                                admin,
+                                "PROGRAM_HIDE",
+                                ReportTargetType.MENTORING,
+                                programId,
+                                null,
+                                String.format("관리자 강제 숨김 처리 (제목: %s, 사유: %s)", program.getTitle(), reason)));
+
+                long sessions = mentoringApplicationRepository.countByProgramId(saved.getId());
+                long reports = reportRepository.countByTargetTypeAndTargetId(ReportTargetType.MENTORING, saved.getId());
+                Double rating = (saved.getMentor().getRatingAvg() != null)
+                                ? saved.getMentor().getRatingAvg().doubleValue()
+                                : null;
+                return AdminMentoringProgramResponse.of(saved, sessions, rating, reports);
         }
 
         // ================= [4. 분쟁 에스크로 강제 개입 (기존)] =================
@@ -302,12 +324,14 @@ public class AdminMentoringService {
         }
 
         private User findAdmin(UUID adminId) {
-            return userRepository.findById(adminId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
+                return userRepository.findById(adminId)
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                "어드민 계정을 찾을 수 없습니다."));
         }
 
         private MentoringApplication findApplication(UUID applicationId) {
-            return mentoringApplicationRepository.findByIdForUpdate(applicationId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "멘토링 신청 내역을 찾을 수 없습니다."));
+                return mentoringApplicationRepository.findByIdForUpdate(applicationId)
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                "멘토링 신청 내역을 찾을 수 없습니다."));
         }
 }

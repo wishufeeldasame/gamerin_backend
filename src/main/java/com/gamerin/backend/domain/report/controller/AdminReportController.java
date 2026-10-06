@@ -3,6 +3,7 @@ package com.gamerin.backend.domain.report.controller;
 
 import com.gamerin.backend.domain.report.dto.request.ReportSearchCondition;
 import com.gamerin.backend.domain.report.dto.request.ReportStatusUpdateRequest;
+import com.gamerin.backend.domain.report.dto.response.AdminReportDetailResponse;
 import com.gamerin.backend.domain.report.dto.response.ReportResponse;
 import com.gamerin.backend.domain.report.entity.ReportReasonCode;
 import com.gamerin.backend.domain.report.entity.ReportStatus;
@@ -51,8 +52,8 @@ public class AdminReportController {
 
     @GetMapping("/{reportId}")
     @Operation(summary = "어드민 신고 상세 조회", description = "신고 건의 상세 정보(신고자, 피신고자, 스냅샷 내용, 처리 상태 등)를 단건 조회합니다.")
-    public ApiResponse<ReportResponse> getAdminReportById(@PathVariable UUID reportId) {
-        return ApiResponse.ok(reportService.getAdminReportById(reportId));
+    public ApiResponse<AdminReportDetailResponse> getAdminReportById(@PathVariable UUID reportId) {
+        return ApiResponse.ok(reportService.getAdminReportDetail(reportId.toString()));
     }
 
     @PatchMapping("/{reportId}/status")

@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -29,7 +30,7 @@ public interface ReportRepository extends
         // 대시보드 상태별 건수 집계
         long countByStatus(ReportStatus status);
 
-        //  특정 대상(유저, 게시글 등)이 받은 누적 신고 건수 집계
+        // 특정 대상(유저, 게시글 등)이 받은 누적 신고 건수 집계
         long countByTargetTypeAndTargetId(ReportTargetType targetType, UUID targetId);
 
         // 어드민 전용 신고 동적 검색 및 페이징 (admin_reports.png 대응)
@@ -48,4 +49,13 @@ public interface ReportRepository extends
                         @Param("reasonCode") ReportReasonCode reasonCode,
                         @Param("keyword") String keyword,
                         Pageable pageable);
+
+        // 대상 ID 목록의 신고 건수를 한 번에 집계 (N+1 방지용 일괄 조회)
+        @Query("SELECT r.targetId AS targetId, COUNT(r) AS cnt " +
+                        "FROM Report r " +
+                        "WHERE r.targetType = :targetType AND r.targetId IN :targetIds " +
+                        "GROUP BY r.targetId")
+        List<Object[]> countByTargetTypeAndTargetIdIn(
+                        @Param("targetType") ReportTargetType targetType,
+                        @Param("targetIds") List<UUID> targetIds);
 }
