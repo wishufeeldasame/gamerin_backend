@@ -44,8 +44,7 @@ public class AdminReportController {
             @RequestParam(required = false) ReportTargetType targetType,
             @RequestParam(required = false) ReportReasonCode reasonCode,
             @RequestParam(required = false) String keyword,
-            @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
-    ) {
+            @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         ReportSearchCondition condition = new ReportSearchCondition(status, targetType, reasonCode, keyword);
         return ApiResponse.ok(reportService.getAdminReports(condition, pageable));
     }
@@ -61,8 +60,31 @@ public class AdminReportController {
     public ApiResponse<ReportResponse> updateReportStatus(
             @PathVariable UUID reportId,
             @Valid @RequestBody ReportStatusUpdateRequest request,
-            @AuthenticationPrincipal CustomUserPrincipal principal
-    ) {
+            @AuthenticationPrincipal CustomUserPrincipal principal) {
         return ApiResponse.ok(reportService.updateReportStatus(reportId, request, principal));
+    }
+
+    @GetMapping("/{idOrCode}/detail")
+    @Operation(summary = "어드민 신고 통합 상세 조회", description = "신고자 정보, 피신고자 정보, 콘텐츠 숨김 여부를 포함한 상세 데이터를 조회합니다.")
+    public ApiResponse<com.gamerin.backend.domain.report.dto.response.AdminReportDetailResponse> getAdminReportDetail(
+            @PathVariable String idOrCode) {
+        return ApiResponse.ok(reportService.getAdminReportDetail(idOrCode));
+    }
+
+    @PostMapping("/{idOrCode}/start-review")
+    @Operation(summary = "신고 검토 시작", description = "신고 상태를 IN_REVIEW(검토 중)로 변경하고 담당 관리자를 배정합니다.")
+    public ApiResponse<com.gamerin.backend.domain.report.dto.response.AdminReportDetailResponse> startReportReview(
+            @PathVariable String idOrCode,
+            @AuthenticationPrincipal CustomUserPrincipal principal) {
+        return ApiResponse.ok(reportService.startReportReview(principal.getUserId(), idOrCode));
+    }
+
+    @PostMapping("/{idOrCode}/resolve")
+    @Operation(summary = "신고 원클릭 통합 판정 처리", description = "상태 변경, 콘텐츠 숨김, 유저 제재를 동일 트랜잭션 내에서 일괄 처리합니다.")
+    public ApiResponse<com.gamerin.backend.domain.report.dto.response.AdminReportDetailResponse> resolveReport(
+            @PathVariable String idOrCode,
+            @Valid @RequestBody com.gamerin.backend.domain.report.dto.request.AdminReportResolutionRequest request,
+            @AuthenticationPrincipal CustomUserPrincipal principal) {
+        return ApiResponse.ok(reportService.resolveReport(principal.getUserId(), idOrCode, request));
     }
 }
