@@ -50,7 +50,7 @@ public class AdminSettingsController {
     }
 
     @PutMapping
-    @Operation(summary = "시스템 설정 다건 일괄 저장" ,description="프론트엔드 설정 화면에서 변경된 여러 설정값(키-값 쌍)을일괄 저장합니다.")
+    @Operation(summary = "시스템 설정 다건 일괄 저장",description="프론트엔드 설정 화면에서 변경된 여러 설정값(키-값 쌍)을일괄 저장합니다.")
 
     public ApiResponse<List<SystemConfigResponse>> updateMultipleSettings(
             @RequestBody Map<String, String> configs,

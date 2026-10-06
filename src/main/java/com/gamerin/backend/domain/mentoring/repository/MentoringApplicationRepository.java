@@ -54,4 +54,14 @@ public interface MentoringApplicationRepository extends JpaRepository<MentoringA
          */
         long countByProgramIdAndPaymentStatus(UUID programId, PaymentStatus paymentStatus);
 
+        // 이번 달 생성된 신청 건수
+        long countByCreatedAtAfter(OffsetDateTime dateTime);
+
+        // 에스크로 보관 중인 마일리지 총액 합계
+        @Query("SELECT COALESCE(SUM(a.appliedMileage), 0) FROM MentoringApplication a WHERE a.paymentStatus = 'ESCROW_HELD'")
+        long sumEscrowHeldMileage();
+
+        // 프로그램별 신청 건수(세션 수)
+        long countByProgramId(UUID programId);
+
 }
