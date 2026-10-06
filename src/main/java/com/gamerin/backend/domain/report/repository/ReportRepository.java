@@ -29,6 +29,9 @@ public interface ReportRepository extends
         // 대시보드 상태별 건수 집계
         long countByStatus(ReportStatus status);
 
+        //  특정 대상(유저, 게시글 등)이 받은 누적 신고 건수 집계
+        long countByTargetTypeAndTargetId(ReportTargetType targetType, UUID targetId);
+
         // 어드민 전용 신고 동적 검색 및 페이징 (admin_reports.png 대응)
         @Query("SELECT r FROM Report r " +
                         "LEFT JOIN r.reporter u " +
