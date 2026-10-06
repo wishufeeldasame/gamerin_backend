@@ -74,6 +74,11 @@ public class UserPenaltyService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "이미 탈퇴한 계정에는 제재를 부여할 수 없습니다.");
         }
 
+        // 2-1. 동료 관리자(ADMIN) 제재 방지 (추가: 관리자 권한 보호)
+        if (targetUser.getRole() == com.gamerin.backend.domain.user.entity.UserRole.ADMIN) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "관리자 권한을 가진 계정에는 제재를 부여할 수 없습니다.");
+        }
+
         // 3. 연관 신고 내역 확인 (선택 사항)
         Report report = null;
         if (request.reportId() != null) {
@@ -218,6 +223,10 @@ public class UserPenaltyService {
     private OffsetDateTime calculateEndAt(PenaltyType penaltyType, Integer customDays, OffsetDateTime now) {
         return switch (penaltyType) {
             case WARNING -> null;
+            case SUSPENSION_3D -> { // <-- 추가: 3일 정지 기간 계산
+                int days = (customDays != null && customDays > 0) ? customDays : 3;
+                yield now.plusDays(days);
+            }
             case SUSPENSION_7D -> {
                 int days = (customDays != null && customDays > 0) ? customDays : 7;
                 yield now.plusDays(days);

@@ -89,6 +89,13 @@ public class ReportService {
     }
 
     /**
+     * 일반 유저 본인의 접수 신고 목록 페이징 조회
+     */
+    public Page<ReportResponse> getMyReports(CustomUserPrincipal principal, Pageable pageable) {
+        return reportRepository.findByReporterIdOrderByCreatedAtDesc(principal.getUserId(), pageable)
+                .map(ReportResponse::from);
+    }
+    /**
      * 통합 신고 접수 (검증 강화 + reportCode null 방지 + 동시성 제어 + 실제 콘텐츠 자동 숨김 처리)
      */
     @Transactional
@@ -148,6 +155,15 @@ public class ReportService {
 
         return reportRepository.searchReports(status, targetType, reasonCode, keyword, pageable)
                 .map(ReportResponse::from);
+    }
+
+    /**
+     * 어드민 전용 신고 상세 단건 조회 (추가)
+     */
+    public ReportResponse getAdminReportById(UUID reportId) {
+        Report report = reportRepository.findById(reportId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신고 내역을 찾을 수 없습니다. ID: " + reportId));
+        return ReportResponse.from(report);
     }
 
     /**

@@ -50,6 +50,12 @@ public class AdminReportController {
         return ApiResponse.ok(reportService.getAdminReports(condition, pageable));
     }
 
+    @GetMapping("/{reportId}")
+    @Operation(summary = "어드민 신고 상세 조회", description = "신고 건의 상세 정보(신고자, 피신고자, 스냅샷 내용, 처리 상태 등)를 단건 조회합니다.")
+    public ApiResponse<ReportResponse> getAdminReportById(@PathVariable UUID reportId) {
+        return ApiResponse.ok(reportService.getAdminReportById(reportId));
+    }
+
     @PatchMapping("/{reportId}/status")
     @Operation(summary = "신고 상태 변경", description = "신고 건의 상태(RECEIVED, IN_REVIEW, RESOLVED, REJECTED)를 변경하고 담당 어드민을 할당합니다.")
     public ApiResponse<ReportResponse> updateReportStatus(
