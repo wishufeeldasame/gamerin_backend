@@ -1,0 +1,103 @@
+# 카카오페이 설계 — 카카오페이 연동 흐름·API (6절)
+
+[← 카카오페이 설계 문서 목차](README.md)
+
+## 6. 카카오페이 연동 흐름·API 초안
+
+### 6-1. 결제 목적과 내부 API
+
+`MILEAGE_CHARGE`와 `MEMBERSHIP_PASS`를 구분한다. 충전·멤버십 모두 서버 상품 코드로 가격을 결정한다. 멤버십 이용권은 서버에서 4,900원으로 결정하며 클라이언트가 보낸 금액으로 덮어쓰지 않는다. 멘토링 신청은 기존 마일리지 차감 계약을 사용한다.
+
+**확정:** 충전은 고정 패키지 선택 방식이다. 클라이언트는 패키지 상품 코드를 보내고 서버가 결제 금액·적립 마일리지를 결정한다. 허용하지 않은 상품 코드는 거부한다. 결제 금액 1원당 1마일리지를 적립하며 보너스는 제공하지 않는다.
+
+| 충전 패키지 결제 금액 | 승인·내부 반영 완료 시 적립액 |
+|---|---|
+| 5,000원 | 5,000 마일리지 |
+| 10,000원 | 10,000 마일리지 |
+| 30,000원 | 30,000 마일리지 |
+| 50,000원 | 50,000 마일리지 |
+
+| 제안 API | 용도 |
+|---|---|
+| `POST /api/v1/payments/kakao/ready` | `{ productCode, requestId }`로 주문 준비; 서버가 목적·가격 결정 |
+| `POST /api/v1/payments/kakao/approve` | `{ orderId, pgToken }`로 승인 시도 |
+| `GET /api/v1/payments/{orderId}` | 본인 주문의 결제·혜택 반영 상태 조회 |
+| `POST /api/v1/payments/{orderId}/cancel` | 테스트용 전액 취소·내부 회수 검증; 테스트 환경·CID와 호출 권한을 서버에서 검증, 사용자 화면 연결 없음 |
+| `GET /api/v1/memberships/me` | 현재 이용 기간·혜택·만료 상태 |
+
+이는 내부 API 초안이다. 기존 잔액·거래 API는 유지한다. `requestId`는 구매자와 함께 중복 주문을 막는 키이며 같은 키에 다른 상품은 거부한다. 기존 `ApiResponse<T>` 성공·오류 형식을 유지한다.
+
+```text
+지갑/멤버십 → 상품 선택 → (PC) 빈 팝업 먼저 열기 → 서버 주문 저장 → 카카오 결제 준비(ready)
+→ PC: 팝업을 next_redirect_pc_url로 이동 / 모바일 웹: 현재 창을 next_redirect_mobile_url로 이동
+→ 사용자 인증 → approval_url(/payments/result?orderId=…&pg_token=…) 복귀
+→ PC: 팝업이 부모 창에 결과 전달 후 닫힘, 부모 창이 승인 요청 / 모바일: 결과 페이지가 인증 복구 후 승인 요청
+→ 서버 승인(approve)·검증 → 충전 적립 또는 멤버십 기간 부여 → 결과 표시
+```
+
+### 6-2. 승인·복구 규칙
+
+1. 주문 소유자, 저장한 상품·금액·CID·TID·주문번호·사용자 식별자를 검증한다. 브라우저 복귀·pg_token 수신 자체는 결제 성공이 아니다.
+2. 외부 호출 전에 복구 가능한 주문·처리 상태를 DB에 남긴다. 짧은 트랜잭션으로 승인 처리권을 확보하고 외부 호출 동안 지갑 잠금을 잡지 않는다.
+3. 승인 확인 후 하나의 DB 트랜잭션에서 결제 확정과 원장 적립 또는 멤버십 부여 이력을 반영한다. `APPROVED`는 내부 반영 완료까지 의미한다.
+4. 동시 승인·새로고침에도 적립·기간 연장은 한 번만 수행한다. 상태 제어와 원장/부여 이력의 결제 참조 UNIQUE 제약으로 보호한다. **TID UNIQUE만으로 내부 중복 반영까지 해결되지는 않는다.**
+5. 타임아웃·승인 후 DB 실패·프로세스 중단은 `결제 확인 중`으로 남기고 TID로 주문 조회 후 복구한다. 결과 불명을 실패로 단정하거나 새 결제를 유도하지 않는다.
+6. catch에서 취소 API를 한 번 호출하는 것만으로 복구를 끝내지 않는다. 취소도 실패할 수 있고 커밋 실패는 메서드 밖에서 발생할 수 있다. 미확정 주문 재조회·관리자 재처리 경로를 확보한다.
+7. cancel/fail 브라우저 복귀는 표시용 신호다. 승인된 주문을 덮어쓰거나 환불하지 않는다. 실제 취소는 결제사 상태·적립 사용 여부를 확인하는 별도 절차다.
+8. 충전 `referenceId = payment.id`를 기록한다. 테스트 전액 취소 시 내부 잔액·이용 기간 회수와 실패 복구까지 검증한다. 취소 중 사용·재구매가 끼어들지 않도록 내부 상태로 제어하고 외부 요청 중에는 DB 잠금을 장시간 유지하지 않는다. 취소 결과 불명은 조회로 복구하며 외부 취소와 내부 회수를 각각 한 번만 반영한다.
+9. **ready 응답 유실:** TID를 받지 못했으므로 결제가 시작되지 않은 상태다. 주문을 실패로 닫고 사용자가 새로 결제를 시작하게 한다. 카카오페이는 가맹점 주문번호로 조회하는 API를 제공하지 않는다.
+10. **15분 만료:** TID와 결제 요청은 15분간 유효하며 경과 시 카카오페이가 `fail_url`로 보낸다. 서버는 ready 시각 + 15분이 지난 미승인 주문을 주문 조회로 확인해 `SUCCESS_PAYMENT`가 아니면 만료로 닫는다. 만료된 주문의 approve 요청은 거부한다.
+11. **카카오페이 상태 매핑:** 주문 조회 `status`를 내부 상태로 변환한다. `SUCCESS_PAYMENT` → 승인 확정·내부 반영, `CANCEL_PAYMENT` → 취소 확정·내부 회수, `PART_CANCEL_PAYMENT` → 이번 범위에서 발생하지 않아야 하므로 관리자 확인 대상, `FAIL_PAYMENT`·`QUIT_PAYMENT`·`FAIL_AUTH_PASSWORD` → 실패, `READY`·`SEND_TMS`·`OPEN_PAYMENT`·`SELECT_METHOD`·`ARS_WAITING`·`AUTH_PASSWORD` → 진행 중(만료 전 재조회).
+12. **오류 분류:** 카카오페이 오류는 `{ error_code, error_message, extras.method_result_code, extras.method_result_message }` 형식이다. 응답을 받은 4xx(`-780` 승인 실패, `-781` 취소 실패, `-731` 잘못된 CID 등)는 확정 실패로, 타임아웃·연결 끊김·5xx(`-500`, `-503`)는 결과 불명으로 처리한다. `-401`(키 오류)·`-403`(사용 API 미등록)·`-429`(쿼터 초과)는 설정 문제로 로그·알림 대상이다. `extras` 메시지를 사용자에게 그대로 노출하지 않는다.
+
+주문 조회는 TID로 상태를 확인하는 공식 API다. 카카오페이 포럼 답변은 ready 응답 실패 시 처음부터 다시 결제하고, approve 응답 실패 시 TID로 주문 조회하라고 안내한다. [주문 조회](https://developers.kakaopay.com/docs/payment/online/payment-detail), [응답 실패 처리 안내](https://developers.kakaopay.com/forum/t/topic/180), [TID 유효시간 15분](https://developers.kakaopay.com/forum/t/api/657/2), [참고하기·오류 형식](https://developers.kakaopay.com/docs/payment/online/reference)
+
+### 6-3. 인증·환경
+
+- 결과 페이지가 직접 승인할 때(모바일·부모 창 부재)는 `isAuthReady` 이후 승인한다. 팝업은 새 브라우징 컨텍스트라 메모리 access token이 없으므로, PC에서는 이미 인증된 부모 창이 승인하는 것을 기본으로 한다. 계정 전환 시 서버가 주문 소유자 불일치를 거부한다.
+- 현재 저장 사용자가 없으면 refresh를 시도하지 않으며 로그인/OAuth 성공은 `/home`으로 이동한다. 결제 중 재로그인 후 결과 확인 문맥을 보존하는 처리가 필요하다. 장기 복구는 서버 주문 조회를 사용하고 pg_token을 로컬 저장소에 영속 저장하지 않는다.
+- Secret key·결제 토큰을 로그에 남기지 않는다. 처리 후 결과 URL의 토큰을 제거하고 프록시 access log의 쿼리 기록도 확인한다.
+- 공식 단건 문서에 HTTPS `open-api.kakaopay.com`, `Authorization: SECRET_KEY ...`, `Content-Type: application/json`, `TC0ONETIME`, approval 복귀의 pg_token이 안내되어 있다. 필드 규격은 6-5절에 정리했다. [단건 결제](https://developers.kakaopay.com/docs/payment/online/single-payment)
+- 이번 범위는 단건 테스트 결제이므로 Secret key(dev)와 `TC0ONETIME`을 사용한다. 테스트도 운영과 같은 호스트(`open-api.kakaopay.com`)를 쓰며 별도 개발 호스트는 없다. 허용 CID를 명시적으로 제한하며 단순 `TC` 접두사 검사로 대체하지 않는다. [단건 결제](https://developers.kakaopay.com/docs/payment/online/single-payment), [REST API 서버환경](https://developers.kakaopay.com/docs/getting-started/api-common-guide/restapi)
+- 테스트 환경 인증 헤더는 `SECRET_KEY {Secret key(dev)}`(또는 `DEV_SECRET_KEY`)다. 키를 재발급하면 기존 키는 즉시 폐기되므로 노출 시 재발급 후 backend 환경변수를 교체한다. [인증](https://developers.kakaopay.com/docs/getting-started/api-common-guide/authentication), [사전 준비사항](https://developers.kakaopay.com/docs/getting-started/api-common-guide/prepare)
+- **구 API와 혼동 금지:** 인터넷 예제 다수가 쓰는 `kapi.kakao.com` + `Authorization: KakaoAK {ADMIN_KEY}` + form-urlencoded는 (구)온라인 결제 API다. 신규 API는 `open-api.kakaopay.com/online/v1/payment/*` + `SECRET_KEY` + JSON이며 오류 필드도 `error_code`/`error_message`로 다르다. 요청·응답 필드는 같다. [전환하기](https://developers.kakaopay.com/docs/payment/online/change)
+- **TLS:** 카카오페이 API는 TLS 1.2만 지원한다(1.3 미지원). Java 21 기본 클라이언트는 1.2로 협상하므로 별도 설정은 필요 없을 것으로 보지만, 연결 실패 시 우선 확인한다.
+- **타임아웃:** 카카오페이 플랫폼의 요청 타임아웃은 11초다. `KakaoPayClient`의 read timeout은 11초보다 길게(예: 15초) 두고, 초과 시 6-2절 결과 불명 처리로 넘긴다. [참고하기](https://developers.kakaopay.com/docs/payment/online/reference)
+- **도메인 등록:** [애플리케이션 > 플랫폼 > Web]에 사이트 도메인을 등록하며 approval/cancel/fail URL의 도메인이 일치해야 한다. 사이트 도메인은 프로토콜 포함·path 없이 등록하고(최대 10개, 와일드카드 가능), http와 https는 각각 등록한다. 테스트 환경에서는 `http://localhost:포트`, `http://127.0.0.1`, `http://공인IP`도 등록할 수 있다. [플랫폼](https://developers.kakaopay.com/docs/getting-started/applications/platform)
+- **사용 API 등록:** [애플리케이션 > 사용 API]에 온라인 결제를 등록하지 않으면 `-403`으로 실패한다. [사용 API](https://developers.kakaopay.com/docs/getting-started/applications/using-api)
+- **사업자 등록:** 온라인 결제는 비즈 API이지만, 카카오페이 포럼 답변에 따르면 사업자 등록 없이 개발자센터 가입·앱 생성으로 받은 Dev Secret Key로 테스트할 수 있다. 운영 전환에는 사업자 등록·비즈앱 전환·가맹점 심사가 필요하다(후속 범위). [포럼 답변](https://developers.kakaopay.com/forum/t/api/337/2), [API 및 애플리케이션 유형](https://developers.kakaopay.com/docs/getting-started/basic/api-and-application-type)
+- **CSP·헤더:** 팝업과 페이지 이동은 최상위 내비게이션이므로 프론트 CSP(`next.config.ts`)의 `connect-src`/`form-action`/`frame-src`에 카카오 도메인을 추가할 필요가 없다. `X-Frame-Options: DENY`는 iframe을 쓰지 않으므로 영향이 없다. 현재 `Cross-Origin-Opener-Policy`는 설정하지 않았다. 이후 `same-origin`을 도입하면 카카오 도메인을 거쳐 돌아온 팝업의 `window.opener`가 끊기므로 6-4절 폴백만 동작한다.
+- **로그:** pg_token이 결과 URL 쿼리에 실리므로 nginx access log에 남는다. `/payments/result` 경로의 쿼리 기록을 제외하거나 마스킹한다. `Referrer-Policy: strict-origin-when-cross-origin`이므로 외부로는 origin만 전달된다.
+
+### 6-4. 결제창 호출 방식 (확정: PC 팝업)
+
+카카오페이 공식 문서는 PC에서 `next_redirect_pc_url`을 팝업 또는 레이어로, 모바일 웹에서 `next_redirect_mobile_url`을 페이지 이동(웹뷰)으로 띄우도록 안내하고 iframe은 권고하지 않는다. GamerIN은 PC 팝업을 확정했다. 네이티브 앱이 없으므로 `next_redirect_app_url`, `redirect_scheme_url`, `custom_json.auto_close`는 사용하지 않는다. [이해하기](https://developers.kakaopay.com/docs/payment/online/common), [부가기능](https://developers.kakaopay.com/docs/payment/online/add-on)
+
+| 단계 | PC (팝업) | 모바일 웹 (페이지 이동) |
+|---|---|---|
+| 진입 | 결제 버튼 클릭 핸들러에서 **동기적으로** `window.open('', 'kakaopay', 크기)`로 빈 팝업을 먼저 연다. ready 응답을 기다린 뒤 열면 팝업 차단에 걸린다. | ready 응답 후 `location.assign(next_redirect_mobile_url)` |
+| 차단 처리 | 팝업이 `null`이면 ready를 호출하지 않고 "팝업 차단 해제" 안내를 표시한다. ready 실패 시 빈 팝업을 닫는다. | 해당 없음 |
+| 결제창 | 팝업의 `location`을 `next_redirect_pc_url`로 바꾼다. 사용자는 QR 또는 카카오톡 메시지(TMS)로 결제한다. 부모 창은 `결제 진행 중` 상태와 팝업 다시 열기·취소 버튼을 보여준다. | 카카오페이 결제 화면으로 이동 |
+| 복귀 | 팝업이 `approval_url`·`cancel_url`·`fail_url`(모두 `/payments/result?orderId=…&result=…`)로 돌아온다. | 현재 창이 같은 URL로 돌아온다. |
+| 결과 전달 | 결과 페이지가 `window.opener`가 있고 같은 origin이면 `postMessage({ type: 'kakaopay-result', orderId, result, pgToken }, location.origin)`로 전달하고 팝업을 닫는다. 부모 창은 `event.origin`과 `orderId`를 검증한 뒤 approve를 호출한다. | 결과 페이지가 인증 복구 후 approve를 호출한다. |
+| 폴백 | 부모 창이 닫혔거나 이동해 `opener`가 없으면 팝업 안에서 모바일과 같은 방식으로 인증 복구 후 승인하고 결과를 표시한다. | — |
+| 팝업 수동 종료 | 부모 창이 팝업 `closed`를 감지하면 서버 주문 상태를 조회한다. 승인 전이면 `결제가 취소되었습니다`로 표시하고, 서버는 15분 만료 규칙으로 정리한다. | — |
+
+- PC·모바일 판정은 클라이언트에서 한다. 서버 ready 응답은 `pcUrl`, `mobileUrl`을 함께 내려주고 TID는 내려주지 않는다.
+- pg_token은 postMessage와 approve 요청 본문으로만 전달하고 `localStorage`·`sessionStorage`에 저장하지 않는다. 결과 페이지는 처리 직후 `history.replaceState`로 쿼리를 제거한다.
+- 같은 주문의 approve가 부모 창과 팝업 폴백에서 중복 호출될 수 있으므로 6-2절의 멱등 처리로 한 번만 반영한다.
+
+### 6-5. 카카오페이 API 규격 대조 (2026-10-10 공식 문서 기준)
+
+| API | 요청 필드 매핑 | 응답에서 저장·검증 |
+|---|---|---|
+| ready `POST /online/v1/payment/ready` | `cid`=`TC0ONETIME`, `partner_order_id`=내부 주문 ID(UUID, 100자 이하), `partner_user_id`=내부 user UUID(실명·전화번호·이메일·로그인 ID 등 **개인정보 전송 불가**), `item_name`=상품 표시명(100자 이하), `item_code`=상품 코드, `quantity`=1, `total_amount`=서버 상품 가격, `tax_free_amount`=0(**필수**), `vat_amount` 생략(자동 계산), `approval_url`·`cancel_url`·`fail_url`=결과 URL(각 255자 이하, 등록 도메인과 일치) | `tid` 저장, `created_at` 저장(15분 만료 기준), `next_redirect_pc_url`·`next_redirect_mobile_url`은 클라이언트 전달용 |
+| approve `POST /online/v1/payment/approve` | `cid`, `tid`, `partner_order_id`·`partner_user_id`(**ready와 일치 필수**), `pg_token`, `total_amount`(선택이지만 저장 가격으로 보내 금액 불일치를 카카오페이에서도 거부하게 함) | `aid`, `approved_at`, `amount.total`이 저장 가격과 같은지, `partner_order_id`·`partner_user_id`·`cid`·`tid` 일치, `payment_method_type`(CARD/MONEY) 기록. 카드 상세(`card_info`)는 저장하지 않음 |
+| order `POST /online/v1/payment/order` | `cid`, `tid` | `status`(6-2절 매핑), `amount`, `canceled_amount`, `cancel_available_amount`, `payment_action_details[]`(`aid`, `payment_action_type` PAYMENT/CANCEL) |
+| cancel `POST /online/v1/payment/cancel` | `cid`, `tid`, `cancel_amount`=결제 금액 전액, `cancel_tax_free_amount`=0(**필수**), `cancel_available_amount`=저장된 결제 금액(카카오페이 쪽 잔여 금액이 다르면 거부되게 함) | `aid`, `status`=`CANCEL_PAYMENT`, `canceled_at`, `approved_cancel_amount.total`이 요청 금액과 같은지 |
+
+- 요청·응답 시각(`created_at`, `approved_at`, `canceled_at`)은 오프셋 없는 `yyyy-MM-ddTHH:mm:ss` 형식이다. KST로 해석해 `OffsetDateTime`으로 저장한다(`확인 필요`: 공식 문서에 시간대 명시 없음).
+- 공통 오류 코드: `-400` Authorization 누락, `-401` Secret key 오류, `-403` 사용 API 미등록, `-404` URL 오류, `-429` 일일 쿼터 초과(매일 0시 초기화, 온라인 결제의 구체적 허용량은 문서에 없음), `-500` 내부 오류, `-503` 점검. 결제별 상세 오류 코드는 공식 엑셀(결제 오류코드 v1.7)로 제공되며 이번 조사에서 내려받지 않았다. [에러 코드](https://developers.kakaopay.com/docs/getting-started/api-common-guide/error-code), [쿼터](https://developers.kakaopay.com/docs/getting-started/api-common-guide/quota)
+- 결제 수단 제한(`payment_method_type`), 할부(`install_month`), 카드사 지정(`available_cards`), 컵 보증금(`green_deposit`)은 사용하지 않는다.
+- 카카오페이 머니 결제 시 현금영수증은 카카오페이가 자동 발행하며 가맹점이 별도로 발행하지 않는다.
+- 방화벽으로 아웃바운드를 제한하는 환경이면 결제 API 서버(`open-api.kakaopay.com`)의 공식 IP를 허용한다. 현재 Docker 환경은 아웃바운드를 제한하지 않는 것으로 보이며 `확인 필요`.
