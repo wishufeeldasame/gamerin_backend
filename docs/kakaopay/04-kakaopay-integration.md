@@ -19,13 +19,28 @@
 
 | 내부 API | 용도 |
 |---|---|
+| `GET /api/v1/payments/products` | 서버 상품 정의 목록(충전 패키지 4종 + `MEMBERSHIP_30D`): 상품 코드, 목적, 표시명, 결제 금액, 적립 마일리지 또는 이용 기간. 지갑·멤버십 화면은 가격을 하드코딩하지 않고 이 응답을 표시한다 |
 | `POST /api/v1/payments/kakao/ready` | `{ productCode, requestId }`로 주문 준비; 서버가 목적·가격 결정 |
 | `POST /api/v1/payments/kakao/approve` | `{ orderId, pgToken }`로 승인 시도 |
+| `GET /api/v1/payments` | 본인 결제 목록(지갑 결제 내역). 기존 `CursorPageResponse` 형식, `(createdAt, id)` 내림차순 커서. 대상 상태는 6-6절 |
 | `GET /api/v1/payments/{orderId}` | 본인 주문의 결제·혜택 반영 상태 조회 |
 | `POST /api/v1/payments/{orderId}/cancel` | 전액 결제 취소·내부 회수. 주문 소유자 본인 + `kakaopay.cancel-enabled = true` + 주문 CID와 설정 CID 일치일 때만 동작(6-6절). 사용자 화면 연결 없음 |
 | `GET /api/v1/memberships/me` | 현재 이용 기간·혜택·만료 상태 |
 
-경로·용도는 확정이며 요청·응답 DTO 필드 이름은 구현 중 조정할 수 있다. 기존 잔액·거래 API는 유지한다. `requestId`는 구매자와 함께 중복 주문을 막는 키이며 같은 키에 다른 상품은 거부한다. 기존 `ApiResponse<T>` 성공·오류 형식을 유지한다.
+경로·용도는 확정이며 요청·응답 DTO 필드 이름은 구현 중 조정할 수 있다. 상품 정의는 서버 상수(M1과 충전 패키지) 하나이며 상품 목록 응답·ready 가격 결정·화면 표시가 모두 이를 사용한다. 기존 잔액·거래 API는 유지한다. `requestId`는 구매자와 함께 중복 주문을 막는 키다. 같은 키로 다시 요청할 때의 응답은 6-6절 재호출 응답을 따른다. 기존 `ApiResponse<T>` 성공·오류 형식을 유지한다.
+
+오류 응답은 기존 `ResponseStatusException` + `{ success: false, message }` 형식을 따른다.
+
+| 상황 | HTTP |
+|---|---|
+| 인증 없음 | 401(기존 Security 처리) |
+| 정지 사용자 | 403(기존 `UserSuspensionFilter`) |
+| 타인 주문 조회·승인·취소 | 403(기존 멘토링 소유자 검사와 같은 방식) |
+| 주문 없음 | 404 |
+| 허용하지 않은 상품 코드, 요청 형식 오류 | 400 |
+| 결제 취소 기능 꺼짐(`cancel-enabled = false`), 주문 CID와 설정 CID 불일치 | 403 |
+| 상태상 허용되지 않는 요청(6-6절 재호출 응답의 409), 같은 `requestId`에 다른 상품, 잔액 부족·후속 구매·미완료 이용권 주문으로 인한 취소 거부, `CANCELING` 중 이용권 ready | 409 |
+| 설정 누락(`kakaopay.cid`·Secret key 비어 있음), 카카오페이 설정 오류 | 503 |
 
 ```text
 지갑/멤버십 → 상품 선택 → (PC) 빈 팝업 먼저 열기 → 서버 주문 저장 → 카카오 결제 준비(ready)
@@ -44,18 +59,25 @@
 5. 타임아웃·승인 후 DB 실패·프로세스 중단은 `APPROVING`으로 남기고(화면 표시 `결제 확인 중`) TID로 주문 조회 후 복구한다(6-6절). 결과 불명을 실패로 단정하거나 새 결제를 유도하지 않는다.
 6. catch에서 취소 API를 한 번 호출하는 것만으로 복구를 끝내지 않는다. 취소도 실패할 수 있고 커밋 실패는 메서드 밖에서 발생할 수 있다. 미확정 주문은 6-6절의 조회 시점 복구와 5분 스케줄러로 재조회하고, 자동 판정할 수 없는 주문은 `NEEDS_REVIEW`로 남긴다.
 7. cancel/fail 브라우저 복귀는 표시용 신호다. 승인된 주문을 덮어쓰거나 환불하지 않는다. 실제 취소는 결제사 상태·적립 사용 여부를 확인하는 별도 절차다.
-8. 충전 `referenceId = payment.id`를 기록한다. 전액 결제 취소 시 내부 잔액·이용 기간 회수와 실패 복구까지 처리한다. 취소 중 사용·재구매가 끼어들지 않도록 내부 상태로 제어하고 외부 요청 중에는 DB 잠금을 장시간 유지하지 않는다. 취소 결과 불명은 조회로 복구하며 외부 취소와 내부 회수를 각각 한 번만 반영한다.
-9. **ready 응답 유실:** TID를 받지 못했으므로 결제가 시작되지 않은 상태다. 주문을 실패로 닫고 사용자가 새로 결제를 시작하게 한다. 카카오페이는 가맹점 주문번호로 조회하는 API를 제공하지 않는다.
+8. 충전 `referenceId = payment.id`를 기록한다. 전액 결제 취소 시 내부 잔액·이용 기간 회수와 실패 복구까지 처리한다. 회수 선반영과 사용자 단위 직렬화(6-6절 결제 취소)로 취소 중 잔액 사용·이용권 재구매가 끼어들지 않게 하고, 외부 요청 중에는 DB 잠금을 장시간 유지하지 않는다. 취소 결과 불명은 조회로 복구하며 외부 취소와 내부 회수를 각각 한 번만 반영한다.
+9. **ready 응답 유실:** 두 구간을 구분한다.
+   - 카카오페이 → 백엔드: TID를 받지 못했으므로 결제가 시작되지 않은 상태다. 주문을 `FAILED`로 닫고 사용자가 새로 결제를 시작하게 한다. 카카오페이는 가맹점 주문번호로 조회하는 API를 제공하지 않는다.
+   - 백엔드 → 브라우저: 서버는 `READY`와 결제창 URL을 저장했다. 브라우저가 같은 `requestId`로 다시 요청하면 기존 주문과 저장된 URL을 돌려준다(6-6절 재호출 응답).
 10. **15분 만료:** TID와 결제 요청은 15분간 유효하며 경과 시 카카오페이가 `fail_url`로 보낸다. 서버는 ready 시각 + 15분이 지난 `READY` 주문을 주문 조회로 확인해 `SUCCESS_PAYMENT`가 아니면 `EXPIRED`로 닫는다. 만료된 주문의 approve 요청은 거부한다.
 11. **카카오페이 상태 매핑:** 주문 조회 `status`를 내부 상태로 변환한다. `SUCCESS_PAYMENT` → 승인 확정·내부 반영, `CANCEL_PAYMENT` → 취소 확정·내부 회수, `PART_CANCEL_PAYMENT` → 이번 범위에서 발생하지 않아야 하므로 `NEEDS_REVIEW`, `FAIL_PAYMENT`·`QUIT_PAYMENT`·`FAIL_AUTH_PASSWORD` → 실패, `READY`·`SEND_TMS`·`OPEN_PAYMENT`·`SELECT_METHOD`·`ARS_WAITING`·`AUTH_PASSWORD` → 진행 중(만료 전 재조회).
-12. **오류 분류:** 카카오페이 오류는 `{ error_code, error_message, extras.method_result_code, extras.method_result_message }` 형식이다. 응답을 받은 4xx(`-780` 승인 실패, `-781` 취소 실패, `-731` 잘못된 CID 등)는 확정 실패로, 타임아웃·연결 끊김·5xx(`-500`, `-503`)는 결과 불명으로 처리한다. `-401`(키 오류)·`-403`(사용 API 미등록)·`-429`(쿼터 초과)는 설정 문제로 로그·알림 대상이다. `extras` 메시지를 사용자에게 그대로 노출하지 않는다.
+12. **오류 분류:** 카카오페이 오류는 `{ error_code, error_message, extras.method_result_code, extras.method_result_message }` 형식이다. **HTTP 상태만으로 결제 성립 여부를 판정하지 않는다.** 공식 결제 오류코드 v1.7에는 `-702`(이미 결제 완료된 TID 재승인), `-785`(결제·취소 중복 요청), `-780`의 `BANK_FIRM_UNKNOWN`(은행 처리 결과 미확인)·`USER_LOCKED`(동일 사용자 거래 처리 중)처럼 4xx지만 결제가 성립했거나 결과가 불명확한 경우가 있다.
+    - **ready 단계 4xx:** TID가 발급되지 않았으므로 `FAILED`로 닫는다.
+    - **approve·cancel 단계 4xx(`-780`, `-781`, `-702`, `-785` 등 전부):** 실패로 단정하지 않는다. 처리권을 가진 작업자가 즉시 TID 주문 조회를 하고 11번 매핑대로 전이한다. 조회 결과가 진행 중이거나 조회도 실패하면 상태를 유지하고 6-6절 복구로 넘긴다.
+    - **타임아웃·연결 끊김·5xx(`-500`, `-503`):** 결과 불명. 상태를 유지하고 주문 조회로 복구한다.
+    - **설정 오류(`-401` 키 오류, `-403` 사용 API 미등록, `-429` 쿼터 초과, `-731` 잘못된 CID):** 오류 로그·알림 대상이다. ready 단계면 `FAILED`, approve·cancel 단계면 상태를 유지하고 설정을 바로잡은 뒤 복구로 정리한다.
+    - `error_message`·`extras` 메시지를 사용자에게 그대로 노출하지 않고, 로그에는 코드만 남긴다.
 
 주문 조회는 TID로 상태를 확인하는 공식 API다. 카카오페이 포럼 답변은 ready 응답 실패 시 처음부터 다시 결제하고, approve 응답 실패 시 TID로 주문 조회하라고 안내한다. [주문 조회](https://developers.kakaopay.com/docs/payment/online/payment-detail), [응답 실패 처리 안내](https://developers.kakaopay.com/forum/t/topic/180), [TID 유효시간 15분](https://developers.kakaopay.com/forum/t/api/657/2), [참고하기·오류 형식](https://developers.kakaopay.com/docs/payment/online/reference)
 
 ### 6-3. 인증·환경
 
 - 결과 페이지가 직접 승인할 때(모바일·부모 창 부재)는 `isAuthReady` 이후 승인한다. 팝업은 새 브라우징 컨텍스트라 메모리 access token이 없으므로, PC에서는 이미 인증된 부모 창이 승인하는 것을 기본으로 한다. 계정 전환 시 서버가 주문 소유자 불일치를 거부한다.
-- 현재 저장 사용자가 없으면 refresh를 시도하지 않으며 로그인/OAuth 성공은 `/home`으로 이동한다. 결제 중 재로그인 후 결과 확인 문맥을 보존하는 처리가 필요하다. 장기 복구는 서버 주문 조회를 사용하고 pg_token을 로컬 저장소에 영속 저장하지 않는다.
+- **재로그인 시 승인 재개 없음(확정):** 현재 저장 사용자가 없으면 refresh를 시도하지 않으며 로그인/OAuth 성공은 `/home`으로 이동한다. 서버에 승인 재개 문맥을 저장하지 않는다. 결과 페이지가 인증을 복구하지 못하면 approve를 호출하지 않고 로그인 안내를 표시한다. 미승인 주문은 15분 만료로 정리되며 사용자는 로그인 후 새로 결제한다. 이미 `APPROVING`·`APPROVED` 등인 주문은 로그인 후 지갑 결제 내역·주문 조회로 결과만 확인하고 새 결제를 유도하지 않는다. pg_token은 URL·`localStorage`·`sessionStorage`·로그에 남기지 않는다. PC는 인증된 부모 창이 승인하고, 모바일은 같은 탭으로 복귀해 저장 사용자와 refresh 쿠키가 유지되므로 이 경로는 예외 상황이다.
 - Secret key·결제 토큰을 로그에 남기지 않는다. 처리 후 결과 URL의 토큰을 제거하고 프록시 access log의 쿼리 기록도 확인한다.
 - 공식 단건 문서에 HTTPS `open-api.kakaopay.com`, `Authorization: SECRET_KEY ...`, `Content-Type: application/json`, 가맹점 코드(CID), approval 복귀의 pg_token이 안내되어 있다. 필드 규격은 6-5절에 정리했다. [단건 결제](https://developers.kakaopay.com/docs/payment/online/single-payment)
 - Secret key와 CID는 코드에 고정하지 않고 설정(`kakaopay.api.secret-key`, `kakaopay.cid`)으로 주입한다. 개발자센터는 Secret key(dev)·CID `TC0ONETIME`과 Secret key(prod)·가맹점 CID를 구분해 발급하며, 두 경우 모두 같은 호스트(`open-api.kakaopay.com`)를 쓴다. 코드는 키 종류를 구분하지 않고, 설정된 CID 하나만 허용해 요청·응답·저장 CID가 이와 일치하는지 검사한다. `TC` 접두사 같은 형식 검사로 대체하지 않는다. [단건 결제](https://developers.kakaopay.com/docs/payment/online/single-payment), [REST API 서버환경](https://developers.kakaopay.com/docs/getting-started/api-common-guide/restapi)
@@ -97,7 +119,7 @@
 | cancel `POST /online/v1/payment/cancel` | `cid`, `tid`, `cancel_amount`=결제 금액 전액, `cancel_tax_free_amount`=0(**필수**), `cancel_available_amount`=저장된 결제 금액(카카오페이 쪽 잔여 금액이 다르면 거부되게 함) | `aid`, `status`=`CANCEL_PAYMENT`, `canceled_at`, `approved_cancel_amount.total`이 요청 금액과 같은지 |
 
 - 요청·응답 시각(`created_at`, `approved_at`, `canceled_at`)은 오프셋 없는 `yyyy-MM-ddTHH:mm:ss` 형식이다. KST로 해석해 `OffsetDateTime`으로 저장한다(`확인 필요`: 공식 문서에 시간대 명시 없음).
-- 공통 오류 코드: `-400` Authorization 누락, `-401` Secret key 오류, `-403` 사용 API 미등록, `-404` URL 오류, `-429` 일일 쿼터 초과(매일 0시 초기화, 온라인 결제의 구체적 허용량은 문서에 없음), `-500` 내부 오류, `-503` 점검. 결제별 상세 오류 코드는 공식 엑셀(결제 오류코드 v1.7)로 제공되며 이번 조사에서 내려받지 않았다. [에러 코드](https://developers.kakaopay.com/docs/getting-started/api-common-guide/error-code), [쿼터](https://developers.kakaopay.com/docs/getting-started/api-common-guide/quota)
+- 공통 오류 코드: `-400` Authorization 누락, `-401` Secret key 오류, `-403` 사용 API 미등록, `-404` URL 오류, `-429` 일일 쿼터 초과(매일 0시 초기화, 온라인 결제의 구체적 허용량은 문서에 없음), `-500` 내부 오류, `-503` 점검. 결제별 상세 오류 코드는 공식 엑셀(결제 오류코드 v1.7)로 제공된다. 2026-10-10 검토에서 엑셀을 내려받아 대조했고 그 결과를 6-2절 12번에 반영했다. 엑셀에는 구 API 공통 설명이 섞여 있으므로 공통 오류 형식은 신규 공식 문서를 기준으로 한다. [에러 코드](https://developers.kakaopay.com/docs/getting-started/api-common-guide/error-code), [쿼터](https://developers.kakaopay.com/docs/getting-started/api-common-guide/quota)
 - 결제 수단 제한(`payment_method_type`), 할부(`install_month`), 카드사 지정(`available_cards`), 컵 보증금(`green_deposit`)은 사용하지 않는다.
 - 카카오페이 머니 결제 시 현금영수증은 카카오페이가 자동 발행하며 가맹점이 별도로 발행하지 않는다.
 - 방화벽으로 아웃바운드를 제한하는 환경이면 결제 API 서버(`open-api.kakaopay.com`)의 공식 IP를 허용한다. 현재 Docker 환경은 아웃바운드를 제한하지 않는 것으로 보이며 `확인 필요`.
@@ -112,14 +134,16 @@
 |---|---|---|
 | `CREATED` | 주문 저장, ready 호출 전·중 | `READY`(ready 성공, TID 저장) / `FAILED`(ready 확정 실패·응답 유실, 또는 1분 경과) |
 | `READY` | TID 발급, 사용자 결제 대기 | `APPROVING`(approve 처리권 확보) / `EXPIRED`(ready + 15분 경과, 조회 결과 `SUCCESS_PAYMENT` 아님) / `FAILED`(조회 결과 `FAIL_PAYMENT`·`QUIT_PAYMENT`·`FAIL_AUTH_PASSWORD`) |
-| `APPROVING` | approve 호출 중 또는 결과 불명 | `APPROVED` / `FAILED`(4xx 확정 실패 또는 조회 결과 실패) / `EXPIRED`(ready + 15분 경과 후 조회 결과 진행 중) / `NEEDS_REVIEW`(금액·식별자 불일치) |
+| `APPROVING` | approve 호출 중 또는 결과 불명 | `APPROVED` / `FAILED`(주문 조회 결과 실패) / `EXPIRED`(ready + 15분 경과 후 조회 결과 진행 중) / `NEEDS_REVIEW`(금액·식별자 불일치) |
 | `APPROVED` | 카카오페이 승인 + 내부 반영(적립 또는 기간 부여) 완료 | `CANCELING`(결제 취소 처리권 확보) |
-| `CANCELING` | 내부 회수 반영 후 외부 취소 호출 중 또는 결과 불명 | `CANCELED` / `NEEDS_REVIEW` |
+| `CANCELING` | 내부 회수 반영 후 외부 취소 호출 중 또는 결과 불명 | `CANCELED` / `NEEDS_REVIEW`(외부 취소가 응답으로 거부되고 조회 결과도 취소되지 않음) |
 | `CANCELED` | 외부 취소 + 내부 회수 완료 | 종료 |
 | `FAILED`, `EXPIRED` | 결제되지 않음 | 종료. approve 요청은 거부 |
 | `NEEDS_REVIEW` | 자동 판정 불가. 로그를 남기고 DB에서 수동 확인 | 종료(관리자 화면은 만들지 않음) |
 
-- 모든 전이는 `UPDATE … WHERE id = ? AND status = ?` 조건부 갱신 또는 행 잠금으로 처리권을 확보한다. 요청 경로와 스케줄러가 같은 주문을 동시에 처리해도 한 쪽만 진행한다.
+상태는 위 9개이며 Java enum·DB CHECK·상태 전이 테스트가 같은 목록을 사용한다.
+
+- **처리권:** 모든 전이와 복구 착수는 `UPDATE payments SET status = :next, status_changed_at = :now WHERE id = :id AND status = :observedStatus AND status_changed_at = :observedChangedAt`로 확보한다. 갱신 행 수가 1이면 처리권을 얻은 것이고, 0이면 다른 작업자가 처리 중이므로 외부 호출 없이 현재 상태만 반환한다. 오래된 `APPROVING`·`CANCELING`을 복구할 때는 상태를 그대로 두고 `status_changed_at`만 갱신해 처리권을 잡는다. 외부 호출 후의 결과 반영도 자신이 기록한 `status_changed_at`이 그대로일 때만 같은 트랜잭션에서 내부 반영과 함께 커밋한다. 처리권을 잃은 늦은 응답은 롤백되고 새 상태를 덮어쓰지 않는다.
 - 내부 반영의 최종 방어는 원장 `(type, reference_id)` 부분 UNIQUE와 `membership_grants.payment_id` UNIQUE다.
 - 주문 조회로 복구할 때 `SUCCESS_PAYMENT`이면 응답의 `amount.total`과 `payment_action_details[]`의 `aid`로 approve 응답과 같은 검증을 한 뒤 내부 반영하고 `APPROVED`로 전환한다.
 - 브라우저의 cancel/fail 복귀는 상태를 바꾸지 않는다. 화면은 주문 조회 결과를 따른다.
@@ -131,16 +155,46 @@
   - `CREATED` 1분 이상 → `FAILED`(TID가 없어 조회할 수 없음)
   - `READY` 15분 경과 → 주문 조회 후 `EXPIRED`·`FAILED`
   - `APPROVING`·`CANCELING` 1분 이상 → 주문 조회 후 위 표대로 전이
-- 카카오페이 조회 자체가 실패(타임아웃·5xx)하면 상태를 유지하고 다음 주기에 다시 시도한다. 설정 오류(`-401`·`-403`·`-429`)는 오류 로그를 남긴다.
+- 카카오페이 조회 자체가 실패(타임아웃·5xx)하면 상태를 유지하고 다음 주기에 다시 시도한다. 설정 오류(`-401`·`-403`·`-429`·`-731`)는 오류 로그를 남긴다.
+- `CANCELING` 복구에서 조회 결과가 `SUCCESS_PAYMENT`(외부 취소 미반영)이고 이전 취소 호출이 확정 응답을 받지 못한 경우(타임아웃·서버 중단)는 외부 취소를 다시 호출한다. `cancel_available_amount`를 저장 금액으로 보내므로 이중 취소되지 않는다. 취소가 4xx로 거부되고 조회 결과도 `SUCCESS_PAYMENT`이면 `NEEDS_REVIEW`로 둔다.
+
+#### 재호출 응답
+
+브라우저가 응답을 받지 못해 같은 요청을 다시 보내도 외부 호출·적립·기간 부여·회수는 중복되지 않는다. 응답은 기존 `ApiResponse` 형식의 결제 상태 DTO(`orderId`, `status`, 목적·상품·금액 등)를 사용한다.
+
+| 요청 | 기존 주문 상태 | 응답 |
+|---|---|---|
+| ready(같은 구매자·`requestId`) | 상품 코드가 다름 | 409 거부 |
+| | `CREATED` | 200, 상태 `CREATED`(처리 중), URL 없음 |
+| | `READY`(ready + 15분 이내) | 200, 저장된 `pcUrl`·`mobileUrl` 재응답 |
+| | 그 밖의 상태 | 200, 현재 상태만. 새 결제는 새 `requestId`로 시작 |
+| approve | `READY` | 승인 진행 |
+| | `APPROVING` | 200, 현재 상태(결과 불명이면 조회 시점 복구 후 결과) |
+| | `APPROVED`·`CANCELING`·`CANCELED`·`NEEDS_REVIEW` | 200, 현재 상태. 외부 호출 없음 |
+| | `CREATED`·`FAILED`·`EXPIRED` | 409 거부 |
+| cancel | `APPROVED` | 취소 진행(권한·조건 검사) |
+| | `CANCELING` | 200, 현재 상태(결과 불명이면 조회 시점 복구 후 결과) |
+| | `CANCELED` | 200, 현재 상태. 외부 호출 없음 |
+| | 그 밖의 상태 | 409 거부 |
+
+- 결제창 URL(`next_redirect_pc_url`·`next_redirect_mobile_url`)은 `payments`에 저장하되 `READY`이고 15분 이내일 때만 응답하며 로그에 남기지 않는다.
+
+#### 결제 목록
+
+- `GET /api/v1/payments`는 본인 결제만 반환한다. 대상은 실제 결제가 일어났거나 확인 중인 `APPROVING`·`APPROVED`·`CANCELING`·`CANCELED`·`NEEDS_REVIEW`이며, 화면에는 `APPROVING`·`CANCELING`·`NEEDS_REVIEW`를 `결제 확인 중`으로 표시한다. 결제가 일어나지 않은 `CREATED`·`READY`·`FAILED`·`EXPIRED`는 제외한다.
+- 필드: `orderId`, 목적, 상품명, 금액, 상태, 결제 수단(CARD/MONEY), 생성·승인·취소 시각. TID·AID·CID·URL은 내려주지 않는다.
+- 마일리지 원장과 별도 탭으로 표시해 10,000원 결제와 10,000 마일리지 적립이 이중 지출처럼 보이지 않게 한다. 카카오페이 주문 조회는 저장된 TID의 상태 확인 용도이며 이 목록을 대체하지 않는다.
 - 한 번에 처리할 주문 수를 제한한다. 외부 호출 동안 DB 잠금을 유지하지 않는다.
 
 #### 결제 취소
 
-1. **권한·기능 플래그:** 주문 소유자 본인이어야 한다. `kakaopay.cancel-enabled = true`이고, 주문 CID가 설정 CID와 같으며, 상태가 `APPROVED`여야 한다. 하나라도 어긋나면 거부한다. 플래그 기본값은 `false`다.
+1. **권한·기능 플래그:** 주문 소유자 본인이어야 한다. `kakaopay.cancel-enabled = true`이고, 주문 CID가 설정 CID와 같으며, 상태가 `APPROVED`여야 한다. 하나라도 어긋나면 거부한다(재호출은 위 표). 플래그 기본값은 `false`다.
 2. **내부 회수 선반영(한 트랜잭션):** 결제를 `APPROVED → CANCELING`으로 전환하고 회수를 함께 반영한다. 회수를 먼저 반영해 외부 취소 중에 잔액 사용·재구매가 끼어들지 못하게 한다.
    - 충전: 지갑을 잠그고 잔액이 충전액 이상인지 확인한 뒤 `CHARGE_CANCEL`(−충전액, `reference_id = payment.id`)을 기록한다. 부족하면 거부한다.
-   - 이용권: `user_memberships`를 잠그고 대상 grant가 마지막 `GRANTED`인지 확인한다. `expires_at = granted_from`으로 되돌리고 grant를 `REVOKED`로 바꾼다. 후속 구매가 있으면 거부한다.
+   - 이용권: User 행과 `user_memberships`를 잠그고 대상 grant가 마지막 `GRANTED`인지 확인한다. 같은 사용자에게 `CREATED`·`READY`·`APPROVING` 상태의 이용권 주문이 있으면 거부한다. `expires_at = granted_from`으로 되돌리고 grant를 `REVOKED`로 바꾼다. 후속 구매가 있으면 거부한다.
+   - 이용권 ready도 같은 User 행 잠금 아래에서 그 사용자의 `CANCELING` 이용권 주문 존재 여부를 확인하고, 있으면 거부한다. 취소 시작과 새 이용권 주문이 직렬화되므로 취소 진행 중에는 새 승인이 생기지 않는다.
 3. **외부 취소:** 카카오페이 cancel(6-5절)을 호출한다.
    - 성공하면 `CANCELED`로 전환한다.
-   - 결과 불명이면 `CANCELING`으로 두고 복구 대상으로 넘긴다. 조회 결과 `CANCEL_PAYMENT`이면 `CANCELED`, `SUCCESS_PAYMENT`이면 `NEEDS_REVIEW`로 전환한다.
-   - 확정 실패(4xx)이면 `NEEDS_REVIEW`로 둔다. 회수를 자동으로 되돌리면 그 사이의 잔액 변동·재구매와 충돌할 수 있으므로, 결제사 상태를 확인한 뒤 수동으로 처리한다.
+   - 결과 불명(타임아웃·5xx)이면 `CANCELING`으로 두고 복구 대상으로 넘긴다. 조회 결과 `CANCEL_PAYMENT`이면 `CANCELED`, `SUCCESS_PAYMENT`이면 외부 취소를 다시 호출한다(복구 실행 참고).
+   - 4xx이면 즉시 주문 조회를 한다. `CANCEL_PAYMENT`이면 `CANCELED`(`-785` 중복 요청 등), `SUCCESS_PAYMENT`이면 `NEEDS_REVIEW`로 둔다. 회수를 자동으로 되돌리면 그 사이의 잔액 변동과 충돌할 수 있으므로 결제사 상태를 확인한 뒤 수동으로 처리한다.
+4. **`NEEDS_REVIEW` 수동 복구 기준:** 주문·원장·부여 이력을 삭제하지 않고 보존한다. 결제가 살아 있는데 회수만 된 충전은 같은 금액을 다시 적립하고, 이용권은 회수했던 30일을 현재 만료일 뒤에 다시 부여한다(`max(now, expires_at) + 30일`). 승인된 다른 이용권과 기간이 겹치거나 사라지지 않는다.

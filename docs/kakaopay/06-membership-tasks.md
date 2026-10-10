@@ -10,14 +10,14 @@
 
 | ID | 항목 | 근거 정책 | 내용 |
 |---|---|---|---|
-| M1 | 이용권 상품 정의 | 가격 4,900원·30일 | 서버 상수 `MEMBERSHIP_30D`(가격 4,900, 기간 30일). 결제 ready 시 이 정의로 금액을 결정하고 응답·화면 표시 가격도 같은 정의에서 내려준다. 설정 테이블·관리자 수정 기능은 만들지 않는다. |
+| M1 | 이용권 상품 정의 | 가격 4,900원·30일 | 서버 상수 `MEMBERSHIP_30D`(가격 4,900, 기간 30일). 결제 ready 시 이 정의로 금액을 결정하고 `GET /api/v1/payments/products`·`/memberships/me`의 표시 가격도 같은 정의에서 내려준다. 설정 테이블·관리자 수정 기능은 만들지 않는다. |
 | M2 | 이용 기간 저장 | 30일 이용권·직접 재구매 | `user_memberships(user_id PK, expires_at, updated_at)`. 사용자당 1행이며 상태 컬럼 없이 `expires_at > now`로 유효를 판정한다. |
 | M3 | 부여 이력 | 중복 연장 방지·취소 회수 | `membership_grants(id, user_id, payment_id UNIQUE, granted_from, granted_until, status GRANTED/REVOKED, created_at)`. 결제 하나로 기간을 두 번 늘리지 못하게 막는다. |
-| M4 | 기간 부여 | 미리 재구매 시 `max(now, expires_at) + 30일` | `user_memberships` 행을 비관적 잠금한 뒤 `granted_from = max(now, expires_at)`, `granted_until = granted_from + 30일`을 계산한다. 이력 저장과 결제 `APPROVED` 전환을 한 트랜잭션에서 처리한다. |
+| M4 | 기간 부여 | 미리 재구매 시 `max(now, expires_at) + 30일` | `user_memberships` 행을 비관적 잠금한다. 행이 없으면 `MileageService.getOrCreateWalletForUpdate`와 같은 방식으로 User 행을 잠근 뒤 다시 조회하고, 그래도 없으면 생성한다. 그다음 `granted_from = max(now, expires_at)`, `granted_until = granted_from + 30일`을 계산한다. 이력 저장과 결제 `APPROVED` 전환을 한 트랜잭션에서 처리한다. |
 | M5 | 유효 판정 API(내부) | 배지·수정·수수료 모두 현재 상태 기준 | `MembershipService.isActive(userId)`와 목록용 `findActiveUserIds(Collection<UUID>)`. 피드·댓글 목록에서 작성자마다 조회하는 N+1을 막는다. |
 | M6 | 만료 처리 | 만료 시 배지 제거·혜택 중단 | 만료 스케줄러는 만들지 않고 조회 시점에 `expires_at`으로 계산한다. 만료 알림은 정책에 없으므로 제외한다. |
 | M7 | 내 멤버십 조회 | 가입자에게 상태·만료일 표시 | `GET /api/v1/memberships/me`: `active`, `expiresAt`, 상품 가격·기간, 혜택 요약 |
-| M8 | 결제 취소 회수 | 해당 구매 기간만 회수 | 취소 대상 grant가 사용자의 **마지막 GRANTED 이력**일 때만 허용하고 `expires_at = granted_from`으로 되돌린 뒤 `REVOKED` 처리한다. 후속 구매가 있으면 거부한다. 이용 기간 중 게시물 수정·5% 요율 신청 여부는 검사하지 않는다. 이전 구매로 남은 기간은 그대로 보존된다. |
+| M8 | 결제 취소 회수 | 해당 구매 기간만 회수 | User 행을 잠그고, 같은 사용자의 `CREATED`·`READY`·`APPROVING` 이용권 주문이 있으면 거부한다(`CANCELING` 중 새 이용권 ready도 거부, 04 문서 6-6절). 취소 대상 grant가 사용자의 **마지막 GRANTED 이력**일 때만 허용하고 `expires_at = granted_from`으로 되돌린 뒤 `REVOKED` 처리한다. 후속 구매가 있으면 거부한다. 이용 기간 중 게시물 수정·5% 요율 신청 여부는 검사하지 않는다. 이전 구매로 남은 기간은 그대로 보존된다. |
 | M9 | 정지 사용자 결제 거부 | 정지 중 결제 불가 | 추가 구현 없음. `User.status = SUSPENDED`이면 기존 `UserSuspensionFilter`가 결제 API를 포함한 인증 API 전체에 403을 반환한다. 결제 API가 이 필터 뒤의 인증 경로에 있는지만 테스트로 확인한다. 경고만 받은 사용자는 결제할 수 있다. |
 | M10 | 기간 상한 없음 | 미리 재구매 누적 | 누적 만료일 상한 검사를 두지 않는다. |
 
