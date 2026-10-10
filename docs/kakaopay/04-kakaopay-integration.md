@@ -108,6 +108,7 @@
 - PC·모바일 판정은 클라이언트에서 한다. 서버 ready 응답은 `pcUrl`, `mobileUrl`을 함께 내려주고 TID는 내려주지 않는다.
 - pg_token은 postMessage와 approve 요청 본문으로만 전달하고 `localStorage`·`sessionStorage`에 저장하지 않는다. 결과 페이지는 처리 직후 `history.replaceState`로 쿼리를 제거한다.
 - 같은 주문의 approve가 부모 창과 팝업 폴백에서 중복 호출될 수 있으므로 6-2절의 멱등 처리로 한 번만 반영한다.
+- 팝업으로 열린 결과 페이지는 인증 복원(refresh)을 하지 않는다. refresh는 매번 기존 토큰을 폐기하므로, 응답 전에 팝업이 닫히면 부모 창의 세션이 끊긴다. 프론트 구현은 12-6절을 따른다.
 
 ### 6-5. 카카오페이 API 규격 대조 (2026-10-10 공식 문서 기준)
 

@@ -18,6 +18,7 @@
 | [05-data-and-rollout.md](05-data-and-rollout.md) | 데이터·저장소별 구현 범위, 구현 순서·완료 기준 | 7, 8 |
 | [06-membership-tasks.md](06-membership-tasks.md) | 확정 정책에서 파생되는 멤버십 구현 항목(M·B·E·F) | 10 |
 | [07-work-split.md](07-work-split.md) | 백엔드 3인 작업 분배, 이슈·브랜치, 진행 순서·충돌 주의 | 11 |
+| [08-frontend-design-dev.md](08-frontend-design-dev.md) | 프론트 화면 설계·결제 흐름 구현·API 모듈·배지·게시물 수정·테스트 | 12 |
 
 본문의 `N절`, `N-M절` 표기는 위 표의 절 번호를 따른다.
 
