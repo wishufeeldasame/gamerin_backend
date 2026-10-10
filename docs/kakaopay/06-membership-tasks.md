@@ -4,7 +4,7 @@
 
 ## 10. 확정 정책에서 파생되는 멤버십 구현 항목
 
-확정 정책을 만족하기 위해 **추가로 만들어야 하는 기능**을 정리했다. 이름·경로·컬럼은 구현 제안이며, 동작 정책은 모두 상단 확정 표를 따른다.
+확정 정책을 만족하기 위해 **추가로 만들어야 하는 기능**을 정리했다. 동작·제약은 확정이며, 클래스·경로·컬럼 이름만 구현 중 기존 코드 규칙에 맞춰 조정할 수 있다.
 
 ### 10-1. 멤버십 코어 (`domain/membership`)
 
@@ -17,8 +17,8 @@
 | M5 | 유효 판정 API(내부) | 배지·수정·수수료 모두 현재 상태 기준 | `MembershipService.isActive(userId)`와 목록용 `findActiveUserIds(Collection<UUID>)`. 피드·댓글 목록에서 작성자마다 조회하는 N+1을 막는다. |
 | M6 | 만료 처리 | 만료 시 배지 제거·혜택 중단 | 만료 스케줄러는 만들지 않고 조회 시점에 `expires_at`으로 계산한다. 만료 알림은 정책에 없으므로 제외한다. |
 | M7 | 내 멤버십 조회 | 가입자에게 상태·만료일 표시 | `GET /api/v1/memberships/me`: `active`, `expiresAt`, 상품 가격·기간, 혜택 요약 |
-| M8 | 테스트 취소 회수 | 해당 구매 기간만 회수 | 취소 대상 grant가 사용자의 **마지막 GRANTED 이력**일 때만 허용하고 `expires_at = granted_from`으로 되돌린 뒤 `REVOKED` 처리한다. 후속 구매가 있으면 거부한다. 이용 기간 중 게시물 수정·5% 요율 신청 여부는 검사하지 않는다. 이전 구매로 남은 기간은 그대로 보존된다. |
-| M9 | 정지 사용자 결제 거부 | 활성 제재 중 결제 불가 | 결제 ready에서 로그인 차단과 같은 활성 제재 판정을 재사용해 충전·이용권 모두 거부한다. |
+| M8 | 결제 취소 회수 | 해당 구매 기간만 회수 | 취소 대상 grant가 사용자의 **마지막 GRANTED 이력**일 때만 허용하고 `expires_at = granted_from`으로 되돌린 뒤 `REVOKED` 처리한다. 후속 구매가 있으면 거부한다. 이용 기간 중 게시물 수정·5% 요율 신청 여부는 검사하지 않는다. 이전 구매로 남은 기간은 그대로 보존된다. |
+| M9 | 정지 사용자 결제 거부 | 정지 중 결제 불가 | 추가 구현 없음. `User.status = SUSPENDED`이면 기존 `UserSuspensionFilter`가 결제 API를 포함한 인증 API 전체에 403을 반환한다. 결제 API가 이 필터 뒤의 인증 경로에 있는지만 테스트로 확인한다. 경고만 받은 사용자는 결제할 수 있다. |
 | M10 | 기간 상한 없음 | 미리 재구매 누적 | 누적 만료일 상한 검사를 두지 않는다. |
 
 ### 10-2. 배지
@@ -26,7 +26,7 @@
 | ID | 항목 | 내용 |
 |---|---|---|
 | B1 | 기존 배지 필드가 있는 응답 | `membershipBadge`(작성자 문맥은 `authorMembershipBadge`)를 추가한다. 대상: `DetailedUserProfileResponse`, `SimpleUserProfileResponse`, `PostCardResponse`, `PostDetailResponse`, `CommentResponse`, `FollowUserResponse`, `NotificationActorResponse`. 조립 지점은 `UserService`, `PostResponseAssembler`, `FollowService`, `NotificationQueryService`. 기존 `verifiedBadge`는 그대로 둔다. |
-| B2 | 배지 필드가 없는 사용자 노출 응답 | 새로 추가한다: 리포스트한 사용자(`ReposterInfoResponse`), DM 상대·대화방(`MessageRecipientResponse`, `ConversationResponse`의 참여자), 멘토링 멘토·멘티·리뷰 작성자(`MentorProfileResponse`, `MentoringProgramResponse`, `MentoringProgramDetailResponse`, `MentoringApplicationResponse`, `MentoringReviewResponse`), 로그인 사용자 본인(`MeResponse`). 검색 결과는 위 사용자 DTO를 재사용하는지 구현 시 확인한다. |
+| B2 | 배지 필드가 없는 사용자 노출 응답 | 새로 추가한다: 리포스트한 사용자(`ReposterInfoResponse`), DM 상대·대화방(`MessageRecipientResponse`, `ConversationResponse`의 참여자), 멘토링 멘토·멘티·리뷰 작성자(`MentorProfileResponse`, `MentoringProgramResponse`, `MentoringProgramDetailResponse`, `MentoringApplicationResponse`, `MentoringReviewResponse`), 로그인 사용자 본인(`MeResponse`). 검색 결과(`SearchOverviewResponse`)는 `SimpleUserProfileResponse`·`PostCardResponse`를 재사용하므로 B1 반영으로 함께 처리된다. |
 | B3 | 일괄 판정 | 목록 응답은 M5의 `findActiveUserIds`로 한 번에 조회한다. 사용자마다 조회하는 N+1을 만들지 않는다. |
 | B4 | 프론트 컴포넌트 | 작은 왕관 아이콘 공통 컴포넌트, `aria-label`/툴팁 `멤버십 회원`. 닉네임을 표시하는 공통 사용자 표시 요소에 넣어 모든 화면이 재사용하게 한다. |
 | B5 | 제외 | 관리자 화면(`domain/admin`, 신고 관리 응답)은 사용자 화면이 아니므로 이번 노출 범위에서 제외한다. |
@@ -68,8 +68,8 @@
 
 | 항목 | 확정 |
 |---|---|
-| 테스트 취소의 혜택 사용 판정 | 후속 구매 여부만 검사 (M8) |
-| 정지 사용자 결제 | 거부 (M9) |
+| 이용권 결제 취소의 혜택 사용 판정 | 후속 구매 여부만 검사 (M8) |
+| 정지 사용자 결제 | 거부, 기존 `SUSPENDED` 필터로 처리 (M9) |
 | 누적 이용 기간 상한 | 없음 (M10) |
 | 배지 노출 범위 | 사용자 프로필이 표시되는 모든 사용자 화면 (B1~B5) |
 | 수정 시 제거된 멘션 알림 | 유지 (E6) |
