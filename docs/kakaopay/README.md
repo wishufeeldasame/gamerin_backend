@@ -17,6 +17,7 @@
 | [04-kakaopay-integration.md](04-kakaopay-integration.md) | 결제 목적·내부 API, 승인·복구 규칙, 인증·환경, PC 팝업, 카카오페이 API 규격 대조, 결제 상태·처리권·복구 실행·재호출 응답·결제 목록·결제 취소 계약 | 6 |
 | [05-data-and-rollout.md](05-data-and-rollout.md) | 데이터·저장소별 구현 범위, 구현 순서·완료 기준 | 7, 8 |
 | [06-membership-tasks.md](06-membership-tasks.md) | 확정 정책에서 파생되는 멤버십 구현 항목(M·B·E·F) | 10 |
+| [07-work-split.md](07-work-split.md) | 백엔드 3인 작업 분배, 이슈·브랜치, 진행 순서·충돌 주의 | 11 |
 
 본문의 `N절`, `N-M절` 표기는 위 표의 절 번호를 따른다.
 
