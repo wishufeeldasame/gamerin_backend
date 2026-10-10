@@ -27,4 +27,14 @@ public interface PostBookmarkRepository extends JpaRepository<PostBookmark, UUID
             @Param("userId") UUID userId,
             @Param("postIds") Collection<UUID> postIds
     );
+
+    @Query("""
+        select bookmark
+        from PostBookmark bookmark
+        join fetch bookmark.post post
+        join fetch post.author author
+        left join fetch author.profile
+        where bookmark.id in :ids
+        """)
+    List<PostBookmark> findAllByIdsWithPostAuthor(@Param("ids") Collection<UUID> ids);
 }

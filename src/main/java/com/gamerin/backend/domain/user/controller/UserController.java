@@ -71,10 +71,20 @@ public class UserController {
     @GetMapping("/me/bookmarks")
     public ApiResponse<CursorPageResponse<PostCardResponse>> getMyBookmarks(
             @AuthenticationPrincipal CustomUserPrincipal principal,
+            @RequestParam(defaultValue = "all") String scope,
             @RequestParam(required = false) String cursor,
-            @RequestParam(defaultValue = "20") int size
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String q,
+            @RequestParam(defaultValue = "false") boolean mediaOnly
     ) {
-        return ApiResponse.ok(feedService.getMyBookmarks(principal, cursor, size));
+        return ApiResponse.ok(feedService.getMyBookmarks(
+                principal,
+                scope,
+                cursor,
+                size,
+                q,
+                mediaOnly
+        ));
     }
 
     @GetMapping("/{handle}")

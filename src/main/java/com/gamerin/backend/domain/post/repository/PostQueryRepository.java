@@ -15,5 +15,15 @@ public interface PostQueryRepository {
 
     List<PostMedia> findUserMedia(String handle, String cursor, int limit);
 
-    List<PostBookmark> findBookmarkedPosts(UUID userId, String cursor, int limit);
+    List<PostBookmark> findBookmarkedPosts(
+            UUID userId,
+            String cursor,
+            int limit,
+            String keyword,
+            boolean mediaOnly
+    );
+
+    default List<PostBookmark> findBookmarkedPosts(UUID userId, String cursor, int limit) {
+        return findBookmarkedPosts(userId, cursor, limit, null, false);
+    }
 }

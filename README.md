@@ -39,6 +39,8 @@ gamerin DB 생성
 
 ## Docker 운영 배포 메모
 
+R6·Riot 중복 연동 방지 V23 적용 전에는 [중복 계정 사전 점검·정리 및 배포 절차](ISSUE_53_GAME_ACCOUNT_UNIQUENESS.md)를 수행한다. 기존 중복 연결은 migration이 자동으로 해제하지 않는다.
+
 개발 서버의 기준 경로는 `~/capstone`을 사용한다.
 
 ```text
@@ -159,7 +161,7 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 대화방을 나간 사용자가 단순 대화방 조회/생성 요청만으로 상대방에 의해 재활성화되지 않도록 DM participant 재활성화 흐름을 분리
   > 나간 사용자가 직접 같은 상대와 대화방을 다시 열 때는 본인 participant만 복구하고, 상대가 새 메시지를 보낼 때만 incoming message 기준으로 수신자 participant를 복구하도록 정리
   > 공유 게시글만 포함한 메시지가 게시글 hard delete 시 체크 제약을 깨지 않도록 `content`를 빈 문자열로 저장하도록 변경
-  > 기존 `content is null and shared_post_id is not null` DM 데이터를 보정하는 `V13__normalize_direct_message_shared_post_content.sql` Flyway 마이그레이션 추가
+  > 기존 `content is null and shared_post_id is not null` DM 데이터를 보정하는 `V12__normalize_direct_message_shared_post_content.sql` Flyway 마이그레이션 추가
   > 메시지 커서 페이징이 `createdAt`만 비교해 동일 timestamp 메시지를 누락하지 않도록 `(createdAt, id)` 튜플 기준으로 조회 조건 보강
   > 메시지 수정 API, `UpdateMessageRequest`, `editedAt` 응답 필드, `message-updated` 실시간 이벤트, 엔티티 edit 로직 제거
   > DM 삭제/대화방 나가기 명세와 변경 가이드를 현재 지원 기능 기준으로 정리
@@ -242,3 +244,18 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
   > 검증: `./gradlew test --tests com.gamerin.backend.domain.message.service.MessageServiceTest --tests com.gamerin.backend.domain.message.controller.MessageControllerTest --tests com.gamerin.backend.global.security.jwt.JwtAuthenticationFilterTest`, `./gradlew test` 통과
 
   > 요약 : 배포 리스크 보안 변경을 유지하면서 메시지 SSE 인증, 대화방 생성 동시성, 실시간 이벤트/첨부 삭제 트랜잭션 정합성을 보강
+
+- **26/07/21** 서장호
+
+  > PUBG와 R6 전적 요약 응답을 `game`, `connected`, `playerName`, `tierLabel`, `kd`, `winRate`, `matches`, `statsMode` 공통 필드로 정리
+  > 경쟁전과 일반전을 구분하는 공통 `GameStatsMode(RANKED, NORMAL)`를 추가하고 프로필 `gameStats` JSON에도 동일한 값을 저장하도록 변경
+  > PUBG 경쟁전 K/D는 `kills / deaths`, 일반전은 deaths가 없을 때 `kills / losses`로 계산하고 승률과 경기 수를 공통 계약에 맞춰 반환
+  > R6는 경쟁전 기록이 없을 때 일반전 통계를 사용하고, 경쟁전에서만 티어를 제공하도록 파싱 및 저장 로직 정리
+  > R6 연결 시 외부 API의 고유 `accountId`를 기준으로 다른 사용자의 중복 연동을 검사하고 중복이면 `409 Conflict`를 반환하도록 보강
+  > 현재 사용자의 동일 R6 계정 재연결은 허용하며, 중복 실패 시 기존 게임 전적을 변경하지 않도록 테스트 추가
+  > PUBG와 R6 연결 해제 시 해당 게임 항목만 삭제하고 다른 게임 데이터는 유지하도록 검증
+  > 기존 DB 레거시 필드 변환 없이 새 `kd`, `matches`, `statsMode` 구조만 지원하도록 정리
+  > `R6_INTEGRATION_SPEC_KO.md`에 공통 전적 계약, 갱신·해제 및 중복 계정 오류 정책을 반영
+  > 검증: `git diff --check`, 전체 `./gradlew test --rerun-tasks --console=plain` 333건 통과, 실패·오류 0건
+
+  > 요약 : PUBG/R6 전적 계약을 공통화하고 R6 계정 중복 연동 차단과 게임별 안전한 연결 해제 흐름을 추가

@@ -1,11 +1,15 @@
 package com.gamerin.backend.domain.pubg.dto.response;
 
+import com.gamerin.backend.domain.game.model.GameStatsMode;
+
 public record PubgSummaryResponse(
-        String gameName,
+        String game,
+        boolean connected,
+        String playerName,
         String tierLabel,
-        double kda,
-        int winRate,
-        int games,
-        boolean connected
+        Double kd,
+        Integer winRate,
+        Integer matches,
+        GameStatsMode statsMode
 ) {
 }

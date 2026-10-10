@@ -22,6 +22,8 @@ import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
 import com.gamerin.backend.domain.post.dto.response.ShareResponse;
 import com.gamerin.backend.domain.post.service.PostService;
+import com.gamerin.backend.domain.repost.dto.response.RepostActionResponse;
+import com.gamerin.backend.domain.repost.service.PostRepostService;
 import com.gamerin.backend.global.response.ApiResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
@@ -34,9 +36,11 @@ import jakarta.validation.Valid;
 public class PostController {
 
     private final PostService postService;
+    private final PostRepostService postRepostService;
 
-    public PostController(PostService postService) {
+    public PostController(PostService postService, PostRepostService postRepostService) {
         this.postService = postService;
+        this.postRepostService = postRepostService;
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -88,6 +92,22 @@ public class PostController {
     ) {
         postService.unlike(principal, postId);
         return ApiResponse.ok(null);
+    }
+
+    @PostMapping("/{postId}/reposts")
+    public ApiResponse<RepostActionResponse> repost(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId
+    ) {
+        return ApiResponse.ok(postRepostService.repost(principal, postId));
+    }
+
+    @DeleteMapping("/{postId}/reposts")
+    public ApiResponse<RepostActionResponse> unrepost(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId
+    ) {
+        return ApiResponse.ok(postRepostService.unrepost(principal, postId));
     }
 
     @PostMapping("/{postId}/bookmarks")

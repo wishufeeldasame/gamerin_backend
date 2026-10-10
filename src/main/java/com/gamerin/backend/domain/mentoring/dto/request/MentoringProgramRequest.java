@@ -2,6 +2,8 @@ package com.gamerin.backend.domain.mentoring.dto.request;
 
 import java.util.List;
 
+import com.gamerin.backend.domain.game.model.GameType;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -9,9 +11,9 @@ import jakarta.validation.constraints.PositiveOrZero;
 
 @Schema(description = "멘토링 프로그램 등록 요청")
 public record MentoringProgramRequest(
-    @NotBlank(message = "게임 이름은 필수입니다.")
-    @Schema(description = "게임 이름", example = "PUBG")
-    String gameName,
+    @NotNull(message = "게임 이름은 필수입니다.")
+    @Schema(description = "게임 코드 (GET /api/v1/games 참고)", example = "PUBG")
+    GameType gameName,
 
     @NotBlank
     @Schema(description = "프로그램 제목", example = "상위 1%의 에임 교정 강의")

@@ -1,0 +1,95 @@
+{
+  "seasonNumber": 41,
+  "platform_families_full_profiles": [
+    {
+      "profile_id": "account-41",
+      "board_ids_full_profiles": [
+        {
+          "board_id": "ranked",
+          "full_profiles": [
+            {
+              "season_id": 40,
+              "profile": {
+                "wins": 999,
+                "losses": 1,
+                "abandon": 0
+              }
+            },
+            {
+              "season_id": 41,
+              "profile": {
+                "rank": 18,
+                "rank_points": 3300,
+                "wins": 64,
+                "losses": 51,
+                "abandon": 2
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "data": {
+    "platformInfo": {
+      "platformSlug": "ubi",
+      "platformUserId": "account-41",
+      "platformUserHandle": "CanonicalPlayer"
+    },
+    "metadata": {
+      "currentSeason": 41
+    },
+    "segments": [
+      {
+        "attributes": {
+          "season": 40,
+          "gamemode": "pvp_ranked",
+          "platform": "pc",
+          "sessionType": "ranked"
+        },
+        "stats": {
+          "matchesPlayed": { "value": 999 },
+          "kdRatio": { "value": 9.99 },
+          "rankPoints": { "value": 9999 }
+        }
+      },
+      {
+        "attributes": {
+          "season": 41,
+          "gamemode": "pvp_casual",
+          "platform": "pc",
+          "sessionType": "casual"
+        },
+        "stats": {
+          "matchesPlayed": { "value": 888 },
+          "kdRatio": { "value": 8.88 }
+        }
+      },
+      {
+        "attributes": {
+          "season": 41,
+          "gamemode": "pvp_ranked",
+          "platform": "console",
+          "sessionType": "ranked"
+        },
+        "stats": {
+          "matchesPlayed": { "value": 777 },
+          "kdRatio": { "value": 7.77 }
+        }
+      },
+      {
+        "attributes": {
+          "season": 41,
+          "gamemode": "pvp_ranked",
+          "platform": "pc",
+          "sessionType": "ranked"
+        },
+        "stats": {
+          "matchesPlayed": { "value": 117 },
+          "kdRatio": { "value": 1.05 },
+          "rankPoints": { "value": 3300 }
+        }
+      }
+    ]
+  }
+}

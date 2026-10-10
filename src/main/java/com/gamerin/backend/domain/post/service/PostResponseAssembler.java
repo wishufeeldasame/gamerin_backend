@@ -22,6 +22,10 @@ import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.repository.PostBookmarkRepository;
 import com.gamerin.backend.domain.post.repository.PostLikeRepository;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
+import com.gamerin.backend.domain.repost.dto.response.ReposterInfoResponse;
+import com.gamerin.backend.domain.repost.model.PostTimelineItem;
+import com.gamerin.backend.domain.repost.model.RepostMetrics;
+import com.gamerin.backend.domain.repost.repository.RepostQueryRepository;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 
 @Component
@@ -30,18 +34,44 @@ public class PostResponseAssembler {
     private final PostMediaRepository postMediaRepository;
     private final PostLikeRepository postLikeRepository;
     private final PostBookmarkRepository postBookmarkRepository;
+    private final RepostQueryRepository repostQueryRepository;
 
     public PostResponseAssembler(
             PostMediaRepository postMediaRepository,
             PostLikeRepository postLikeRepository,
-            PostBookmarkRepository postBookmarkRepository
+            PostBookmarkRepository postBookmarkRepository,
+            RepostQueryRepository repostQueryRepository
     ) {
         this.postMediaRepository = postMediaRepository;
         this.postLikeRepository = postLikeRepository;
         this.postBookmarkRepository = postBookmarkRepository;
+        this.repostQueryRepository = repostQueryRepository;
     }
 
     public List<PostCardResponse> toPostCards(List<Post> posts, UUID viewerId) {
+        return toPostCards(posts, viewerId, Map.of());
+    }
+
+    public List<PostCardResponse> toTimelinePostCards(
+            List<PostTimelineItem> timelineItems,
+            UUID viewerId
+    ) {
+        Map<UUID, ReposterInfoResponse> reposterInfoByPostId = new HashMap<>();
+        List<Post> posts = new ArrayList<>();
+        for (PostTimelineItem item : timelineItems) {
+            posts.add(item.post());
+            if (item.reposterInfo() != null) {
+                reposterInfoByPostId.put(item.post().getId(), item.reposterInfo());
+            }
+        }
+        return toPostCards(posts, viewerId, reposterInfoByPostId);
+    }
+
+    private List<PostCardResponse> toPostCards(
+            List<Post> posts,
+            UUID viewerId,
+            Map<UUID, ReposterInfoResponse> reposterInfoByPostId
+    ) {
         if (posts.isEmpty()) {
             return List.of();
         }
@@ -50,6 +80,7 @@ public class PostResponseAssembler {
         Map<UUID, List<PostMediaResponse>> mediaMap = buildMediaMap(postIds);
         Set<UUID> likedPostIds = buildLikedPostIds(viewerId, postIds);
         Set<UUID> bookmarkedPostIds = buildBookmarkedPostIds(viewerId, postIds);
+        Map<UUID, RepostMetrics> repostMetrics = repostQueryRepository.findMetrics(viewerId, postIds);
 
         List<PostCardResponse> responses = new ArrayList<>();
         for (Post post : posts) {
@@ -58,6 +89,8 @@ public class PostResponseAssembler {
                     mediaMap.getOrDefault(post.getId(), List.of()),
                     likedPostIds.contains(post.getId()),
                     bookmarkedPostIds.contains(post.getId()),
+                    repostMetrics.getOrDefault(post.getId(), new RepostMetrics(0L, false)),
+                    reposterInfoByPostId.get(post.getId()),
                     viewerId
             ));
         }
@@ -72,6 +105,8 @@ public class PostResponseAssembler {
 
         boolean likedByMe = viewerId != null && postLikeRepository.existsByPostIdAndUserId(post.getId(), viewerId);
         boolean bookmarkedByMe = viewerId != null && postBookmarkRepository.existsByPostIdAndUserId(post.getId(), viewerId);
+        RepostMetrics repostMetrics = repostQueryRepository.findMetrics(viewerId, List.of(post.getId()))
+                .getOrDefault(post.getId(), new RepostMetrics(0L, false));
         boolean mine = viewerId != null && post.getAuthor().getId().equals(viewerId);
         UserProfile profile = post.getAuthor().getProfile();
 
@@ -86,6 +121,9 @@ public class PostResponseAssembler {
                 post.getLikeCount(),
                 post.getCommentCount(),
                 post.getShareCount(),
+                repostMetrics.repostedByViewer(),
+                repostMetrics.repostCount(),
+                null,
                 likedByMe,
                 bookmarkedByMe,
                 mine,
@@ -126,6 +164,8 @@ public class PostResponseAssembler {
             List<PostMediaResponse> media,
             boolean likedByMe,
             boolean bookmarkedByMe,
+            RepostMetrics repostMetrics,
+            ReposterInfoResponse reposterInfo,
             UUID viewerId
     ) {
         UserProfile profile = post.getAuthor().getProfile();
@@ -140,6 +180,9 @@ public class PostResponseAssembler {
                 post.getLikeCount(),
                 post.getCommentCount(),
                 post.getShareCount(),
+                repostMetrics.repostedByViewer(),
+                repostMetrics.repostCount(),
+                reposterInfo,
                 likedByMe,
                 bookmarkedByMe,
                 viewerId != null && post.getAuthor().getId().equals(viewerId),

@@ -25,6 +25,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
+import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramUpdateRequest;
 import com.gamerin.backend.domain.mentoring.dto.response.MentorProfileResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringApplicationResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramDetailResponse;
@@ -38,205 +39,325 @@ import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringReviewRepository;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.domain.user.service.MileageService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.eq;
+import org.junit.jupiter.api.DisplayName;
+import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
+
 @ExtendWith(MockitoExtension.class)
 class MentoringServiceTest {
 
-    @Mock
-    private MentorProfileRepository mentorProfileRepository;
+        @Mock
+        private MentorProfileRepository mentorProfileRepository;
 
-    @Mock
-    private UserRepository userRepository;
+        @Mock
+        private UserRepository userRepository;
 
-    @Mock
-    private MentoringProgramRepository mentoringProgramRepository;
+        @Mock
+        private MentoringProgramRepository mentoringProgramRepository;
 
-    @Mock
-    private MentoringApplicationRepository mentoringApplicationRepository;
+        @Mock
+        private MentoringApplicationRepository mentoringApplicationRepository;
 
-    @Mock
-    private MentoringReviewRepository mentoringReviewRepository;
+        @Mock
+        private MentoringReviewRepository mentoringReviewRepository;
 
-    @Mock
-    private MileageService mileageService;
+        @Mock
+        private MileageService mileageService;
 
-    @Mock
-    private SettlementProcessor settlementProcessor;
+        @Mock
+        private SettlementProcessor settlementProcessor;
 
-    private MentoringService mentoringService;
+        @Mock
+        private NotificationCommandService notificationCommandService;
 
-    @BeforeEach
-    void setUp() {
-        mentoringService = new MentoringService(
-                mentorProfileRepository,
-                userRepository,
-                mentoringProgramRepository,
-                mentoringApplicationRepository,
-                mentoringReviewRepository,
-                mileageService,
-                settlementProcessor
-        );
-    }
+        private MentoringService mentoringService;
 
-    @Test
-    void getMyMentorProfileReturnsNullWhenUserIsNotMentor() {
-        UUID userId = UUID.randomUUID();
-        User user = savedUser(userId, "mentee", "Mentee");
+        @BeforeEach
+        void setUp() {
+                mentoringService = new MentoringService(
+                                mentorProfileRepository,
+                                userRepository,
+                                mentoringProgramRepository,
+                                mentoringApplicationRepository,
+                                mentoringReviewRepository,
+                                mileageService,
+                                settlementProcessor,
+                                notificationCommandService);
+        }
 
-        when(mentorProfileRepository.findById(userId)).thenReturn(Optional.empty());
+        @Test
+        void getMyMentorProfileReturnsNullWhenUserIsNotMentor() {
+                UUID userId = UUID.randomUUID();
+                User user = savedUser(userId, "mentee", "Mentee");
 
-        MentorProfileResponse response = mentoringService.getMyMentorProfile(CustomUserPrincipal.from(user));
+                when(mentorProfileRepository.findById(userId)).thenReturn(Optional.empty());
 
-        assertThat(response).isNull();
-    }
+                MentorProfileResponse response = mentoringService.getMyMentorProfile(CustomUserPrincipal.from(user));
 
-    @Test
-    void getMentorProfileThrowsNotFoundWhenMentorDoesNotExist() {
-        UUID mentorId = UUID.randomUUID();
+                assertThat(response).isNull();
+        }
 
-        when(mentorProfileRepository.findById(mentorId)).thenReturn(Optional.empty());
+        @Test
+        void getMentorProfileThrowsNotFoundWhenMentorDoesNotExist() {
+                UUID mentorId = UUID.randomUUID();
 
-        assertThatThrownBy(() -> mentoringService.getMentorProfile(mentorId))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
-                .isEqualTo(HttpStatus.NOT_FOUND.value());
-    }
+                when(mentorProfileRepository.findById(mentorId)).thenReturn(Optional.empty());
 
-    @Test
-    void menteeApplicationsIncludeParticipantIdsAndReviewedFlag() {
-        UUID mentorId = UUID.randomUUID();
-        UUID menteeId = UUID.randomUUID();
-        UUID programId = UUID.randomUUID();
-        UUID applicationId = UUID.randomUUID();
-        MentoringApplication application = application(mentorId, menteeId, programId, applicationId);
-        PageRequest pageable = PageRequest.of(0, 20);
+                assertThatThrownBy(() -> mentoringService.getMentorProfile(mentorId))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                                .isEqualTo(HttpStatus.NOT_FOUND.value());
+        }
 
-        when(mentoringApplicationRepository.findByMenteeId(menteeId, pageable))
-                .thenReturn(new PageImpl<>(List.of(application), pageable, 1));
-        when(mentoringReviewRepository.findReviewedApplicationIds(anyList()))
-                .thenReturn(List.of(applicationId));
+        @Test
+        void menteeApplicationsIncludeParticipantIdsAndReviewedFlag() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                UUID applicationId = UUID.randomUUID();
+                MentoringApplication application = application(mentorId, menteeId, programId, applicationId);
+                PageRequest pageable = PageRequest.of(0, 20);
 
-        Page<MentoringApplicationResponse> response = mentoringService.getMyApplicationsAsMentee(
-                CustomUserPrincipal.from(application.getMentee()),
-                pageable
-        );
+                when(mentoringApplicationRepository.findByMenteeId(menteeId, pageable))
+                                .thenReturn(new PageImpl<>(List.of(application), pageable, 1));
+                when(mentoringReviewRepository.findReviewedApplicationIds(anyList()))
+                                .thenReturn(List.of(applicationId));
 
-        MentoringApplicationResponse item = response.getContent().get(0);
-        assertThat(item.id()).isEqualTo(applicationId);
-        assertThat(item.programId()).isEqualTo(programId);
-        assertThat(item.programTitle()).isEqualTo("PUBG coaching");
-        assertThat(item.mentorId()).isEqualTo(mentorId);
-        assertThat(item.menteeId()).isEqualTo(menteeId);
-        assertThat(item.reviewed()).isTrue();
-    }
+                Page<MentoringApplicationResponse> response = mentoringService.getMyApplicationsAsMentee(
+                                CustomUserPrincipal.from(application.getMentee()),
+                                pageable);
 
-    @Test
-    void getProgramDetailIncludesStatus() {
-        MentoringApplication application = application(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                UUID.randomUUID()
-        );
-        MentoringProgram program = application.getProgram();
-        program.setStatus(ProgramStatus.CLOSED);
+                MentoringApplicationResponse item = response.getContent().get(0);
+                assertThat(item.id()).isEqualTo(applicationId);
+                assertThat(item.programId()).isEqualTo(programId);
+                assertThat(item.programTitle()).isEqualTo("PUBG coaching");
+                assertThat(item.mentorId()).isEqualTo(mentorId);
+                assertThat(item.menteeId()).isEqualTo(menteeId);
+                assertThat(item.reviewed()).isTrue();
+        }
 
-        when(mentoringProgramRepository.findById(program.getId())).thenReturn(Optional.of(program));
+        @Test
+        void getProgramDetailIncludesStatus() {
+                MentoringApplication application = application(
+                                UUID.randomUUID(),
+                                UUID.randomUUID(),
+                                UUID.randomUUID(),
+                                UUID.randomUUID());
+                MentoringProgram program = application.getProgram();
+                program.setStatus(ProgramStatus.CLOSED);
 
-        MentoringProgramDetailResponse response = mentoringService.getProgramDetail(program.getId());
+                when(mentoringProgramRepository.findByIdAndDeletedAtIsNull(program.getId()))
+                                .thenReturn(Optional.of(program));
 
-        assertThat(response.status()).isEqualTo(ProgramStatus.CLOSED);
-    }
+                MentoringProgramDetailResponse response = mentoringService.getProgramDetail(program.getId());
 
-    @Test
-    void applyToProgramRejectsClosedProgramBeforeChargingMileage() {
-        UUID mentorId = UUID.randomUUID();
-        UUID menteeId = UUID.randomUUID();
-        UUID programId = UUID.randomUUID();
-        MentoringApplication application = application(mentorId, menteeId, programId, UUID.randomUUID());
-        MentoringProgram program = application.getProgram();
-        program.setStatus(ProgramStatus.CLOSED);
+                assertThat(response.status()).isEqualTo(ProgramStatus.CLOSED);
+        }
 
-        when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+        @Test
+        void applyToProgramRejectsClosedProgramBeforeChargingMileage() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication application = application(mentorId, menteeId, programId, UUID.randomUUID());
+                MentoringProgram program = application.getProgram();
+                program.setStatus(ProgramStatus.CLOSED);
 
-        assertThatThrownBy(() -> mentoringService.applyToProgram(
-                CustomUserPrincipal.from(application.getMentee()),
-                new MentoringApplicationRequest(programId, "message")
-        ))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessage("마감된 프로그램에는 신청할 수 없습니다.");
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
 
-        verify(mileageService, never()).useMileage(any(), any(), any(), any(), any());
-        verify(mentoringApplicationRepository, never()).save(any());
-    }
+                assertThatThrownBy(() -> mentoringService.applyToProgram(
+                                CustomUserPrincipal.from(application.getMentee()),
+                                new MentoringApplicationRequest(programId, "message")))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> {
+                                        ResponseStatusException ex = (ResponseStatusException) error;
+                                        assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.CONFLICT.value());
+                                        assertThat(ex.getReason()).isEqualTo("마감된 프로그램에는 신청할 수 없습니다.");
+                                });
 
-    @Test
-    void applyToProgramRejectsDuplicateActiveApplicationBeforeChargingMileage() {
-        UUID mentorId = UUID.randomUUID();
-        UUID menteeId = UUID.randomUUID();
-        UUID programId = UUID.randomUUID();
-        MentoringApplication application = application(mentorId, menteeId, programId, UUID.randomUUID());
-        MentoringProgram program = application.getProgram();
-        program.setStatus(ProgramStatus.ACTIVE);
-        List<ApplicationStatus> reapplyBlockingStatuses = List.of(
-                ApplicationStatus.APPLIED,
-                ApplicationStatus.ACCEPTED,
-                ApplicationStatus.ONGOING,
-                ApplicationStatus.FINISHED
-        );
+                verify(mileageService, never()).useMileage(any(), any(), any(), any(), any());
+                verify(mentoringApplicationRepository, never()).save(any());
+        }
 
-        when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
-        when(mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(
-                menteeId,
-                programId,
-                reapplyBlockingStatuses
-        )).thenReturn(true);
+        @Test
+        void applyToProgramRejectsDuplicateActiveApplicationBeforeChargingMileage() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication application = application(mentorId, menteeId, programId, UUID.randomUUID());
+                MentoringProgram program = application.getProgram();
+                program.setStatus(ProgramStatus.ACTIVE);
+                List<ApplicationStatus> reapplyBlockingStatuses = List.of(
+                                ApplicationStatus.APPLIED,
+                                ApplicationStatus.ACCEPTED,
+                                ApplicationStatus.ONGOING,
+                                ApplicationStatus.FINISHED);
 
-        assertThatThrownBy(() -> mentoringService.applyToProgram(
-                CustomUserPrincipal.from(application.getMentee()),
-                new MentoringApplicationRequest(programId, "message")
-        ))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessage("이미 진행 중인 신청 내역이 있습니다.");
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+                when(mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(
+                                menteeId,
+                                programId,
+                                reapplyBlockingStatuses)).thenReturn(true);
 
-        verify(mileageService, never()).useMileage(any(), any(), any(), any(), any());
-        verify(mentoringApplicationRepository, never()).save(any());
-    }
+                assertThatThrownBy(() -> mentoringService.applyToProgram(
+                                CustomUserPrincipal.from(application.getMentee()),
+                                new MentoringApplicationRequest(programId, "message")))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> {
+                                        ResponseStatusException ex = (ResponseStatusException) error;
+                                        assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.CONFLICT.value());
+                                        assertThat(ex.getReason()).isEqualTo("이미 진행 중인 신청 내역이 있습니다.");
+                                });
 
-    private MentoringApplication application(UUID mentorId, UUID menteeId, UUID programId, UUID applicationId) {
-        User mentorUser = savedUser(mentorId, "mentor", "Mentor");
-        User mentee = savedUser(menteeId, "mentee", "Mentee");
+                verify(mileageService, never()).useMileage(any(), any(), any(), any(), any());
+                verify(mentoringApplicationRepository, never()).save(any());
+        }
 
-        MentorProfile mentorProfile = new MentorProfile();
-        mentorProfile.setUser(mentorUser);
-        mentorProfile.setAbout("about");
+        private MentoringApplication application(UUID mentorId, UUID menteeId, UUID programId, UUID applicationId) {
+                User mentorUser = savedUser(mentorId, "mentor", "Mentor");
+                User mentee = savedUser(menteeId, "mentee", "Mentee");
 
-        MentoringProgram program = new MentoringProgram();
-        program.setId(programId);
-        program.setMentor(mentorProfile);
-        program.setGameName("PUBG");
-        program.setTitle("PUBG coaching");
-        program.setContent("content");
-        program.setPrice(1000L);
+                MentorProfile mentorProfile = new MentorProfile();
+                mentorProfile.setUser(mentorUser);
+                mentorProfile.setAbout("about");
 
-        MentoringApplication application = new MentoringApplication();
-        application.setId(applicationId);
-        application.setProgram(program);
-        application.setMentee(mentee);
-        application.setAppliedMileage(1000L);
-        application.setStatus(ApplicationStatus.COMPLETED);
-        application.setPaymentStatus(PaymentStatus.SETTLED);
-        application.setMessage("message");
-        return application;
-    }
+                MentoringProgram program = new MentoringProgram();
+                program.setId(programId);
+                program.setMentor(mentorProfile);
+                program.setGameName("PUBG");
+                program.setTitle("PUBG coaching");
+                program.setContent("content");
+                program.setPrice(1000L);
 
-    private User savedUser(UUID id, String handle, String nickname) {
-        User user = User.createLocal(handle + "@example.com", handle, nickname, "password");
-        ReflectionTestUtils.setField(user, "id", id);
-        return user;
-    }
+                MentoringApplication application = new MentoringApplication();
+                application.setId(applicationId);
+                application.setProgram(program);
+                application.setMentee(mentee);
+                application.setAppliedMileage(1000L);
+                application.setStatus(ApplicationStatus.COMPLETED);
+                application.setPaymentStatus(PaymentStatus.SETTLED);
+                application.setMessage("message");
+                return application;
+        }
+
+        private User savedUser(UUID id, String handle, String nickname) {
+                User user = User.createLocal(handle + "@example.com", handle, nickname, "password");
+                ReflectionTestUtils.setField(user, "id", id);
+                return user;
+        }
+
+        @Test
+        @DisplayName("ESCROW_HELD 신청이 있는 프로그램 삭제 시 409 CONFLICT가 발생하고 소프트 삭제가 일어나지 않는다")
+        void deleteProgramRejectedWhenEscrowHeldApplicationExists() {
+                UUID mentorId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication application = application(mentorId, UUID.randomUUID(), programId,
+                                UUID.randomUUID());
+                MentoringProgram program = application.getProgram();
+
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+                // ESCROW_HELD 신청이 존재하는 상황 (APPLIED/ACCEPTED/ONGOING/FINISHED 상태)
+                when(mentoringApplicationRepository.existsByProgramIdAndPaymentStatus(eq(programId),
+                                eq(PaymentStatus.ESCROW_HELD))).thenReturn(true);
+
+                assertThatThrownBy(() -> mentoringService.deleteProgram(
+                                CustomUserPrincipal.from(application.getProgram().getMentor().getUser()),
+                                programId))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> {
+                                        ResponseStatusException ex = (ResponseStatusException) error;
+                                        assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.CONFLICT.value());
+                                        assertThat(ex.getReason()).contains("진행 중인 멘토링 신청이 있어 삭제할 수 없습니다.");
+                                });
+
+                // 소프트 삭제가 일어나지 않았으므로 deleted_at이 null이어야 함
+                assertThat(program.getDeletedAt()).isNull();
+        }
+
+        @Test
+        @DisplayName("완료·정산된 신청만 있는 프로그램은 소프트 삭제되고 deleted_at이 기록된다")
+        void deleteProgramSoftDeletesWhenNoEscrowHeldApplicationExists() {
+                UUID mentorId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication application = application(mentorId, UUID.randomUUID(), programId,
+                                UUID.randomUUID());
+                MentoringProgram program = application.getProgram();
+
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+                // ESCROW_HELD 신청 없음 (전부 SETTLED 또는 REFUNDED)
+                when(mentoringApplicationRepository.existsByProgramIdAndPaymentStatus(
+                                eq(programId), eq(PaymentStatus.ESCROW_HELD))).thenReturn(false);
+
+                assertThatCode(() -> mentoringService.deleteProgram(
+                                CustomUserPrincipal.from(application.getProgram().getMentor().getUser()),
+                                programId))
+                                .doesNotThrowAnyException();
+
+                // 물리 삭제가 아닌 소프트 삭제 — deleted_at이 현재 시각으로 기록됨
+                assertThat(program.getDeletedAt()).isNotNull();
+                assertThat(program.isDeleted()).isTrue();
+        }
+
+        @Test
+        @DisplayName("소프트 삭제된 프로그램에 신청 시 NOT_FOUND 404가 반환된다")
+        void applyToSoftDeletedProgramReturns404() {
+                UUID programId = UUID.randomUUID();
+
+                // findByIdForUpdate에 deletedAt IS NULL 조건이 있으므로 소프트 삭제된 프로그램은 빈 값 반환
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.empty());
+
+                assertThatThrownBy(() -> mentoringService.applyToProgram(
+                                CustomUserPrincipal.from(savedUser(UUID.randomUUID(), "mentee", "Mentee")),
+                                new MentoringApplicationRequest(programId, "message")))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> {
+                                        ResponseStatusException ex = (ResponseStatusException) error;
+                                        assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.NOT_FOUND.value());
+                                });
+        }
+
+        @Test
+        @DisplayName("소프트 삭제된 프로그램 상세 조회 시 404 NOT_FOUND가 발생한다")
+        void getProgramDetailThrowsNotFoundWhenProgramIsSoftDeleted() {
+                UUID programId = UUID.randomUUID();
+
+                when(mentoringProgramRepository.findByIdAndDeletedAtIsNull(programId))
+                                .thenReturn(Optional.empty());
+
+                assertThatThrownBy(() -> mentoringService.getProgramDetail(programId))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> {
+                                        ResponseStatusException ex = (ResponseStatusException) error;
+                                        assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.NOT_FOUND.value());
+                                        assertThat(ex.getReason()).isEqualTo("프로그램을 찾을 수 없습니다.");
+                                });
+        }
+
+        @Test
+        @DisplayName("소프트 삭제된 프로그램 수정 시 404 NOT_FOUND가 발생한다")
+        void updateProgramThrowsNotFoundWhenProgramIsSoftDeleted() {
+                UUID programId = UUID.randomUUID();
+                User mentorUser = savedUser(UUID.randomUUID(), "mentor", "Mentor");
+                MentoringProgramUpdateRequest request = new MentoringProgramUpdateRequest(
+                                "제목", "내용", "시간", 1000L, ProgramStatus.ACTIVE, List.of("tag"));
+
+                when(mentoringProgramRepository.findByIdAndDeletedAtIsNull(programId))
+                                .thenReturn(Optional.empty());
+
+                assertThatThrownBy(() -> mentoringService.updateProgram(
+                                CustomUserPrincipal.from(mentorUser), programId, request))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> {
+                                        ResponseStatusException ex = (ResponseStatusException) error;
+                                        assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.NOT_FOUND.value());
+                                        assertThat(ex.getReason()).isEqualTo("프로그램을 찾을 수 없습니다.");
+                                });
+        }
 }
