@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
@@ -150,6 +151,24 @@ class MembershipPostgresIntegrationTest {
         UserMembership persisted = membershipRepository.findById(user.getId()).orElseThrow();
         assertThat(persisted.getExpiresAt().toInstant()).isEqualTo(expiresAt.plusDays(30).toInstant());
         assertThat(persisted.getUpdatedAt().toInstant()).isAfter(previousUpdate.toInstant());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 5})
+    void sharedMembershipPassPeriodIsPersistedFromTheSelectedStart(int startOffsetDays) {
+        User user = saveUser();
+        UserMembership membership = UserMembership.create(user, NOW);
+        OffsetDateTime grantedFrom = NOW.plusDays(startOffsetDays)
+                .withOffsetSameInstant(ZoneOffset.ofHours(9));
+
+        membership.applyMembershipPassFrom(grantedFrom);
+        membershipRepository.saveAndFlush(membership);
+        entityManager.clear();
+
+        UserMembership persisted = membershipRepository.findById(user.getId()).orElseThrow();
+        assertThat(persisted.getExpiresAt().toInstant())
+                .isEqualTo(NOW.plusDays(startOffsetDays + 30).toInstant());
+        assertThat(persisted.getUpdatedAt()).isNotNull();
     }
 
     private Statistics statistics() {

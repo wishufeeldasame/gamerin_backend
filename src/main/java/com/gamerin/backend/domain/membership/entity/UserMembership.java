@@ -3,6 +3,7 @@ package com.gamerin.backend.domain.membership.entity;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+import com.gamerin.backend.domain.payment.PaymentProduct;
 import com.gamerin.backend.domain.user.entity.User;
 
 import jakarta.persistence.Column;
@@ -61,6 +62,11 @@ public class UserMembership {
 
     public void setExpiresAt(OffsetDateTime expiresAt) {
         this.expiresAt = expiresAt;
+    }
+
+    // The caller selects the start after checking the purchase and existing membership period (#89).
+    public void applyMembershipPassFrom(OffsetDateTime grantedFrom) {
+        this.expiresAt = grantedFrom.plus(PaymentProduct.MEMBERSHIP_30D.membershipDuration());
     }
 
     public OffsetDateTime getUpdatedAt() {
