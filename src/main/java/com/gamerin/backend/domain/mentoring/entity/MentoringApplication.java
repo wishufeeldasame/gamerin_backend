@@ -49,6 +49,12 @@ public class MentoringApplication {
     @Column(columnDefinition = "TEXT")
     private String message;
 
+    @Column(name = "fee_rate_bp", nullable = false)
+    private Integer feeRateBp = 1000;
+
+    @Column(name = "fee_amount")
+    private Long feeAmount;
+
     private OffsetDateTime completedAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -92,10 +98,19 @@ public class MentoringApplication {
     public String getMessage() { return message; }
     public void setMessage(String message) { this.message = message; }
 
+    public Integer getFeeRateBp() { return feeRateBp; }
+    public void setFeeRateBp(Integer feeRateBp) { this.feeRateBp = feeRateBp; }
+
+    public Long getFeeAmount() { return feeAmount; }
+    public void setFeeAmount(Long feeAmount) { this.feeAmount = feeAmount; }
+
     public OffsetDateTime getCompletedAt() { return completedAt; }
     public void setCompletedAt(OffsetDateTime completedAt) { this.completedAt = completedAt; }
 
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }
+
+
+
 
 }
