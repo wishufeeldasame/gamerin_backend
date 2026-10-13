@@ -3,6 +3,8 @@ package com.gamerin.backend.global.migration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -10,14 +12,51 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("postgresql")
 @EnabledIfEnvironmentVariable(named = "PAYMENT_POSTGRES_TEST_URL", matches = ".+")
 class UserMembershipMigrationTest {
+
+    @Test
+    void missingMembershipMigrationAfterPaymentMigrationRequiresExplicitOutOfOrder(@TempDir Path migrations)
+            throws Exception {
+        // Reproduce the payment branch before #87: V35 exists, but V33 does not.
+        try (var scripts = Files.list(Path.of("src/main/resources/db/migration"))) {
+            for (Path script : scripts.filter(path -> path.getFileName().toString().endsWith(".sql"))
+                    .filter(path -> !path.getFileName().toString().startsWith("V33__")).toList()) {
+                Files.copy(script, migrations.resolve(script.getFileName()));
+            }
+        }
+
+        try (Fixture fixture = new Fixture()) {
+            Flyway.configure().dataSource(fixture.url, fixture.username, fixture.password)
+                    .schemas(fixture.schema).defaultSchema(fixture.schema)
+                    .locations("filesystem:" + migrations.toAbsolutePath()).target("35").load().migrate();
+            UUID existingUser = fixture.addUser();
+
+            assertThatThrownBy(() -> fixture.flyway("35").migrate()).isInstanceOf(FlywayException.class);
+            assertThat(fixture.membershipTableExists()).isFalse();
+
+            Flyway catchUp = Flyway.configure().dataSource(fixture.url, fixture.username, fixture.password)
+                    .schemas(fixture.schema).defaultSchema(fixture.schema)
+                    .target("35").outOfOrder(true).load();
+            assertThat(catchUp.migrate().migrationsExecuted).isEqualTo(1);
+
+            assertThat(fixture.nickname(existingUser)).isEqualTo("Existing user");
+            fixture.assertMembershipConstraints(existingUser);
+            Flyway normal = fixture.flyway("35");
+            assertThat(normal.validateWithResult().validationSuccessful).isTrue();
+            assertThat(normal.migrate().migrationsExecuted).isZero();
+            assertThat(normal.info().current().getVersion().toString()).isEqualTo("35");
+        }
+    }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
@@ -81,6 +120,14 @@ class UserMembershipMigrationTest {
                     assertThat(rows.next()).isTrue();
                     return rows.getString(1);
                 }
+            }
+        }
+
+        boolean membershipTableExists() throws SQLException {
+            try (var statement = connection.prepareStatement("select to_regclass('user_memberships')");
+                    var rows = statement.executeQuery()) {
+                rows.next();
+                return rows.getString(1) != null;
             }
         }
 
