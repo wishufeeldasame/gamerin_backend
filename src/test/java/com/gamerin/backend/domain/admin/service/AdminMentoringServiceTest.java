@@ -370,12 +370,13 @@ class AdminMentoringServiceTest {
     }
 
     @Test
-    @DisplayName("관리자 강제 정산 시 멘토에게 마일리지가 지급되고 menteeCount가 1 증가한다")
+    @DisplayName("관리자 강제 정산: 멘토 프로필 락 → 수수료 공제 지급 → 원자적 menteeCount 증가 순으로 처리한다")
     void forceSettle_success() {
         // given
-        int originalMenteeCount = mentorProfile.getMenteeCount();
         given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
         given(mentoringApplicationRepository.findByIdForUpdate(applicationId)).willReturn(Optional.of(application));
+        given(mentorProfileRepository.findByIdForUpdate(mentorProfile.getUser().getId()))
+                .willReturn(Optional.of(mentorProfile));
 
         // when
         MentoringApplicationResponse response = adminMentoringService.forceSettle(adminId, applicationId, "세션 정상 진행 확인");
@@ -384,17 +385,15 @@ class AdminMentoringServiceTest {
         assertThat(response).isNotNull();
         assertThat(application.getStatus()).isEqualTo(ApplicationStatus.COMPLETED);
         assertThat(application.getPaymentStatus()).isEqualTo(PaymentStatus.SETTLED);
-        assertThat(mentorProfile.getMenteeCount()).isEqualTo(originalMenteeCount + 1);
+        // 30,000P x 10% = 3,000P 수수료 기록
+        assertThat(application.getFeeAmount()).isEqualTo(3000L);
 
-        // 멘토에게 정산 마일리지 지급 호출 검증
-        verify(mileageService, times(1)).addMileage(
-                eq(mentorUser),
-                eq(30000L),
-                eq(TransactionType.SETTLEMENT),
-                any(String.class),
-                eq(applicationId)
-        );
-
-        verify(adminAuditLogRepository, times(1)).save(any(AdminAuditLog.class));
+        // 락 → 지급(27,000P) → 원자적 증가 순서 검증
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(mentorProfileRepository, mileageService);
+        inOrder.verify(mentorProfileRepository).findByIdForUpdate(mentorProfile.getUser().getId());
+        inOrder.verify(mileageService).addMileage(
+                eq(mentorUser), eq(27000L), eq(TransactionType.SETTLEMENT), any(String.class), eq(applicationId));
+        inOrder.verify(mentorProfileRepository).incrementMenteeCount(mentorProfile.getUserId());
+        verify(mentorProfileRepository, times(1)).incrementMenteeCount(mentorProfile.getUserId());
     }
 }

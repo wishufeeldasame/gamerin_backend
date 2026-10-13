@@ -10,6 +10,7 @@ import com.gamerin.backend.domain.mentoring.entity.*;
 import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
+import com.gamerin.backend.domain.mentoring.service.MentoringSettlementCalculator;
 import com.gamerin.backend.domain.report.entity.ReportTargetType;
 import com.gamerin.backend.domain.report.repository.ReportRepository;
 import com.gamerin.backend.domain.user.entity.TransactionType;
@@ -293,24 +294,35 @@ public class AdminMentoringService {
                 MentoringApplication application = findApplication(applicationId);
 
                 if (application.getPaymentStatus() != PaymentStatus.ESCROW_HELD) {
-                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                                        "에스크로 보관(ESCROW_HELD) 상태인 멘토링 건만 강제 정산할 수 있습니다. 현재 결제상태: " +
-                                                        application.getPaymentStatus());
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST,
+                                        "에스크로 보관(ESCROW_HELD) 상태인 멘토링 건만 강제 정산할 수 있습니다. 현재 결제상태: "
+                                                        + application.getPaymentStatus());
                 }
 
                 application.setStatus(ApplicationStatus.COMPLETED);
                 application.setPaymentStatus(PaymentStatus.SETTLED);
                 application.setCompletedAt(OffsetDateTime.now());
 
-                MentorProfile mentorProfile = application.getProgram().getMentor();
+                // [Bug #83 해결]: mentorProfile을 findByIdForUpdate로 비관적 락을 획득하여 조회 (동시 정산 시
+                // menteeCount 유실 방지)
+                MentorProfile mentorProfile = mentorProfileRepository
+                                .findByIdForUpdate(application.getProgram().getMentor().getId())
+                                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                                "멘토 프로필을 찾을 수 없습니다."));
+
+                // [KP-C1 #90 F3]: 공통 계산기로 수수료 계산, fee_amount 저장 및 멘토 지급액 산출
+                MentoringSettlementCalculator.SettlementResult settlement = MentoringSettlementCalculator
+                                .applySettlement(application);
+
                 mileageService.addMileage(
                                 mentorProfile.getUser(),
-                                application.getAppliedMileage(),
+                                settlement.payoutAmount(),
                                 TransactionType.SETTLEMENT,
                                 "관리자 강제 개입에 따른 멘토링 정산 (사유: " + reason + ")",
                                 application.getId());
 
-                mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
+                mentorProfileRepository.incrementMenteeCount(mentorProfile.getUserId());
 
                 adminAuditLogRepository.save(AdminAuditLog.create(
                                 admin,
@@ -318,7 +330,8 @@ public class AdminMentoringService {
                                 ReportTargetType.MENTORING,
                                 applicationId,
                                 null,
-                                String.format("멘토 정산 지급 금액: %d P, 사유: %s", application.getAppliedMileage(), reason)));
+                                String.format("멘토 정산 지급 금액: %d P, 수수료: %d P, 사유: %s",
+                                                settlement.payoutAmount(), settlement.feeAmount(), reason)));
 
                 return MentoringApplicationResponse.from(application);
         }
