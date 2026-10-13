@@ -1,0 +1,24 @@
+$kind: http-request
+method: GET
+url: '{{baseUrl}}/api/v1/payments/{{orderId}}'
+order: 3000
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{userAToken}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('HTTP 200', () => pm.response.to.have.status(200));
+
+      pm.test('APPROVED · 결제 수단·승인 시각 기록 · 민감 필드 미노출', () => {
+        const d = pm.response.json().data;
+        pm.expect(d.orderId).to.eql(pm.collectionVariables.get('orderId'));
+        pm.expect(d.status).to.eql('APPROVED');
+        pm.expect(d.amount).to.eql(10000);
+        pm.expect(['CARD', 'MONEY']).to.include(d.paymentMethodType);
+        pm.expect(d.approvedAt).to.be.a('string');
+        ['tid', 'aid', 'cid'].forEach(k => pm.expect(d).to.not.have.property(k));
+      });

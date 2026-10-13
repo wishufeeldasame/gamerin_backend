@@ -1,0 +1,24 @@
+$kind: http-request
+method: GET
+url: '{{baseUrl}}/api/v1/payments/products'
+order: 4000
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{userAToken}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('HTTP 200', () => pm.response.to.have.status(200));
+
+      pm.test('충전 4종 + MEMBERSHIP_30D', () => {
+        const items = pm.response.json().data;
+        pm.expect(items.map(i => i.productCode)).to.eql(['CHARGE_5000', 'CHARGE_10000', 'CHARGE_30000', 'CHARGE_50000', 'MEMBERSHIP_30D']);
+        items.filter(i => i.purpose === 'MILEAGE_CHARGE').forEach(i => pm.expect(i.mileage).to.eql(i.price));
+        const m = items.find(i => i.productCode === 'MEMBERSHIP_30D');
+        pm.expect(m.price).to.eql(4900);
+        pm.expect(m.durationDays).to.eql(30);
+        pm.expect(m.mileage).to.eql(null);
+      });

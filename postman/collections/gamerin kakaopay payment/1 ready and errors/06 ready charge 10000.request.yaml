@@ -1,0 +1,38 @@
+$kind: http-request
+method: POST
+url: '{{baseUrl}}/api/v1/payments/kakao/ready'
+order: 8000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "productCode": "CHARGE_10000",
+      "requestId": "{{requestId}}"
+    }
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{userAToken}}'
+scripts:
+  - type: beforeRequest
+    language: text/javascript
+    code: |-
+      pm.collectionVariables.set('requestId', pm.variables.replaceIn('{{$guid}}'));
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('HTTP 200', () => pm.response.to.have.status(200));
+
+      const data = pm.response.json().data;
+      pm.collectionVariables.set('orderId', data.orderId);
+      pm.collectionVariables.set('pcUrl', data.pcUrl || '');
+      pm.test('READY + 결제창 URL, TID 미노출', () => {
+        pm.expect(data.status).to.eql('READY');
+        pm.expect(data.pcUrl).to.match(/^https:\/\//);
+        pm.expect(data.mobileUrl).to.match(/^https:\/\//);
+        pm.expect(data).to.not.have.property('tid');
+      });
