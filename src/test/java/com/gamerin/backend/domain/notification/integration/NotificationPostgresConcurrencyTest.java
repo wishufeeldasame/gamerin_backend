@@ -1152,7 +1152,11 @@ class NotificationPostgresConcurrencyTest {
         assertThat(count(
                 "select balance from mileage_wallets where user_id = ?",
                 fixture.mentorId()
-        )).isEqualTo(100);
+        )).isEqualTo(90);
+        assertThat(count(
+                "select fee_amount from mentoring_applications where id = ?",
+                fixture.applicationId()
+        )).isEqualTo(10);
         assertThat(count(
                 "select mentee_count from mentor_profiles where user_id = ?",
                 fixture.mentorId()

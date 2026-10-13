@@ -322,7 +322,7 @@ public class AdminMentoringService {
                                 "관리자 강제 개입에 따른 멘토링 정산 (사유: " + reason + ")",
                                 application.getId());
 
-                mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
+                mentorProfileRepository.incrementMenteeCount(mentorProfile.getUserId());
 
                 adminAuditLogRepository.save(AdminAuditLog.create(
                                 admin,

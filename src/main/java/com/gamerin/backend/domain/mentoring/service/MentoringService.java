@@ -260,7 +260,7 @@ public class MentoringService {
         application.setAppliedMileage(program.getPrice());
         application.setMessage(request.message());
         application.setPaymentStatus(PaymentStatus.ESCROW_HELD);
-        application.setFeeRateBp(1000); // KP-C1 기본 요율 10% (1000bp)
+        application.setFeeRateBp(MentoringApplication.DEFAULT_FEE_RATE_BP); // KP-C1 기본 요율 10%
 
         MentoringApplication savedApplication = mentoringApplicationRepository.save(application);
 
@@ -467,7 +467,7 @@ public class MentoringService {
                 "멘토링 완료 정산",
                 application.getId());
 
-        mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
+        mentorProfileRepository.incrementMenteeCount(mentorProfile.getUserId());
 
         notificationCommandService.createMentoringCompleted(
                 application,

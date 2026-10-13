@@ -49,8 +49,11 @@ public class MentoringApplication {
     @Column(columnDefinition = "TEXT")
     private String message;
 
+    /** 기본 수수료 요율 10% (1000bp). V31 마이그레이션의 컬럼 DEFAULT와 동일해야 한다. */
+    public static final int DEFAULT_FEE_RATE_BP = 1000;
+
     @Column(name = "fee_rate_bp", nullable = false)
-    private Integer feeRateBp = 1000;
+    private Integer feeRateBp = DEFAULT_FEE_RATE_BP;
 
     @Column(name = "fee_amount")
     private Long feeAmount;

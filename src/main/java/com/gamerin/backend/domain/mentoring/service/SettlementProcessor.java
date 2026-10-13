@@ -78,7 +78,7 @@ public class SettlementProcessor {
                 application.getId());
 
         // 4. 멘토 통계 업데이트
-        mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
+        mentorProfileRepository.incrementMenteeCount(mentorProfile.getUserId());
 
         notificationCommandService.createMentoringCompleted(application, null, mentorProfile.getUser());
         notificationCommandService.createMentoringCompleted(application, null, application.getMentee());

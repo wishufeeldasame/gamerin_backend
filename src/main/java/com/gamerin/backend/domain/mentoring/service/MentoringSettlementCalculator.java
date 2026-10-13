@@ -12,7 +12,6 @@ import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 public final class MentoringSettlementCalculator {
 
     public static final int BASIS_POINTS_DIVISOR = 10000;
-    public static final int DEFAULT_FEE_RATE_BP = 1000; // 기본 10% (1000bp)
 
     private MentoringSettlementCalculator() {
         // 인스턴스화 방지
@@ -53,15 +52,19 @@ public final class MentoringSettlementCalculator {
 
     /**
      * 신청 엔티티의 정보로 수수료를 계산하고, fee_amount 필드를 설정한 후 결과를 반환합니다.
+     * applied_mileage·fee_rate_bp는 NOT NULL 컬럼이므로 null이면 데이터 이상으로 보고 정산을 중단합니다.
+     * (null을 0원/기본 요율로 대체하면 멘토에게 잘못된 금액이 조용히 지급될 수 있음)
      */
     public static SettlementResult applySettlement(MentoringApplication application) {
         if (application == null) {
             throw new IllegalArgumentException("신청 엔티티는 null일 수 없습니다.");
         }
-        int feeRateBp = (application.getFeeRateBp() != null) ? application.getFeeRateBp() : DEFAULT_FEE_RATE_BP;
-        long appliedMileage = (application.getAppliedMileage() != null) ? application.getAppliedMileage() : 0L;
+        if (application.getAppliedMileage() == null || application.getFeeRateBp() == null) {
+            throw new IllegalStateException("정산할 수 없는 신청입니다. 신청 마일리지 또는 수수료 요율이 비어 있습니다. id="
+                    + application.getId());
+        }
 
-        SettlementResult result = calculate(appliedMileage, feeRateBp);
+        SettlementResult result = calculate(application.getAppliedMileage(), application.getFeeRateBp());
         application.setFeeAmount(result.feeAmount());
         return result;
     }

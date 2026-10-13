@@ -1,116 +1,177 @@
 package com.gamerin.backend.domain.mentoring.integration;
 
-import com.gamerin.backend.domain.admin.service.AdminMentoringService;
-import com.gamerin.backend.domain.mentoring.entity.*;
-import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
-import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
-import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
-import com.gamerin.backend.domain.mentoring.service.MentoringService;
-import com.gamerin.backend.domain.user.entity.User;
-import com.gamerin.backend.domain.user.repository.UserRepository;
-import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.util.UUID;
+import com.gamerin.backend.domain.admin.service.AdminMentoringService;
+import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
+import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
+import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
+import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
+import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
+import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
+import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
+import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
+import com.gamerin.backend.domain.mentoring.service.MentoringService;
+import com.gamerin.backend.domain.mentoring.service.SettlementProcessor;
+import com.gamerin.backend.domain.user.entity.User;
+import com.gamerin.backend.domain.user.repository.UserRepository;
+import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
+/**
+ * 같은 멘토에 대해 세 정산 경로(수동 완료·관리자 강제 정산·자동 정산)를 동시에 실행했을 때
+ * 1) menteeCount 증가분이 유실되지 않고(#83),
+ * 2) 세 경로의 수수료·지급액이 일치하는지(#90 F3) 검증한다.
+ */
 @SpringBootTest
 @ActiveProfiles("test")
 class MentoringSettlementConcurrencyTest {
 
-    @Autowired
-    private MentoringService mentoringService;
+    private static final long APPLIED = 10_000L;
 
-    @Autowired
-    private AdminMentoringService adminMentoringService;
+    @Autowired private MentoringService mentoringService;
+    @Autowired private AdminMentoringService adminMentoringService;
+    @Autowired private SettlementProcessor settlementProcessor;
+    @Autowired private MentorProfileRepository mentorProfileRepository;
+    @Autowired private MentoringApplicationRepository mentoringApplicationRepository;
+    @Autowired private MentoringProgramRepository mentoringProgramRepository;
+    @Autowired private UserRepository userRepository;
+    @Autowired private PlatformTransactionManager transactionManager;
+    @Autowired private JdbcTemplate jdbc;
 
-    @Autowired
-    private MentorProfileRepository mentorProfileRepository;
+    @AfterEach
+    void cleanup() {
+        jdbc.execute("DELETE FROM admin_audit_logs");
+        jdbc.execute("DELETE FROM notifications");
+        jdbc.execute("DELETE FROM mileage_transactions");
+        jdbc.execute("DELETE FROM mileage_wallets");
+        jdbc.execute("DELETE FROM mentoring_applications");
+        jdbc.execute("DELETE FROM mentoring_programs");
+        jdbc.execute("DELETE FROM mentor_profiles");
+        jdbc.execute("DELETE FROM users");
+    }
 
-    @Autowired
-    private MentoringApplicationRepository mentoringApplicationRepository;
+    private User newUser(String prefix) {
+        String id = UUID.randomUUID().toString().substring(0, 8);
+        return userRepository.save(User.createLocal(prefix + id + "@test.com", prefix + id, prefix, "pw"));
+    }
 
-    @Autowired
-    private MentoringProgramRepository mentoringProgramRepository;
-
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private PlatformTransactionManager transactionManager;
+    private MentoringApplication newApplication(MentoringProgram program, User mentee, ApplicationStatus status) {
+        MentoringApplication application = new MentoringApplication();
+        application.setProgram(program);
+        application.setMentee(mentee);
+        application.setAppliedMileage(APPLIED);
+        application.setStatus(status);
+        application.setPaymentStatus(PaymentStatus.ESCROW_HELD);
+        return mentoringApplicationRepository.save(application);
+    }
 
     @Test
-    @DisplayName("[정산 정합성 검증] 수동 확정과 관리자 강제 정산이 각각 수행될 때 멘토 프로필 락 조회를 통해 menteeCount가 2로 정상 누적된다")
+    @DisplayName("세 정산 경로가 동시에 실행돼도 menteeCount가 유실되지 않고 수수료·지급액이 모두 일치한다")
+    void threeSettlementPathsRunConcurrentlyWithoutLosingMenteeCount() throws Exception {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
 
-    void sequentialOrLockedSettlementIncrementsMenteeCountProperly() {
-            TransactionTemplate tx = new TransactionTemplate(transactionManager);
-    
-            // 1. Given: 멘토 1명, 관리자 1명, 멘티 2명 및 신청 2건 생성
-            Object[] fixtures = tx.execute(status -> {
-                User admin = userRepository.save(User.createLocal("admin@test.com", "admin_concur", "관리자",  "pw"));
-                User mentorUser = userRepository.save(User.createLocal("mentor@test.com", "mentor_concur", "멘토", "pw"));
-                User mentee1 = userRepository.save(User.createLocal("mentee1@test.com", "mentee1_concur", "멘티1", "pw"));
-                User mentee2 = userRepository.save(User.createLocal("mentee2@test.com", "mentee2_concur", "멘티2", "pw"));
-    
-                MentorProfile mentorProfile = new MentorProfile();
-                mentorProfile.setUser(mentorUser);
-                mentorProfile.setMenteeCount(0);
-                mentorProfile = mentorProfileRepository.save(mentorProfile);
-    
-                MentoringProgram program = new MentoringProgram();
-                program.setMentor(mentorProfile);
-                program.setTitle("정산 테스트 프로그램");
-                program.setGameName("LOL");
-                program.setPrice(10000L);
-                program = mentoringProgramRepository.save(program);
-    
-                MentoringApplication appA = new MentoringApplication();
-                appA.setProgram(program);
-                appA.setMentee(mentee1);
-                appA.setAppliedMileage(10000L);
-                appA.setStatus(ApplicationStatus.ONGOING);
-                appA.setPaymentStatus(PaymentStatus.ESCROW_HELD);
-                appA = mentoringApplicationRepository.save(appA);
-    
-                MentoringApplication appB = new MentoringApplication();
-                appB.setProgram(program);
-                appB.setMentee(mentee2);
-                appB.setAppliedMileage(10000L);
-                appB.setStatus(ApplicationStatus.ONGOING);
-                appB.setPaymentStatus(PaymentStatus.ESCROW_HELD);
-                appB = mentoringApplicationRepository.save(appB);
-    
-                return new Object[]{admin.getId(), mentorUser.getId(), mentee1, appA.getId(), appB.getId()};
-            });
-    
-            UUID adminId = (UUID) fixtures[0];
-            UUID mentorUserId = (UUID) fixtures[1];
-            User mentee1 = (User) fixtures[2];
-            UUID appAId = (UUID) fixtures[3];
-            UUID appBId = (UUID) fixtures[4];
-    
-            // 2. When: 
-            // 1번 정산: 멘티의 수동 완료 확정 (트랜잭션 1 커밋)
-            mentoringService.completeMentoring(CustomUserPrincipal.from(mentee1), appAId);
+        record Fixture(UUID adminId, UUID mentorId, User mentee1, UUID manualId, UUID forceId, UUID autoId) {}
 
-            // 2번 정산: 관리자의 강제 정산 (트랜잭션 2 커밋) - 멘토 프로필 락 조회를 통해 1번에서 갱신된 menteeCount(1)를 읽어 +1 수행
-            adminMentoringService.forceSettle(adminId, appBId, "강제 정산");
+        Fixture fixture = tx.execute(status -> {
+            User admin = newUser("admin");
+            User mentorUser = newUser("mentor");
+            User mentee1 = newUser("mentee1");
+            User mentee2 = newUser("mentee2");
+            User mentee3 = newUser("mentee3");
 
-            // 3. Then: 최종 DB의 mentorProfile menteeCount 확인
-            Integer finalMenteeCount = tx.execute(status -> {
-                MentorProfile profile = mentorProfileRepository.findById(mentorUserId).orElseThrow();
-                return profile.getMenteeCount();
-            });
+            MentorProfile mentorProfile = new MentorProfile();
+            mentorProfile.setUser(mentorUser);
+            mentorProfile.setMenteeCount(0);
+            mentorProfile = mentorProfileRepository.save(mentorProfile);
 
-            assertThat(finalMenteeCount)
-                    .as("두 정산 경로가 모두 멘토 프로필을 정상 갱신하여 menteeCount는 2여야 한다.")
-                    .isEqualTo(2);
+            MentoringProgram program = new MentoringProgram();
+            program.setMentor(mentorProfile);
+            program.setTitle("동시 정산 테스트");
+            program.setGameName("LOL");
+            program.setPrice(APPLIED);
+            program = mentoringProgramRepository.save(program);
+
+            MentoringApplication manual = newApplication(program, mentee1, ApplicationStatus.ONGOING);
+            MentoringApplication force = newApplication(program, mentee2, ApplicationStatus.ONGOING);
+            MentoringApplication auto = newApplication(program, mentee3, ApplicationStatus.FINISHED);
+
+            return new Fixture(admin.getId(), mentorUser.getId(), mentee1, manual.getId(), force.getId(), auto.getId());
+        });
+
+        // 자동 정산 대상이 되도록 updated_at을 8일 전으로 되돌린다.
+        jdbc.update("update mentoring_applications set updated_at = ? where id = ?",
+                OffsetDateTime.now().minusDays(8), fixture.autoId());
+        OffsetDateTime threshold = OffsetDateTime.now().minusDays(7);
+
+        List<Callable<Void>> tasks = List.of(
+                () -> {
+                    mentoringService.completeMentoring(CustomUserPrincipal.from(fixture.mentee1()), fixture.manualId());
+                    return null;
+                },
+                () -> {
+                    adminMentoringService.forceSettle(fixture.adminId(), fixture.forceId(), "동시 정산 테스트");
+                    return null;
+                },
+                () -> {
+                    settlementProcessor.processSingleSettlement(fixture.autoId(), threshold);
+                    return null;
+                });
+
+        ExecutorService executor = Executors.newFixedThreadPool(tasks.size());
+        CountDownLatch ready = new CountDownLatch(tasks.size());
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<Void>> futures = tasks.stream()
+                .map(task -> executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    return task.call();
+                }))
+                .toList();
+
+        ready.await(10, TimeUnit.SECONDS);
+        start.countDown();
+        for (Future<Void> future : futures) {
+            future.get(30, TimeUnit.SECONDS); // 하나라도 실패하면 예외로 테스트 실패
         }
+        executor.shutdown();
+
+        // 1) #83: 세 건 모두 반영되어 3이어야 한다. (유실되면 1 또는 2)
+        Integer menteeCount = jdbc.queryForObject(
+                "select mentee_count from mentor_profiles where user_id = ?", Integer.class, fixture.mentorId());
+        assertThat(menteeCount).as("세 정산이 모두 반영되어야 한다").isEqualTo(3);
+
+        // 2) #90 F3: 세 경로 모두 10% 수수료(1,000P)를 기록하고 9,000P씩 지급한다.
+        for (UUID applicationId : List.of(fixture.manualId(), fixture.forceId(), fixture.autoId())) {
+            assertThat(jdbc.queryForObject(
+                    "select fee_amount from mentoring_applications where id = ?", Long.class, applicationId))
+                    .isEqualTo(1_000L);
+            assertThat(jdbc.queryForObject(
+                    "select amount from mileage_transactions where reference_id = ? and type = 'SETTLEMENT'",
+                    Long.class, applicationId))
+                    .isEqualTo(9_000L);
+        }
+        assertThat(jdbc.queryForObject(
+                "select balance from mileage_wallets where user_id = ?", Long.class, fixture.mentorId()))
+                .isEqualTo(27_000L);
+    }
 }

@@ -98,4 +98,24 @@ class MentoringSettlementCalculatorTest {
         assertThat(result.payoutAmount()).isEqualTo(45000L);
         assertThat(application.getFeeAmount()).isEqualTo(5000L);
     }
+
+    @Test
+    @DisplayName("신청 엔티티의 appliedMileage 또는 feeRateBp가 null이면 조용히 0원을 지급하지 않고 IllegalStateException을 던진다")
+    void applySettlementThrowsExceptionWhenRequiredFieldsAreNull() {
+        MentoringApplication nullApplied = new MentoringApplication();
+        nullApplied.setAppliedMileage(null);
+        nullApplied.setFeeRateBp(1000);
+
+        assertThatThrownBy(() -> MentoringSettlementCalculator.applySettlement(nullApplied))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("신청 마일리지 또는 수수료 요율이 비어 있습니다");
+
+        MentoringApplication nullBp = new MentoringApplication();
+        nullBp.setAppliedMileage(10000L);
+        nullBp.setFeeRateBp(null);
+
+        assertThatThrownBy(() -> MentoringSettlementCalculator.applySettlement(nullBp))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("신청 마일리지 또는 수수료 요율이 비어 있습니다");
+    }
 }
