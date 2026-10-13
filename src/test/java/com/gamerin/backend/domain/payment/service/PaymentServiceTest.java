@@ -37,7 +37,10 @@ import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.NONE,
+        properties = "app.payment.recovery.initial-delay-ms=3600000"
+)
 @ActiveProfiles("test")
 class PaymentServiceTest {
 

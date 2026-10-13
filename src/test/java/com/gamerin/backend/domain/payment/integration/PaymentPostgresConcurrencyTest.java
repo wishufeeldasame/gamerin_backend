@@ -48,6 +48,8 @@ import com.gamerin.backend.domain.payment.dto.request.PaymentReadyRequest;
 import com.gamerin.backend.domain.payment.dto.response.PaymentReadyResponse;
 import com.gamerin.backend.domain.payment.dto.response.PaymentResponse;
 import com.gamerin.backend.domain.payment.entity.PaymentStatus;
+import com.gamerin.backend.domain.payment.client.KakaoPayException;
+import com.gamerin.backend.domain.payment.scheduler.PaymentRecoveryScheduler;
 import com.gamerin.backend.domain.payment.service.PaymentService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
@@ -55,7 +57,14 @@ import com.gamerin.backend.domain.user.repository.UserRepository;
 
 @Tag("postgresql")
 @EnabledIfEnvironmentVariable(named = "PAYMENT_POSTGRES_TEST_URL", matches = ".+")
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.NONE,
+        properties = {
+                "kakaopay.cancel-enabled=true",
+                // 테스트가 복구를 직접 호출한다.
+                "app.payment.recovery.initial-delay-ms=3600000"
+        }
+)
 @ActiveProfiles("local")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class PaymentPostgresConcurrencyTest {
@@ -68,6 +77,8 @@ class PaymentPostgresConcurrencyTest {
 
     @Autowired
     private PaymentService paymentService;
+    @Autowired
+    private PaymentRecoveryScheduler recoveryScheduler;
     @Autowired
     private UserRepository userRepository;
     @Autowired
@@ -138,6 +149,68 @@ class PaymentPostgresConcurrencyTest {
         assertThat(paymentStatus(orderId)).isEqualTo("APPROVED");
         assertThat(chargeRows(orderId)).isEqualTo(1);
         assertThat(balance()).isEqualTo(10_000L);
+    }
+
+    @Test
+    void requestPathAndSchedulerRecoverStaleOrderOnce() throws Exception {
+        UUID orderId = paymentService.ready(userId, new PaymentReadyRequest("CHARGE_10000", UUID.randomUUID())).orderId();
+        when(kakaoPayClient.approve(any())).thenThrow(
+                new KakaoPayException("approve", KakaoPayException.Kind.UNKNOWN, null, null, null));
+        assertThat(paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")).status())
+                .isEqualTo(PaymentStatus.APPROVING);
+        jdbcTemplate.update("update payments set status_changed_at = status_changed_at - interval '2 minutes' where id = ?",
+                orderId);
+        when(kakaoPayClient.order(any())).thenAnswer(invocation -> {
+            Thread.sleep(300);
+            return new KakaoPayClient.OrderResponse(tid, CID, "SUCCESS_PAYMENT", orderId.toString(), userId.toString(),
+                    "MONEY", new KakaoPayClient.Amount(10_000L), null, null, "2026-10-10T12:01:00", null,
+                    List.of(new KakaoPayClient.PaymentActionDetail("A1", "2026-10-10T12:01:00", "PAYMENT")));
+        });
+
+        List<Outcome<Object>> outcomes = runConcurrently(IntStream.range(0, CONCURRENT_REQUESTS)
+                .mapToObj(index -> (Supplier<Object>) () -> {
+                    if (index % 2 == 0) {
+                        return paymentService.getPayment(userId, orderId);
+                    }
+                    recoveryScheduler.recoverStalePayments();
+                    return "scheduler";
+                })
+                .toList());
+
+        assertNoFailures(outcomes);
+        verify(kakaoPayClient, times(1)).order(any());
+        assertThat(paymentStatus(orderId)).isEqualTo("APPROVED");
+        assertThat(chargeRows(orderId)).isEqualTo(1);
+        assertThat(balance()).isEqualTo(10_000L);
+    }
+
+    @Test
+    void concurrentCancelsCallKakaoPayOnceAndRevokeOnce() throws Exception {
+        UUID orderId = paymentService.ready(userId, new PaymentReadyRequest("CHARGE_5000", UUID.randomUUID())).orderId();
+        when(kakaoPayClient.approve(any())).thenReturn(new KakaoPayClient.ApproveResponse("A1", tid, CID,
+                orderId.toString(), userId.toString(), "MONEY", new KakaoPayClient.Amount(5_000L), "2026-10-10T12:01:00"));
+        assertThat(paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")).status())
+                .isEqualTo(PaymentStatus.APPROVED);
+        when(kakaoPayClient.cancel(any())).thenAnswer(invocation -> {
+            Thread.sleep(200);
+            return new KakaoPayClient.CancelResponse("C1", tid, CID, "CANCEL_PAYMENT",
+                    new KakaoPayClient.Amount(5_000L), "2026-10-10T12:05:00");
+        });
+
+        List<Outcome<PaymentResponse>> outcomes = runConcurrently(IntStream.range(0, CONCURRENT_REQUESTS)
+                .mapToObj(ignored -> (Supplier<PaymentResponse>) () -> paymentService.cancel(userId, orderId))
+                .toList());
+
+        assertNoFailures(outcomes);
+        assertThat(outcomes).allSatisfy(outcome -> assertThat(outcome.value().status())
+                .isIn(PaymentStatus.CANCELING, PaymentStatus.CANCELED));
+        verify(kakaoPayClient, times(1)).cancel(any());
+        assertThat(paymentStatus(orderId)).isEqualTo("CANCELED");
+        Long cancelRows = jdbcTemplate.queryForObject(
+                "select count(*) from mileage_transactions where type = 'CHARGE_CANCEL' and reference_id = ?",
+                Long.class, orderId);
+        assertThat(cancelRows).isEqualTo(1);
+        assertThat(balance()).isZero();
     }
 
     @Test
