@@ -1,0 +1,30 @@
+$kind: http-request
+method: POST
+url: '{{baseUrl}}/api/v1/payments/kakao/ready'
+order: 9000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "productCode": "CHARGE_10000",
+      "requestId": "{{requestId}}"
+    }
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{userAToken}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('HTTP 200', () => pm.response.to.have.status(200));
+
+      pm.test('같은 orderId·pcUrl 재응답', () => {
+        const data = pm.response.json().data;
+        pm.expect(data.orderId).to.eql(pm.collectionVariables.get('orderId'));
+        pm.expect(data.pcUrl).to.eql(pm.collectionVariables.get('pcUrl'));
+      });
