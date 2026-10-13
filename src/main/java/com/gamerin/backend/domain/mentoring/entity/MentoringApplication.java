@@ -49,6 +49,15 @@ public class MentoringApplication {
     @Column(columnDefinition = "TEXT")
     private String message;
 
+    /** 기본 수수료 요율 10% (1000bp). V31 마이그레이션의 컬럼 DEFAULT와 동일해야 한다. */
+    public static final int DEFAULT_FEE_RATE_BP = 1000;
+
+    @Column(name = "fee_rate_bp", nullable = false)
+    private Integer feeRateBp = DEFAULT_FEE_RATE_BP;
+
+    @Column(name = "fee_amount")
+    private Long feeAmount;
+
     private OffsetDateTime completedAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -92,10 +101,19 @@ public class MentoringApplication {
     public String getMessage() { return message; }
     public void setMessage(String message) { this.message = message; }
 
+    public Integer getFeeRateBp() { return feeRateBp; }
+    public void setFeeRateBp(Integer feeRateBp) { this.feeRateBp = feeRateBp; }
+
+    public Long getFeeAmount() { return feeAmount; }
+    public void setFeeAmount(Long feeAmount) { this.feeAmount = feeAmount; }
+
     public OffsetDateTime getCompletedAt() { return completedAt; }
     public void setCompletedAt(OffsetDateTime completedAt) { this.completedAt = completedAt; }
 
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }
+
+
+
 
 }
