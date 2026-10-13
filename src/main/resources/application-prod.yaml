@@ -88,6 +88,11 @@ app:
       refresh-cookie-name: ${REFRESH_COOKIE_NAME:refresh_token}
       refresh-cookie-secure: ${REFRESH_COOKIE_SECURE:true}
       refresh-cookie-same-site: ${REFRESH_COOKIE_SAME_SITE:Lax}
+    sse:
+      stream-token-expiration-seconds: ${STREAM_TOKEN_EXPIRATION_SECONDS:60}
+      stream-token-cookie-name: ${STREAM_TOKEN_COOKIE_NAME:message_stream_token}
+      stream-token-cookie-same-site: ${STREAM_TOKEN_COOKIE_SAME_SITE:Lax}
+      stream-token-cookie-secure: ${STREAM_TOKEN_COOKIE_SECURE:true}
     password-reset:
       expiration-minutes: ${PASSWORD_RESET_EXPIRATION_MINUTES:30}
 
