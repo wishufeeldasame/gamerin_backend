@@ -68,6 +68,16 @@ r6:
     connect-timeout: ${R6DATA_API_CONNECT_TIMEOUT:3s}
     read-timeout: ${R6DATA_API_READ_TIMEOUT:10s}
 
+kakaopay:
+  api:
+    base-url: https://open-api.kakaopay.com
+    secret-key: ${KAKAOPAY_SECRET_KEY:}
+    connect-timeout: 3s
+    # 카카오페이 플랫폼 타임아웃(11초)보다 길게 둔다. 초과하면 결과 불명으로 처리한다.
+    read-timeout: 15s
+  # 허용하는 유일한 CID. 비어 있으면 결제 준비를 거부한다.
+  cid: ${KAKAOPAY_CID:}
+
 openai:
   api:
     key: ${OPENAI_API_KEY:}

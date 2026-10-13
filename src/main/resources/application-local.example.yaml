@@ -88,6 +88,12 @@ r6:
     connect-timeout: ${R6DATA_API_CONNECT_TIMEOUT:3s}
     read-timeout: ${R6DATA_API_READ_TIMEOUT:10s}
 
+kakaopay:
+  api:
+    # 카카오페이 개발자센터의 Secret key(dev). 실제 키를 커밋하지 않는다.
+    secret-key: 여기에_카카오페이_SECRET_KEY
+  cid: TC0ONETIME
+
 openai:
   api:
     key: ${OPENAI_API_KEY:}
