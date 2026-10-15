@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.post.repository;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -37,4 +38,21 @@ public interface PostCommentRepository extends JpaRepository<PostComment, UUID> 
         order by pc.createdAt desc, pc.id desc
         """)
     List<PostComment> findActiveByPostId(@Param("postId") UUID postId);
+
+    @Query("""
+        select pc.id
+        from PostComment pc
+        where pc.post.id = :postId
+        """)
+    List<UUID> findIdsByPostId(@Param("postId") UUID postId);
+
+    // 댓글의 deleted_at은 신고 숨김에서만 설정된다(사용자 삭제는 하드 삭제).
+    @Query("""
+        select pc
+        from PostComment pc
+        where pc.deletedAt is not null
+          and pc.deletedAt <= :hiddenCutoff
+        order by pc.deletedAt asc, pc.id asc
+        """)
+    List<PostComment> findHiddenHardDeleteCandidates(@Param("hiddenCutoff") OffsetDateTime hiddenCutoff);
 }

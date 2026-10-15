@@ -8,6 +8,7 @@ import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -49,14 +50,38 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
         """)
     Optional<Post> findAccessibleByIdForShare(@Param("id") UUID id);
 
+    // 신고로 숨긴 글(report_counts.is_hidden)은 hiddenCutoff, 사용자가 삭제한 글은 cutoff 기준으로 정리한다.
     @Query("""
         select p
         from Post p
         where p.deletedAt is not null
-          and p.deletedAt <= :cutoff
+          and (
+                (p.deletedAt <= :hiddenCutoff and exists (
+                    select 1 from ReportCount rc
+                    where rc.targetType = com.gamerin.backend.domain.report.entity.ReportTargetType.POST
+                      and rc.targetId = p.id
+                      and rc.isHidden = true))
+                or (p.deletedAt <= :cutoff and not exists (
+                    select 1 from ReportCount rc
+                    where rc.targetType = com.gamerin.backend.domain.report.entity.ReportTargetType.POST
+                      and rc.targetId = p.id
+                      and rc.isHidden = true))
+          )
         order by p.deletedAt asc, p.id asc
         """)
-    List<Post> findHardDeleteCandidates(@Param("cutoff") OffsetDateTime cutoff);
+    List<Post> findHardDeleteCandidates(
+            @Param("cutoff") OffsetDateTime cutoff,
+            @Param("hiddenCutoff") OffsetDateTime hiddenCutoff
+    );
+
+    // 신고 숨김·복구용. 영속성 컨텍스트의 오래된 값이 아니라 DB 값을 기준으로 갱신한다.
+    @Modifying
+    @Query("update Post p set p.commentCount = p.commentCount - 1 where p.id = :id and p.commentCount > 0")
+    int decreaseCommentCount(@Param("id") UUID id);
+
+    @Modifying
+    @Query("update Post p set p.commentCount = p.commentCount + 1 where p.id = :id")
+    int increaseCommentCount(@Param("id") UUID id);
 
     long countByAuthorIdAndDeletedAtIsNull(UUID authorId);
 

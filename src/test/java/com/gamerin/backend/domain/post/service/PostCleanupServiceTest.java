@@ -19,8 +19,11 @@ import org.springframework.test.util.ReflectionTestUtils;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
+import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
+import com.gamerin.backend.domain.report.entity.ReportTargetType;
+import com.gamerin.backend.domain.report.repository.ReportCountRepository;
 import com.gamerin.backend.domain.user.entity.User;
 
 @ExtendWith(MockitoExtension.class)
@@ -30,7 +33,13 @@ class PostCleanupServiceTest {
     private PostRepository postRepository;
 
     @Mock
+    private PostCommentRepository postCommentRepository;
+
+    @Mock
     private PostMediaRepository postMediaRepository;
+
+    @Mock
+    private ReportCountRepository reportCountRepository;
 
     @Mock
     private MediaStorageService mediaStorageService;
@@ -41,9 +50,12 @@ class PostCleanupServiceTest {
     void setUp() {
         postCleanupService = new PostCleanupService(
                 postRepository,
+                postCommentRepository,
                 postMediaRepository,
+                reportCountRepository,
                 mediaStorageService,
-                Duration.ofDays(1)
+                Duration.ofDays(1),
+                Duration.ofDays(14)
         );
     }
 
@@ -63,11 +75,17 @@ class PostCleanupServiceTest {
                 0
         );
 
-        when(postRepository.findHardDeleteCandidates(any(OffsetDateTime.class))).thenReturn(List.of(post));
+        UUID commentId = UUID.randomUUID();
+        when(postRepository.findHardDeleteCandidates(any(OffsetDateTime.class), any(OffsetDateTime.class)))
+                .thenReturn(List.of(post));
         when(postMediaRepository.findByPostIdOrderBySortOrderAscIdAsc(postId)).thenReturn(List.of(media));
+        when(postCommentRepository.findIdsByPostId(postId)).thenReturn(List.of(commentId));
 
         postCleanupService.purgeExpiredSoftDeletedPosts();
 
+        verify(reportCountRepository).deleteByTargets(ReportTargetType.POST, List.of(postId));
+        verify(reportCountRepository).deleteByTargets(ReportTargetType.COMMENT, List.of(commentId));
+        verify(postCommentRepository).deleteAllByIdInBatch(List.of(commentId));
         verify(postRepository).delete(post);
         verify(mediaStorageService).deletePublicUrlQuietly("/uploads/post-media/video.mp4");
         verify(mediaStorageService).deletePublicUrlQuietly("/uploads/post-media/thumb.jpg");

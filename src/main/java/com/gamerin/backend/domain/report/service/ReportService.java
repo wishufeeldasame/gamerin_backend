@@ -460,8 +460,9 @@ public class ReportService {
     private void validateTargetExists(UUID reporterId, ReportTargetType targetType, UUID targetId) {
         boolean exists = switch (targetType) {
             case POST -> postRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
+            // 댓글은 글을 따라간다: 숨김·삭제된 글의 댓글은 신고 대상이 아니다.
             case COMMENT -> postCommentRepository.findById(targetId)
-                    .map(comment -> comment.getDeletedAt() == null)
+                    .map(comment -> comment.getDeletedAt() == null && comment.getPost().getDeletedAt() == null)
                     .orElse(false);
             case USER -> userRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
             case MENTORING -> mentoringApplicationRepository.existsById(targetId);
@@ -560,12 +561,16 @@ public class ReportService {
                         return true;
                     }).orElse(false);
         } else if (targetType == ReportTargetType.COMMENT) {
+            // 글을 잠근 뒤 댓글을 다시 조회해 사용자 댓글 작성·삭제와 댓글 수 갱신이 겹치지 않게 한다.
             return postCommentRepository.findById(targetId)
-                    .filter(c -> c.getDeletedAt() == null)
-                    .map(comment -> {
-                        comment.softDelete();
-                        return true;
-                    }).orElse(false);
+                    .flatMap(comment -> postRepository.findActiveByIdForUpdate(comment.getPost().getId()))
+                    .flatMap(post -> postCommentRepository.findActiveByPostIdAndId(post.getId(), targetId)
+                            .map(comment -> {
+                                comment.softDelete();
+                                postRepository.decreaseCommentCount(post.getId());
+                                return true;
+                            }))
+                    .orElse(false);
         }
         return false;
     }
@@ -586,6 +591,7 @@ public class ReportService {
             return postCommentRepository.findById(targetId)
                     .map(comment -> {
                         if (comment.getDeletedAt() != null) {
+                            postRepository.increaseCommentCount(comment.getPost().getId());
                             comment.restore();
                         }
                         return true;
