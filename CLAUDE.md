@@ -59,7 +59,7 @@
 - 운영 비밀 값은 출력하지 않는다.
 - 소스 루트는 `src/main/java/com/gamerin/backend/`, 테스트 루트는 `src/test/java/com/gamerin/backend/`다. 아래 `domain/...`, `global/...` 경로는 소스 루트 기준이다.
 - `domain/<도메인>/` 아래 controller, service, repository, entity, dto 등 기존 계층을 따라 변경 흐름을 확인한다.
-- 현재 도메인은 auth, user, post, message, mentoring, follow, bookmark, repost, hashtag, mention, notification, search, game, pubg, r6, riot로 나뉜다.
+- 현재 도메인은 auth, user, post, message, mentoring, follow, bookmark, repost, hashtag, mention, notification, search, game, pubg, r6, riot, report, admin으로 나뉜다.
 - 피드 controller/service는 `domain/post/`, 마일리지 controller/service는 `domain/user/`에 있다.
 - `global/response`, `global/exception`, `global/security`, `global/config`, `global/logging`은 공통 기반이다.
 - 기능을 바꾸기 전에 관련 controller → service → repository와 DTO/entity, 기존 테스트를 함께 확인한다.
@@ -80,6 +80,7 @@
 ### 현재 인증/보안 구현
 
 - 인증·인가 변경은 `global/security/config/SecurityConfig.java`, `global/security/jwt/JwtAuthenticationFilter.java`, `global/security/jwt/JwtTokenProvider.java`, `global/security/oauth2/OAuth2SuccessHandler.java`, `domain/auth/controller/AuthController.java`, `domain/auth/service/TokenService.java`를 함께 확인한다.
+- 일반 회원가입은 `domain/auth/service/EmailVerificationService.java`가 발급한 이메일 인증 토큰을 `LocalAuthService.signUp`에서 필수로 검증하고 사용 처리한다. Google OAuth 가입은 인증번호 없이 `OAuth2SuccessHandler`가 Google `email_verified`를 확인한다.
 - 보안 체인은 stateless JWT 기반이다.
 - `JwtAuthenticationFilter`는 일반 Bearer 토큰과 메시지 SSE 스트림 전용 HttpOnly cookie 인증 경계를 구분한다.
 - 메시지 SSE는 `POST /api/v1/messages/stream-token`과 `global/security/jwt/SseStreamTokenService.java`의 전용 쿠키 인증을 사용한다.
@@ -134,6 +135,7 @@
 - `MentoringScheduler`는 서버 기본 시간대 기준 매일 03시에 자동 정산을 호출한다.
 - `bootRun` 등 애플리케이션 실행을 단순 컴파일 확인으로 사용하지 않는다.
 - OpenAI Moderation, PUBG, R6, Riot, 메일 연동은 관련 client/service와 공개 설정을 확인한다.
+- 메일 발송은 `domain/auth/service/PasswordResetMailService.java`와 `EmailVerificationMailService.java`가 담당한다. SMTP가 설정되지 않으면 이메일 인증번호는 `local` 프로필에서만 콘솔 로그로 대체하고 그 외 프로필은 발송 실패로 처리한다. 비밀번호 재설정 링크는 프로필과 관계없이 콘솔 로그로 대체한다.
 - API 오류, timeout, rate limit, 검열 실패 처리 정책을 임의로 완화하지 않는다.
 - 키·토큰·개인정보는 로그와 문서에 남기지 않는다.
 - OpenAI 검열 클라이언트는 `domain/post/moderation/OpenAiModerationClient.java`, 게임 API 클라이언트는 `domain/pubg/client/`, `domain/r6/client/`, `domain/riot/client/`에 있다.
