@@ -178,6 +178,7 @@ class MentoringServiceTest {
                 program.setStatus(ProgramStatus.CLOSED);
 
                 when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+                when(userRepository.findActiveByIdForUpdate(menteeId)).thenReturn(Optional.of(application.getMentee()));
 
                 assertThatThrownBy(() -> mentoringService.applyToProgram(
                                 CustomUserPrincipal.from(application.getMentee()),
@@ -207,6 +208,7 @@ class MentoringServiceTest {
                                 ApplicationStatus.ONGOING,
                                 ApplicationStatus.FINISHED);
 
+                when(userRepository.findActiveByIdForUpdate(menteeId)).thenReturn(Optional.of(application.getMentee()));
                 when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
                 when(mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(
                                 menteeId,
@@ -317,17 +319,36 @@ class MentoringServiceTest {
         void applyToSoftDeletedProgramReturns404() {
                 UUID programId = UUID.randomUUID();
 
+                User mentee = savedUser(UUID.randomUUID(), "mentee", "Mentee");
+                when(userRepository.findActiveByIdForUpdate(mentee.getId())).thenReturn(Optional.of(mentee));
                 // findByIdForUpdate에 deletedAt IS NULL 조건이 있으므로 소프트 삭제된 프로그램은 빈 값 반환
                 when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.empty());
 
                 assertThatThrownBy(() -> mentoringService.applyToProgram(
-                                CustomUserPrincipal.from(savedUser(UUID.randomUUID(), "mentee", "Mentee")),
+                                CustomUserPrincipal.from(mentee),
                                 new MentoringApplicationRequest(programId, "message")))
                                 .isInstanceOf(ResponseStatusException.class)
                                 .satisfies(error -> {
                                         ResponseStatusException ex = (ResponseStatusException) error;
                                         assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.NOT_FOUND.value());
                                 });
+        }
+
+        @Test
+        @DisplayName("탈퇴한 멘티는 프로그램을 잠그거나 마일리지를 차감하기 전에 404로 거부된다")
+        void applyByWithdrawnMenteeIsRejectedBeforeLockingProgram() {
+                User mentee = savedUser(UUID.randomUUID(), "mentee", "Mentee");
+                when(userRepository.findActiveByIdForUpdate(mentee.getId())).thenReturn(Optional.empty());
+
+                assertThatThrownBy(() -> mentoringService.applyToProgram(
+                                CustomUserPrincipal.from(mentee),
+                                new MentoringApplicationRequest(UUID.randomUUID(), "message")))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> assertThat(((ResponseStatusException) error).getStatusCode().value())
+                                                .isEqualTo(HttpStatus.NOT_FOUND.value()));
+
+                verify(mentoringProgramRepository, never()).findByIdForUpdate(any());
+                verify(mileageService, never()).useMileage(any(), any(), any(), any(), any());
         }
 
         @Test
@@ -382,7 +403,7 @@ class MentoringServiceTest {
                 when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(prog));
                 when(mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(any(), any(), any()))
                                 .thenReturn(false);
-                when(userRepository.findById(menteeId)).thenReturn(Optional.of(app.getMentee()));
+                when(userRepository.findActiveByIdForUpdate(menteeId)).thenReturn(Optional.of(app.getMentee()));
                 when(mentoringApplicationRepository.save(any(MentoringApplication.class))).thenAnswer(invocation -> {
                         MentoringApplication a = invocation.getArgument(0);
                         ReflectionTestUtils.setField(a, "id", UUID.randomUUID());

@@ -4,6 +4,7 @@ import java.util.UUID;
 
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,6 +22,7 @@ import com.gamerin.backend.domain.user.dto.request.ProfileImageTarget;
 import com.gamerin.backend.domain.user.dto.request.UpdateProfileRequest;
 import com.gamerin.backend.domain.user.dto.response.DetailedUserProfileResponse;
 import com.gamerin.backend.domain.user.dto.response.ProfileImageUploadResponse;
+import com.gamerin.backend.domain.user.service.AccountWithdrawalService;
 import com.gamerin.backend.domain.user.service.UserService;
 import com.gamerin.backend.global.response.ApiResponse;
 import com.gamerin.backend.global.response.CursorPageResponse;
@@ -36,10 +38,16 @@ public class UserController {
 
     private final UserService userService;
     private final FeedService feedService;
+    private final AccountWithdrawalService accountWithdrawalService;
 
-    public UserController(UserService userService, FeedService feedService) {
+    public UserController(
+            UserService userService,
+            FeedService feedService,
+            AccountWithdrawalService accountWithdrawalService
+    ) {
         this.userService = userService;
         this.feedService = feedService;
+        this.accountWithdrawalService = accountWithdrawalService;
     }
 
     @GetMapping("/me")
@@ -56,6 +64,13 @@ public class UserController {
             @Valid @RequestBody UpdateProfileRequest request
     ) {
         userService.updateProfile(principal.getUserId(), request);
+        return ApiResponse.ok(null);
+    }
+
+    // 회원 탈퇴. refresh cookie 정리는 클라이언트가 이어서 호출하는 /auth/logout이 담당한다
+    @DeleteMapping("/me")
+    public ApiResponse<Void> withdraw(@AuthenticationPrincipal CustomUserPrincipal principal) {
+        accountWithdrawalService.withdraw(principal.getUserId());
         return ApiResponse.ok(null);
     }
 

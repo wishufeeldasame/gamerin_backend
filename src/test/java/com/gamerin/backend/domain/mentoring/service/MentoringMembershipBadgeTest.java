@@ -239,7 +239,7 @@ class MentoringMembershipBadgeTest {
         if (action.equals("apply")) {
             when(mentoringProgramRepository.findByIdForUpdate(application.getProgram().getId()))
                     .thenReturn(Optional.of(application.getProgram()));
-            when(userRepository.findById(menteeId)).thenReturn(Optional.of(application.getMentee()));
+            when(userRepository.findActiveByIdForUpdate(menteeId)).thenReturn(Optional.of(application.getMentee()));
             when(mentoringApplicationRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         } else {
             when(mentoringApplicationRepository.findByIdForUpdate(application.getId()))

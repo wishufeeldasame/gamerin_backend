@@ -45,6 +45,7 @@ app:
   post:
     cleanup:
       hard-delete-after: 24h
+      hidden-hard-delete-after: 14d
       initial-delay-ms: 60000
       fixed-delay-ms: 3600000
   frontend:

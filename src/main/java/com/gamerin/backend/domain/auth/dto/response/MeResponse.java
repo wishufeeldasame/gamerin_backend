@@ -8,6 +8,8 @@ public record MeResponse(
         String nickname,
         String role,
         String status,
+        // 소셜 전용 가입자는 비밀번호가 없어 비밀번호 변경을 제공하지 않는다
+        boolean hasPassword,
         boolean membershipBadge
 ) {
 }
