@@ -237,12 +237,45 @@ public class LocalAuthService {
         revokeActiveRefreshTokens(user.getId());
     }
 
+    /**
+     * 로그인한 사용자의 비밀번호를 현재 비밀번호 확인 후 변경한다.
+     * 소셜 전용 계정(비밀번호 없음)은 거부하고, 변경 후 현재 세션을 제외한 리프레시 토큰을 폐기한다.
+     */
+    public void changePassword(UUID userId, ChangePasswordRequest request, String rawCurrentRefreshToken) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
+
+        if (user.getPasswordHash() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "소셜 로그인 계정은 비밀번호를 변경할 수 없습니다.");
+        }
+        // 401은 프론트에서 세션 만료로 처리되므로 비밀번호 불일치는 400으로 응답한다
+        if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "현재 비밀번호가 올바르지 않습니다.");
+        }
+        validatePasswordConfirmation(request.newPassword(), request.newPasswordConfirm());
+        if (passwordEncoder.matches(request.newPassword(), user.getPasswordHash())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "새 비밀번호가 현재 비밀번호와 같습니다.");
+        }
+
+        user.changePassword(passwordEncoder.encode(request.newPassword()));
+
+        String currentTokenHash = rawCurrentRefreshToken == null || rawCurrentRefreshToken.isBlank()
+                ? null
+                : tokenService.sha256(rawCurrentRefreshToken);
+        refreshTokenRepository.findAllByUserIdAndRevokedAtIsNull(userId).stream()
+                .filter(token -> !token.getTokenHash().equals(currentTokenHash))
+                .forEach(RefreshToken::revoke);
+    }
+
     @Transactional(readOnly = true)
     public MeResponse getMe(CustomUserPrincipal principal) {
+        boolean hasPassword = userRepository.findById(principal.getUserId())
+                .map(user -> user.getPasswordHash() != null)
+                .orElse(false);
         return new MeResponse(
                 principal.getUserId(), principal.getUsername(), principal.getNickname(),
                 principal.getAuthorities().stream().findFirst().map(Object::toString).orElse("ROLE_USER"),
-                "ACTIVE");
+                "ACTIVE", hasPassword);
     }
 
     private void validatePasswordConfirmation(String password, String passwordConfirm) {
