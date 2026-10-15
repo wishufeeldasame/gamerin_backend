@@ -30,3 +30,10 @@ jobs:
         with:
           name: test-reports
           path: build/reports/tests/test
+      - name: Discord 알림
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          MSG: "❌ ${{ github.repository }} CI 실패 (${{ github.ref_name }}, by ${{ github.actor }})\n${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          curl -fsS -H "Content-Type: application/json" -d "$(jq -n --arg c "$MSG" '{content:$c}')" "$DISCORD_WEBHOOK"
