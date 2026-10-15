@@ -51,6 +51,18 @@ public class MessageRealtimeService {
         }
     }
 
+    // 탈퇴 등으로 더 이상 인증되지 않는 사용자의 열린 스트림을 닫는다
+    public void disconnect(UUID userId) {
+        List<SseEmitter> emitters = emittersByUserId.remove(userId);
+        if (emitters == null) {
+            return;
+        }
+
+        for (SseEmitter emitter : emitters) {
+            emitter.complete();
+        }
+    }
+
     private void removeEmitter(UUID userId, SseEmitter emitter) {
         List<SseEmitter> emitters = emittersByUserId.get(userId);
         if (emitters == null) {

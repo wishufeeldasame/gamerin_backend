@@ -71,6 +71,7 @@ app:
   post:
     cleanup:
       hard-delete-after: ${POST_CLEANUP_HARD_DELETE_AFTER:24h}
+      hidden-hard-delete-after: ${POST_CLEANUP_HIDDEN_HARD_DELETE_AFTER:14d}
       initial-delay-ms: ${POST_CLEANUP_INITIAL_DELAY_MS:60000}
       fixed-delay-ms: ${POST_CLEANUP_FIXED_DELAY_MS:3600000}
   mail:

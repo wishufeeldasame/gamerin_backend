@@ -85,28 +85,28 @@ public class MentoringService {
     }
 
     @Transactional
-        public MentorProfileResponse registerMentor(CustomUserPrincipal principal, MentorRegistrationRequest request) {
-           // 멘토 등록 확인
-            if (mentorProfileRepository.existsById(principal.getUserId())) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 멘토로 등록된 사용자입니다.");
-            }
-
-           // 유저 엔티티 조회
-            User user = userRepository.findById(principal.getUserId())
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
-
-           // 멘토 등록 시 마일리지 지갑 생성 확인
-            mileageService.getOrCreateWallet(user);
-
-           // 멘토 프로필 생성 및 저장
-            MentorProfile profile = new MentorProfile();
-            profile.setUser(user);
-            profile.setAbout(request.about());
-            profile.setStatus(MentorStatus.PENDING_APPROVAL);// <- [추가] 승인 대기 상태로 등록
-
-            MentorProfile savedProfile = mentorProfileRepository.save(profile);
-            return MentorProfileResponse.from(savedProfile);
+    public MentorProfileResponse registerMentor(CustomUserPrincipal principal, MentorRegistrationRequest request) {
+        // 멘토 등록 확인
+        if (mentorProfileRepository.existsById(principal.getUserId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 멘토로 등록된 사용자입니다.");
         }
+
+        // 유저 엔티티 조회
+        User user = userRepository.findById(principal.getUserId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
+
+        // 멘토 등록 시 마일리지 지갑 생성 확인
+        mileageService.getOrCreateWallet(user);
+
+        // 멘토 프로필 생성 및 저장
+        MentorProfile profile = new MentorProfile();
+        profile.setUser(user);
+        profile.setAbout(request.about());
+        profile.setStatus(MentorStatus.PENDING_APPROVAL);// <- [추가] 승인 대기 상태로 등록
+
+        MentorProfile savedProfile = mentorProfileRepository.save(profile);
+        return MentorProfileResponse.from(savedProfile);
+    }
 
     // 멘토 프로필 조회
     @Transactional(readOnly = true)
@@ -125,19 +125,19 @@ public class MentoringService {
     }
 
     @Transactional
-        public MentoringProgramResponse registerProgram(CustomUserPrincipal principal, MentoringProgramRequest request) {
-            if (request.price() == null || request.price() < 0) {
-                throw new IllegalArgumentException("가격은 0원 이상이어야 합니다.");
-            }
+    public MentoringProgramResponse registerProgram(CustomUserPrincipal principal, MentoringProgramRequest request) {
+        if (request.price() == null || request.price() < 0) {
+            throw new IllegalArgumentException("가격은 0원 이상이어야 합니다.");
+        }
 
-            // 현재 사용자의 멘토 프로필 조회 (멘토 등록 여부 확인)
-            MentorProfile mentor = mentorProfileRepository.findById(principal.getUserId())
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "멘토로 등록되지 않은 사용자입니다."));
+        // 현재 사용자의 멘토 프로필 조회 (멘토 등록 여부 확인)
+        MentorProfile mentor = mentorProfileRepository.findById(principal.getUserId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "멘토로 등록되지 않은 사용자입니다."));
 
-            // [추가] 관리자 승인이 완료된 멘토만 프로그램 등록 가능
-            if (mentor.getStatus() != MentorStatus.ACTIVE) {
-                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 승인이 완료된 멘토만 프로그램을 등록할 수 있습니다.");
-            }
+        // [추가] 관리자 승인이 완료된 멘토만 프로그램 등록 가능
+        if (mentor.getStatus() != MentorStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 승인이 완료된 멘토만 프로그램을 등록할 수 있습니다.");
+        }
 
         MentoringProgram program = new MentoringProgram();
         program.setMentor(mentor);
@@ -155,7 +155,8 @@ public class MentoringService {
     @Transactional(readOnly = true)
     public Page<MentoringProgramResponse> getPrograms(GameType gameName, UUID mentorId, Pageable pageable) {
 
-        Page<MentoringProgram> programs = mentoringProgramRepository.findByFilters(gameName == null ? null : gameName.name(), mentorId, pageable);
+        Page<MentoringProgram> programs = mentoringProgramRepository
+                .findByFilters(gameName == null ? null : gameName.name(), mentorId, pageable);
 
         return programs.map(MentoringProgramResponse::from);
     }
@@ -228,6 +229,10 @@ public class MentoringService {
     @Transactional
     public MentoringApplicationResponse applyToProgram(CustomUserPrincipal principal,
             MentoringApplicationRequest request) {
+        // 멘티 행을 먼저 잠가 동시에 진행되는 회원 탈퇴(사용자 → 프로그램 순 잠금)와 직렬화하고 탈퇴 계정은 거부한다
+        User mentee = userRepository.findActiveByIdForUpdate(principal.getUserId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자 정보를 찾을 수 없습니다."));
+
         // 프로그램 존재 여부 확인
         MentoringProgram program = mentoringProgramRepository.findByIdForUpdate(request.programId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신청하려는 프로그램을 찾을 수 없습니다."));
@@ -248,26 +253,24 @@ public class MentoringService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 진행 중인 신청 내역이 있습니다.");
         }
 
-        // 멘티 유저 정보 조회
-        User mentee = userRepository.findById(principal.getUserId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자 정보를 찾을 수 없습니다."));
-
-        // 마일리지 차감 및 트랜잭션 기록
-        mileageService.useMileage(
-                mentee,
-                program.getPrice(),
-                TransactionType.MENTORING_PAY,
-                "멘토링 신청 결제: " + program.getTitle(),
-                null);
-
+        // 1. 신청 내역 먼저 저장하여 ID 획득 (KP-C1 #90 F2)
         MentoringApplication application = new MentoringApplication();
         application.setProgram(program);
         application.setMentee(mentee);
         application.setAppliedMileage(program.getPrice());
         application.setMessage(request.message());
         application.setPaymentStatus(PaymentStatus.ESCROW_HELD);
+        application.setFeeRateBp(MentoringApplication.DEFAULT_FEE_RATE_BP); // KP-C1 기본 요율 10%
 
         MentoringApplication savedApplication = mentoringApplicationRepository.save(application);
+
+        // 2. 마일리지 차감 및 원장 기록에 생성된 신청 ID(referenceId) 연결
+        mileageService.useMileage(
+                mentee,
+                program.getPrice(),
+                TransactionType.MENTORING_PAY,
+                "멘토링 신청 결제: " + program.getTitle(),
+                savedApplication.getId());
 
         notificationCommandService.createMentoringApplication(
                 savedApplication,
@@ -453,14 +456,18 @@ public class MentoringService {
                 .findByIdForUpdate(application.getProgram().getMentor().getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "멘토 프로필을 찾을 수 없습니다."));
 
+        // [KP-C1 #90 F3]: 공통 계산기로 수수료 계산, fee_amount 저장 및 멘토 지급액 산출
+        MentoringSettlementCalculator.SettlementResult settlement = MentoringSettlementCalculator
+                .applySettlement(application);
+
         mileageService.addMileage(
                 mentorProfile.getUser(),
-                application.getAppliedMileage(),
+                settlement.payoutAmount(),
                 TransactionType.SETTLEMENT,
                 "멘토링 완료 정산",
                 application.getId());
 
-        mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
+        mentorProfileRepository.incrementMenteeCount(mentorProfile.getUserId());
 
         notificationCommandService.createMentoringCompleted(
                 application,

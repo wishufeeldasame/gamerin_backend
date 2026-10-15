@@ -67,8 +67,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 || path.startsWith("/api/v1/auth/social-signup")
                 || path.startsWith("/api/v1/auth/find-password")
                 || path.startsWith("/api/v1/auth/reset-password")
+                || path.startsWith("/api/v1/auth/password")
                 || path.startsWith("/api/v1/auth/refresh")
-                || path.startsWith("/api/v1/auth/availability");
+                || path.startsWith("/api/v1/auth/availability")
+                || path.startsWith("/api/v1/auth/email-verifications");
     }
 
     private String getClientIp(HttpServletRequest request) {

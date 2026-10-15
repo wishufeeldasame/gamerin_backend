@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.auth.controller;
 
+import com.gamerin.backend.domain.auth.dto.request.ChangePasswordRequest;
 import com.gamerin.backend.domain.auth.dto.request.FindIdRequest;
 import com.gamerin.backend.domain.auth.dto.request.FindPasswordRequest;
 import com.gamerin.backend.domain.auth.dto.request.ResetPasswordRequest;
@@ -54,7 +55,8 @@ class AuthControllerTest {
                 "Password1!",
                 "Password1!",
                 true,
-                true
+                true,
+                "verify-token"
         );
         TokenService.AuthResult authResult = authResult(UUID.randomUUID(), "tester", "Tester");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -154,6 +156,23 @@ class AuthControllerTest {
     }
 
     @Test
+    void changePasswordPassesCurrentRefreshTokenToService() {
+        UUID userId = UUID.randomUUID();
+        var user = com.gamerin.backend.domain.user.entity.User.createLocal(
+                "user@example.com", "tester", "Tester", "encoded-password");
+        ReflectionTestUtils.setField(user, "id", userId);
+        CustomUserPrincipal principal = CustomUserPrincipal.from(user);
+        ChangePasswordRequest request = new ChangePasswordRequest("OldPassword1!", "NewPassword1!", "NewPassword1!");
+        MockHttpServletRequest httpRequest = new MockHttpServletRequest();
+        httpRequest.setCookies(new Cookie("refresh_token", "current-refresh-token"));
+
+        ApiResponse<Void> response = authController.changePassword(principal, request, httpRequest);
+
+        verify(localAuthService).changePassword(userId, request, "current-refresh-token");
+        assertThat(response.success()).isTrue();
+    }
+
+    @Test
     void meReturnsAuthenticatedUserPayload() {
         UUID userId = UUID.randomUUID();
         var user = com.gamerin.backend.domain.user.entity.User.createLocal(
@@ -164,7 +183,7 @@ class AuthControllerTest {
         );
         ReflectionTestUtils.setField(user, "id", userId);
         CustomUserPrincipal principal = CustomUserPrincipal.from(user);
-        MeResponse meResponse = new MeResponse(userId, "tester", "Tester", "ROLE_USER", "ACTIVE");
+        MeResponse meResponse = new MeResponse(userId, "tester", "Tester", "ROLE_USER", "ACTIVE", true);
 
         when(localAuthService.getMe(principal)).thenReturn(meResponse);
 

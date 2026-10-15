@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import java.util.List;
@@ -40,6 +42,7 @@ import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepos
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringReviewRepository;
 import com.gamerin.backend.domain.notification.service.NotificationCommandService;
+import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.domain.user.service.MileageService;
@@ -48,7 +51,6 @@ import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.eq;
 import org.junit.jupiter.api.DisplayName;
-import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
 
 @ExtendWith(MockitoExtension.class)
 class MentoringServiceTest {
@@ -171,6 +173,7 @@ class MentoringServiceTest {
                 program.setStatus(ProgramStatus.CLOSED);
 
                 when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+                when(userRepository.findActiveByIdForUpdate(menteeId)).thenReturn(Optional.of(application.getMentee()));
 
                 assertThatThrownBy(() -> mentoringService.applyToProgram(
                                 CustomUserPrincipal.from(application.getMentee()),
@@ -200,6 +203,7 @@ class MentoringServiceTest {
                                 ApplicationStatus.ONGOING,
                                 ApplicationStatus.FINISHED);
 
+                when(userRepository.findActiveByIdForUpdate(menteeId)).thenReturn(Optional.of(application.getMentee()));
                 when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
                 when(mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(
                                 menteeId,
@@ -310,17 +314,36 @@ class MentoringServiceTest {
         void applyToSoftDeletedProgramReturns404() {
                 UUID programId = UUID.randomUUID();
 
+                User mentee = savedUser(UUID.randomUUID(), "mentee", "Mentee");
+                when(userRepository.findActiveByIdForUpdate(mentee.getId())).thenReturn(Optional.of(mentee));
                 // findByIdForUpdate에 deletedAt IS NULL 조건이 있으므로 소프트 삭제된 프로그램은 빈 값 반환
                 when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.empty());
 
                 assertThatThrownBy(() -> mentoringService.applyToProgram(
-                                CustomUserPrincipal.from(savedUser(UUID.randomUUID(), "mentee", "Mentee")),
+                                CustomUserPrincipal.from(mentee),
                                 new MentoringApplicationRequest(programId, "message")))
                                 .isInstanceOf(ResponseStatusException.class)
                                 .satisfies(error -> {
                                         ResponseStatusException ex = (ResponseStatusException) error;
                                         assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.NOT_FOUND.value());
                                 });
+        }
+
+        @Test
+        @DisplayName("탈퇴한 멘티는 프로그램을 잠그거나 마일리지를 차감하기 전에 404로 거부된다")
+        void applyByWithdrawnMenteeIsRejectedBeforeLockingProgram() {
+                User mentee = savedUser(UUID.randomUUID(), "mentee", "Mentee");
+                when(userRepository.findActiveByIdForUpdate(mentee.getId())).thenReturn(Optional.empty());
+
+                assertThatThrownBy(() -> mentoringService.applyToProgram(
+                                CustomUserPrincipal.from(mentee),
+                                new MentoringApplicationRequest(UUID.randomUUID(), "message")))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> assertThat(((ResponseStatusException) error).getStatusCode().value())
+                                                .isEqualTo(HttpStatus.NOT_FOUND.value()));
+
+                verify(mentoringProgramRepository, never()).findByIdForUpdate(any());
+                verify(mileageService, never()).useMileage(any(), any(), any(), any(), any());
         }
 
         @Test
@@ -359,5 +382,98 @@ class MentoringServiceTest {
                                         assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.NOT_FOUND.value());
                                         assertThat(ex.getReason()).isEqualTo("프로그램을 찾을 수 없습니다.");
                                 });
+        }
+
+        @Test
+        @DisplayName("[F2] 신청 성공 시 신청 엔티티가 먼저 저장되고 MENTORING_PAY 원장의 referenceId로 연결된다")
+        void applyToProgramSavesApplicationBeforeChargingAndConnectsReferenceId() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication app = application(mentorId, menteeId, programId, UUID.randomUUID());
+                MentoringProgram prog = app.getProgram();
+                prog.setStatus(ProgramStatus.ACTIVE);
+                prog.setPrice(15000L);
+
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(prog));
+                when(mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(any(), any(), any()))
+                                .thenReturn(false);
+                when(userRepository.findActiveByIdForUpdate(menteeId)).thenReturn(Optional.of(app.getMentee()));
+                when(mentoringApplicationRepository.save(any(MentoringApplication.class))).thenAnswer(invocation -> {
+                        MentoringApplication a = invocation.getArgument(0);
+                        ReflectionTestUtils.setField(a, "id", UUID.randomUUID());
+                        return a;
+                });
+
+                MentoringApplicationResponse response = mentoringService.applyToProgram(
+                                CustomUserPrincipal.from(app.getMentee()),
+                                new MentoringApplicationRequest(programId, "잘 부탁드립니다."));
+
+                // useMileage의 마지막 인자(referenceId)로 생성된 application.id가 전달되었는지 검증
+                verify(mileageService, times(1)).useMileage(
+                                eq(app.getMentee()),
+                                eq(15000L),
+                                eq(TransactionType.MENTORING_PAY),
+                                anyString(),
+                                eq(response.id()));
+        }
+
+        @Test
+        @DisplayName("[F3] completeMentoring 시 10% 수수료가 공제된 금액이 지급되고 fee_amount가 저장된다")
+        void completeMentoringDeductsFeeAndPaysMentor() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                UUID appId = UUID.randomUUID();
+                MentoringApplication app = application(mentorId, menteeId, programId, appId);
+                app.setStatus(ApplicationStatus.ONGOING);
+                app.setAppliedMileage(20000L);
+                app.setFeeRateBp(1000);
+
+                when(mentoringApplicationRepository.findByIdForUpdate(appId)).thenReturn(Optional.of(app));
+                when(mentorProfileRepository.findByIdForUpdate(app.getProgram().getMentor().getId()))
+                                .thenReturn(Optional.of(app.getProgram().getMentor()));
+
+                mentoringService.completeMentoring(CustomUserPrincipal.from(app.getMentee()), appId);
+
+                // 20,000P에 대한 10% 수수료: fee = 2,000P, 멘토 실지급 = 18,000P
+                assertThat(app.getFeeAmount()).isEqualTo(2000L);
+                assertThat(app.getStatus()).isEqualTo(ApplicationStatus.COMPLETED);
+                assertThat(app.getPaymentStatus()).isEqualTo(PaymentStatus.SETTLED);
+
+                verify(mileageService, times(1)).addMileage(
+                                eq(app.getProgram().getMentor().getUser()),
+                                eq(18000L),
+                                eq(TransactionType.SETTLEMENT),
+                                anyString(),
+                                eq(appId));
+        }
+
+        @Test
+        @DisplayName("[F4] 신청 취소 시 전액 환불되며 수수료 계산이 발생하지 않는다 (fee_amount는 null)")
+        void cancelApplicationRefundsFullMileageWithoutFeeCalculation() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                UUID appId = UUID.randomUUID();
+                MentoringApplication app = application(mentorId, menteeId, programId, appId);
+                app.setStatus(ApplicationStatus.APPLIED);
+                app.setAppliedMileage(20000L);
+
+                when(mentoringApplicationRepository.findByIdForUpdate(appId)).thenReturn(Optional.of(app));
+
+                mentoringService.cancelApplication(CustomUserPrincipal.from(app.getMentee()), appId);
+
+                // 취소 환불은 20,000P 전액 환불, feeAmount는 null 유지
+                assertThat(app.getFeeAmount()).isNull();
+                assertThat(app.getStatus()).isEqualTo(ApplicationStatus.CANCELLED);
+                assertThat(app.getPaymentStatus()).isEqualTo(PaymentStatus.REFUNDED);
+
+                verify(mileageService, times(1)).addMileage(
+                                eq(app.getMentee()),
+                                eq(20000L),
+                                eq(TransactionType.MENTORING_REFUND),
+                                anyString(),
+                                eq(appId));
         }
 }
