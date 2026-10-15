@@ -7,6 +7,7 @@ public record MeResponse(
         String handle,
         String nickname,
         String role,
-        String status
+        String status,
+        boolean membershipBadge
 ) {
 }

@@ -16,12 +16,16 @@ import com.gamerin.backend.domain.auth.repository.PasswordResetTokenRepository;
 import com.gamerin.backend.domain.auth.repository.RefreshTokenRepository;
 import com.gamerin.backend.domain.auth.repository.SocialAccountRepository;
 import com.gamerin.backend.domain.auth.repository.SocialSignupSessionRepository;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserStatus;
 import com.gamerin.backend.domain.user.repository.UserRepository;
+import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -71,6 +75,9 @@ class LocalAuthServiceTest {
         @Mock
         private PasswordResetMailService passwordResetMailService;
 
+        @Mock
+        private MembershipService membershipService;
+
         private LocalAuthService localAuthService;
 
         @BeforeEach
@@ -84,7 +91,28 @@ class LocalAuthServiceTest {
                                 passwordEncoder,
                                 tokenService,
                                 passwordResetMailService,
-                                30L);
+                                30L,
+                                membershipService);
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = {true, false})
+        void getMeReadsMembershipWithoutChangingPrincipalFields(boolean active) {
+                User user = User.createLocal("member@example.com", "member", "Member", "encoded");
+                UUID userId = UUID.randomUUID();
+                ReflectionTestUtils.setField(user, "id", userId);
+                when(membershipService.isActive(userId)).thenReturn(active);
+
+                var response = localAuthService.getMe(CustomUserPrincipal.from(user));
+
+                assertThat(response.userId()).isEqualTo(userId);
+                assertThat(response.handle()).isEqualTo("member");
+                assertThat(response.nickname()).isEqualTo("Member");
+                assertThat(response.role()).isEqualTo("ROLE_USER");
+                assertThat(response.status()).isEqualTo("ACTIVE");
+                assertThat(response.membershipBadge()).isEqualTo(active);
+                verify(membershipService).isActive(userId);
+                verify(membershipService, never()).findActiveUserIds(any());
         }
 
         @Test

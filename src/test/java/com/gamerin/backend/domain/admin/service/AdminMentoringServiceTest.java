@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.admin.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamerin.backend.domain.admin.dto.response.AdminMentorResponse;
 import com.gamerin.backend.domain.admin.dto.response.AdminMentoringProgramResponse;
 import com.gamerin.backend.domain.admin.dto.response.AdminMentoringSummaryResponse;
@@ -341,6 +343,7 @@ class AdminMentoringServiceTest {
 
         // then
         assertThat(response).isNotNull();
+        assertMembershipBadgesOmitted(response);
         assertThat(application.getStatus()).isEqualTo(ApplicationStatus.CANCELLED);
         assertThat(application.getPaymentStatus()).isEqualTo(PaymentStatus.REFUNDED);
 
@@ -383,6 +386,7 @@ class AdminMentoringServiceTest {
 
         // then
         assertThat(response).isNotNull();
+        assertMembershipBadgesOmitted(response);
         assertThat(application.getStatus()).isEqualTo(ApplicationStatus.COMPLETED);
         assertThat(application.getPaymentStatus()).isEqualTo(PaymentStatus.SETTLED);
         // 30,000P x 10% = 3,000P 수수료 기록
@@ -395,5 +399,12 @@ class AdminMentoringServiceTest {
                 eq(mentorUser), eq(27000L), eq(TransactionType.SETTLEMENT), any(String.class), eq(applicationId));
         inOrder.verify(mentorProfileRepository).incrementMenteeCount(mentorProfile.getUserId());
         verify(mentorProfileRepository, times(1)).incrementMenteeCount(mentorProfile.getUserId());
+    }
+
+    private void assertMembershipBadgesOmitted(MentoringApplicationResponse response) {
+        JsonNode json = new ObjectMapper().findAndRegisterModules().valueToTree(response);
+        assertThat(json.has("mentorMembershipBadge")).isFalse();
+        assertThat(json.has("menteeMembershipBadge")).isFalse();
+        assertThat(json.has("reviewed")).isTrue();
     }
 }

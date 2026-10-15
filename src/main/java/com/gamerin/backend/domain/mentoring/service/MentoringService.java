@@ -15,6 +15,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 
 import com.gamerin.backend.domain.game.model.GameType;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
@@ -64,6 +65,7 @@ public class MentoringService {
     private final MileageService mileageService;
     private final SettlementProcessor settlementProcessor;
     private final NotificationCommandService notificationCommandService;
+    private final MembershipService membershipService;
 
     public MentoringService(
             MentorProfileRepository mentorProfileRepository,
@@ -73,7 +75,8 @@ public class MentoringService {
             MentoringReviewRepository mentoringReviewRepository,
             MileageService mileageService,
             SettlementProcessor settlementProcessor,
-            NotificationCommandService notificationCommandService) {
+            NotificationCommandService notificationCommandService,
+            MembershipService membershipService) {
         this.mentorProfileRepository = mentorProfileRepository;
         this.userRepository = userRepository;
         this.mentoringProgramRepository = mentoringProgramRepository;
@@ -82,6 +85,7 @@ public class MentoringService {
         this.mileageService = mileageService;
         this.settlementProcessor = settlementProcessor;
         this.notificationCommandService = notificationCommandService;
+        this.membershipService = membershipService;
     }
 
     @Transactional
@@ -105,14 +109,14 @@ public class MentoringService {
         profile.setStatus(MentorStatus.PENDING_APPROVAL);// <- [추가] 승인 대기 상태로 등록
 
         MentorProfile savedProfile = mentorProfileRepository.save(profile);
-        return MentorProfileResponse.from(savedProfile);
+        return MentorProfileResponse.from(savedProfile, membershipService.isActive(savedProfile.getUserId()));
     }
 
     // 멘토 프로필 조회
     @Transactional(readOnly = true)
     public MentorProfileResponse getMyMentorProfile(CustomUserPrincipal principal) {
         return mentorProfileRepository.findById(principal.getUserId())
-                .map(MentorProfileResponse::from)
+                .map(profile -> MentorProfileResponse.from(profile, membershipService.isActive(profile.getUserId())))
                 .orElse(null);
     }
 
@@ -121,7 +125,7 @@ public class MentoringService {
         MentorProfile mentorProfile = mentorProfileRepository.findById(mentorId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "해당 멘토를 찾을 수 없습니다."));
 
-        return MentorProfileResponse.from(mentorProfile);
+        return MentorProfileResponse.from(mentorProfile, membershipService.isActive(mentorProfile.getUserId()));
     }
 
     @Transactional
@@ -149,7 +153,8 @@ public class MentoringService {
         program.setTags(request.tags());
 
         MentoringProgram savedProgram = mentoringProgramRepository.save(program);
-        return MentoringProgramResponse.from(savedProgram);
+        return MentoringProgramResponse.from(savedProgram,
+                membershipService.isActive(savedProgram.getMentor().getId()));
     }
 
     @Transactional(readOnly = true)
@@ -158,7 +163,11 @@ public class MentoringService {
         Page<MentoringProgram> programs = mentoringProgramRepository
                 .findByFilters(gameName == null ? null : gameName.name(), mentorId, pageable);
 
-        return programs.map(MentoringProgramResponse::from);
+        Set<UUID> mentorIds = new HashSet<>();
+        programs.forEach(program -> mentorIds.add(program.getMentor().getId()));
+        Set<UUID> activeUserIds = mentorIds.isEmpty() ? Set.of() : membershipService.findActiveUserIds(mentorIds);
+        return programs.map(program -> MentoringProgramResponse.from(program,
+                activeUserIds.contains(program.getMentor().getId())));
     }
 
     @Transactional(readOnly = true)
@@ -166,7 +175,7 @@ public class MentoringService {
         MentoringProgram program = mentoringProgramRepository.findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
 
-        return MentoringProgramDetailResponse.from(program);
+        return MentoringProgramDetailResponse.from(program, membershipService.isActive(program.getMentor().getId()));
     }
 
     @Transactional
@@ -195,7 +204,7 @@ public class MentoringService {
         program.setStatus(request.status());
         program.setTags(request.tags());
 
-        return MentoringProgramResponse.from(program);
+        return MentoringProgramResponse.from(program, membershipService.isActive(program.getMentor().getId()));
     }
 
     @Transactional
@@ -537,18 +546,23 @@ public class MentoringService {
                 application.getMentee(),
                 mentorProfile.getUser());
 
-        return MentoringReviewResponse.from(savedReview);
+        return MentoringReviewResponse.from(savedReview, membershipService.isActive(savedReview.getMentee().getId()));
     }
 
     private MentoringApplicationResponse toApplicationResponse(MentoringApplication application) {
+        UUID mentorId = application.getProgram().getMentor().getId();
+        UUID menteeId = application.getMentee().getId();
+        Set<UUID> activeUserIds = membershipService.findActiveUserIds(new HashSet<>(List.of(mentorId, menteeId)));
         return MentoringApplicationResponse.from(
                 application,
-                mentoringReviewRepository.existsByApplicationId(application.getId()));
+                mentoringReviewRepository.existsByApplicationId(application.getId()),
+                activeUserIds.contains(mentorId),
+                activeUserIds.contains(menteeId));
     }
 
     private Page<MentoringApplicationResponse> toApplicationResponsePage(Page<MentoringApplication> applications) {
         if (applications.getContent().isEmpty()) {
-            return applications.map(application -> MentoringApplicationResponse.from(application, false));
+            return applications.map(application -> MentoringApplicationResponse.from(application, false, false, false));
         }
 
         List<UUID> applicationIds = applications.getContent().stream()
@@ -556,10 +570,18 @@ public class MentoringService {
                 .toList();
         Set<UUID> reviewedApplicationIds = new HashSet<>(
                 mentoringReviewRepository.findReviewedApplicationIds(applicationIds));
+        Set<UUID> participantIds = new HashSet<>();
+        applications.forEach(application -> {
+            participantIds.add(application.getProgram().getMentor().getId());
+            participantIds.add(application.getMentee().getId());
+        });
+        Set<UUID> activeUserIds = membershipService.findActiveUserIds(participantIds);
 
         return applications.map(application -> MentoringApplicationResponse.from(
                 application,
-                reviewedApplicationIds.contains(application.getId())));
+                reviewedApplicationIds.contains(application.getId()),
+                activeUserIds.contains(application.getProgram().getMentor().getId()),
+                activeUserIds.contains(application.getMentee().getId())));
     }
 
     // 멘토 평점 업데이트
@@ -583,7 +605,12 @@ public class MentoringService {
     // 특정 멘토의 리뷰 목록 조회
     @Transactional(readOnly = true)
     public Page<MentoringReviewResponse> getMentorReviews(UUID mentorId, Pageable pageable) {
-        return mentoringReviewRepository.findByMentorUserId(mentorId, pageable).map(MentoringReviewResponse::from);
+        Page<MentoringReview> reviews = mentoringReviewRepository.findByMentorUserId(mentorId, pageable);
+        Set<UUID> reviewerIds = new HashSet<>();
+        reviews.forEach(review -> reviewerIds.add(review.getMentee().getId()));
+        Set<UUID> activeUserIds = reviewerIds.isEmpty() ? Set.of() : membershipService.findActiveUserIds(reviewerIds);
+        return reviews.map(review -> MentoringReviewResponse.from(review,
+                activeUserIds.contains(review.getMentee().getId())));
     }
 
 }

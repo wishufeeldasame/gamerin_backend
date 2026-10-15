@@ -10,6 +10,7 @@ import com.gamerin.backend.domain.auth.repository.PasswordResetTokenRepository;
 import com.gamerin.backend.domain.auth.repository.RefreshTokenRepository;
 import com.gamerin.backend.domain.auth.repository.SocialAccountRepository;
 import com.gamerin.backend.domain.auth.repository.SocialSignupSessionRepository;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.entity.UserStatus;
@@ -42,6 +43,7 @@ public class LocalAuthService {
     private final TokenService tokenService;
     private final PasswordResetMailService passwordResetMailService;
     private final long passwordResetExpirationMinutes;
+    private final MembershipService membershipService;
     private final LoginFailureTracker loginFailureTracker = new LoginFailureTracker();
 
     public LocalAuthService(
@@ -53,7 +55,8 @@ public class LocalAuthService {
             PasswordEncoder passwordEncoder,
             TokenService tokenService,
             PasswordResetMailService passwordResetMailService,
-            @Value("${app.auth.password-reset.expiration-minutes:30}") long passwordResetExpirationMinutes) {
+            @Value("${app.auth.password-reset.expiration-minutes:30}") long passwordResetExpirationMinutes,
+            MembershipService membershipService) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.passwordResetTokenRepository = passwordResetTokenRepository;
@@ -63,6 +66,7 @@ public class LocalAuthService {
         this.tokenService = tokenService;
         this.passwordResetMailService = passwordResetMailService;
         this.passwordResetExpirationMinutes = passwordResetExpirationMinutes;
+        this.membershipService = membershipService;
     }
 
     @Transactional(readOnly = true)
@@ -238,7 +242,7 @@ public class LocalAuthService {
         return new MeResponse(
                 principal.getUserId(), principal.getUsername(), principal.getNickname(),
                 principal.getAuthorities().stream().findFirst().map(Object::toString).orElse("ROLE_USER"),
-                "ACTIVE");
+                "ACTIVE", membershipService.isActive(principal.getUserId()));
     }
 
     private void validatePasswordConfirmation(String password, String passwordConfirm) {

@@ -164,7 +164,7 @@ class AuthControllerTest {
         );
         ReflectionTestUtils.setField(user, "id", userId);
         CustomUserPrincipal principal = CustomUserPrincipal.from(user);
-        MeResponse meResponse = new MeResponse(userId, "tester", "Tester", "ROLE_USER", "ACTIVE");
+        MeResponse meResponse = new MeResponse(userId, "tester", "Tester", "ROLE_USER", "ACTIVE", true);
 
         when(localAuthService.getMe(principal)).thenReturn(meResponse);
 
