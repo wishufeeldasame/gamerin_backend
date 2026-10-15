@@ -190,6 +190,17 @@ public class UserProfile {
         this.gameStats = gameStats;
     }
 
+    // 탈퇴 시 공개 프로필과 게임 연동(유니크 인덱스 대상)을 비운다
+    public void clearForWithdrawal() {
+        this.bio = null;
+        this.location = null;
+        this.website = null;
+        this.profileImageUrl = null;
+        this.coverImageUrl = null;
+        this.gameStats = new HashMap<>();
+        this.verifiedBadge = false;
+    }
+
     public boolean hasConnectedPubg() {
         Object connected = getPubgStats().get(CONNECTED_KEY);
         return connected instanceof Boolean value && value;
