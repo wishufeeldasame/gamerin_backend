@@ -31,9 +31,10 @@ jobs:
           name: test-reports
           path: build/reports/tests/test
       - name: Discord 알림
-        if: failure()
+        # 취소된 실행(동시 실행 취소 포함)은 알리지 않는다.
+        if: success() || failure()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          MSG: "❌ ${{ github.repository }} CI 실패 (${{ github.ref_name }}, by ${{ github.actor }})\n${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG: "${{ job.status == 'success' && '✅ 성공' || '❌ 실패' }} ${{ github.repository }} CI (${{ github.ref_name }}, by ${{ github.actor }})\n${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
           curl -fsS -H "Content-Type: application/json" -d "$(jq -n --arg c "$MSG" '{content:$c}')" "$DISCORD_WEBHOOK"
