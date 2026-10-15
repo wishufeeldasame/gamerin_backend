@@ -22,11 +22,6 @@ public interface ReportCountRepository extends JpaRepository<ReportCount, UUID> 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<ReportCount> findByTargetTypeAndTargetId(ReportTargetType targetType, UUID targetId);
 
-    // [이슈 #76 해결] 읽기 전용 트랜잭션(readOnly = true)에서 사용할 비잠금 엔티티 조회 메서드
-    @Query("select rc from ReportCount rc where rc.targetType = :targetType and rc.targetId = :targetId")
-    Optional<ReportCount> findWithoutLockByTargetTypeAndTargetId(@Param("targetType") ReportTargetType targetType,
-            @Param("targetId") UUID targetId);
-
     // [이슈 #76 해결] 읽기 전용 트랜잭션에서 행 잠금(FOR UPDATE) 없이 숨김 처리 여부만 인덱스로 빠르게 확인
     boolean existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType targetType, UUID targetId);
 

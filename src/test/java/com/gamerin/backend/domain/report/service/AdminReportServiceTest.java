@@ -195,6 +195,7 @@ class AdminReportServiceTest {
     @DisplayName("신고 검토 시작 시 상태가 IN_REVIEW로 변경되고 담당 관리자가 할당되며 감사 로그가 적재된다")
     void startReportReview_success() {
         // given
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
         given(reportRepository.findById(reportId)).willReturn(Optional.of(report));
         given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
         mockCommonReportDetailDependencies();

@@ -250,7 +250,7 @@ public class ReportService {
      */
     @Transactional
     public AdminReportDetailResponse startReportReview(UUID adminId, String reportIdOrCode) {
-        Report report = findReportByIdOrCode(reportIdOrCode);
+        Report report = findReportByIdOrCodeForUpdate(reportIdOrCode);
         User admin = userRepository.findById(adminId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
 
@@ -274,19 +274,7 @@ public class ReportService {
     @Transactional
     public AdminReportDetailResponse resolveReport(UUID adminId, String reportIdOrCode,
             AdminReportResolutionRequest request) {
-
-        // [변경] 일반 조회 → 비관적 쓰기 락 조회로 교체 (동시 요청 중복 처리 방지)
-        Report report;
-        try {
-            UUID reportId = UUID.fromString(reportIdOrCode);
-            report = reportRepository.findByIdForUpdate(reportId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신고 건을 찾을 수 없습니다."));
-        } catch (IllegalArgumentException e) {
-            // UUID 형식이 아니면 신고 코드로 조회
-            report = reportRepository.findByReportCodeForUpdate(reportIdOrCode)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                            "신고 코드를 찾을 수 없습니다: " + reportIdOrCode));
-        }
+        Report report = findReportByIdOrCodeForUpdate(reportIdOrCode);
 
         // 이미 종결된 신고 중복 처리 방어 (락 획득 후 상태 재확인)
         if (report.getStatus() == ReportStatus.RESOLVED || report.getStatus() == ReportStatus.REJECTED) {
@@ -415,6 +403,20 @@ public class ReportService {
                                     "신고 내역을 찾을 수 없습니다: " + reportIdOrCode)));
         } catch (IllegalArgumentException e) {
             return reportRepository.findByReportCode(reportIdOrCode)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                            "신고 내역을 찾을 수 없습니다: " + reportIdOrCode));
+        }
+    }
+
+    private Report findReportByIdOrCodeForUpdate(String reportIdOrCode) {
+        try {
+            UUID id = UUID.fromString(reportIdOrCode);
+            return reportRepository.findByIdForUpdate(id)
+                    .orElseGet(() -> reportRepository.findByReportCodeForUpdate(reportIdOrCode)
+                            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                    "신고 내역을 찾을 수 없습니다: " + reportIdOrCode)));
+        } catch (IllegalArgumentException e) {
+            return reportRepository.findByReportCodeForUpdate(reportIdOrCode)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                             "신고 내역을 찾을 수 없습니다: " + reportIdOrCode));
         }
