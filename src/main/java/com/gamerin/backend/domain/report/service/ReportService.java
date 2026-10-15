@@ -311,9 +311,10 @@ public class ReportService {
         // 2. 콘텐츠 숨김 처리 (처리 완료이고 숨김 체크된 경우)
         if (request.decision() == ReportStatus.RESOLVED && request.hideTargetContent()
                 && isAutoHideSupported(report.getTargetType())) {
+            // 잠금 순서(report_counts → posts → post_comments)를 신고 접수·복구·정리와 맞춘다.
+            ReportCount reportCount = getOrCreateReportCount(report.getTargetType(), report.getTargetId());
             boolean hidden = hideTargetContent(report.getTargetType(), report.getTargetId());
             if (hidden) {
-                ReportCount reportCount = getOrCreateReportCount(report.getTargetType(), report.getTargetId());
                 reportCount.hide();
                 reportCountRepository.save(reportCount);
 

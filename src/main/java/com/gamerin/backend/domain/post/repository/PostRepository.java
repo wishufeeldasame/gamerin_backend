@@ -50,13 +50,24 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
         """)
     Optional<Post> findAccessibleByIdForShare(@Param("id") UUID id);
 
+    // 정리 후보 id. 보존 기간이 짧은 쪽 기준이라 상위 집합이며, 실제 대상은 findHardDeleteCandidateForUpdate로 다시 거른다.
+    @Query("""
+        select p.id
+        from Post p
+        where p.deletedAt is not null
+          and p.deletedAt <= :cutoff
+        order by p.deletedAt asc, p.id asc
+        """)
+    List<UUID> findSoftDeletedIdsBefore(@Param("cutoff") OffsetDateTime cutoff);
+
     // 신고로 숨긴 글(report_counts.is_hidden)은 hiddenCutoff, 사용자가 삭제한 글은 cutoff 기준으로 정리한다.
-    // 행을 잠가 정리 중 관리자 복구가 먼저 커밋되면 대상에서 빠지게 한다.
+    // 잠금 순서(report_counts → posts)를 지키도록 신고 카운트를 먼저 잠근 뒤 호출한다.
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
         select p
         from Post p
-        where p.deletedAt is not null
+        where p.id = :id
+          and p.deletedAt is not null
           and (
                 (p.deletedAt <= :hiddenCutoff and exists (
                     select 1 from ReportCount rc
@@ -69,9 +80,9 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
                       and rc.targetId = p.id
                       and rc.isHidden = true))
           )
-        order by p.deletedAt asc, p.id asc
         """)
-    List<Post> findHardDeleteCandidates(
+    Optional<Post> findHardDeleteCandidateForUpdate(
+            @Param("id") UUID id,
             @Param("cutoff") OffsetDateTime cutoff,
             @Param("hiddenCutoff") OffsetDateTime hiddenCutoff
     );

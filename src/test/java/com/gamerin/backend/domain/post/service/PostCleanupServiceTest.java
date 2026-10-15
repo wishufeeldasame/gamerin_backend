@@ -1,17 +1,21 @@
 package com.gamerin.backend.domain.post.service;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -76,13 +80,19 @@ class PostCleanupServiceTest {
         );
 
         UUID commentId = UUID.randomUUID();
-        when(postRepository.findHardDeleteCandidates(any(OffsetDateTime.class), any(OffsetDateTime.class)))
-                .thenReturn(List.of(post));
+        when(postRepository.findSoftDeletedIdsBefore(any(OffsetDateTime.class))).thenReturn(List.of(postId));
+        when(postRepository.findHardDeleteCandidateForUpdate(eq(postId), any(OffsetDateTime.class),
+                any(OffsetDateTime.class))).thenReturn(Optional.of(post));
         when(postMediaRepository.findByPostIdOrderBySortOrderAscIdAsc(postId)).thenReturn(List.of(media));
         when(postCommentRepository.findIdsByPostId(postId)).thenReturn(List.of(commentId));
 
         postCleanupService.purgeExpiredSoftDeletedPosts();
 
+        InOrder lockOrder = inOrder(reportCountRepository, postRepository);
+        lockOrder.verify(reportCountRepository).lockByTargets(ReportTargetType.POST, List.of(postId));
+        lockOrder.verify(reportCountRepository).lockByTargets(ReportTargetType.COMMENT, List.of(commentId));
+        lockOrder.verify(postRepository).findHardDeleteCandidateForUpdate(eq(postId), any(OffsetDateTime.class),
+                any(OffsetDateTime.class));
         verify(reportCountRepository).deleteByTargets(ReportTargetType.POST, List.of(postId));
         verify(reportCountRepository).deleteByTargets(ReportTargetType.COMMENT, List.of(commentId));
         verify(postCommentRepository).deleteAllByIdInBatch(List.of(commentId));

@@ -49,14 +49,27 @@ public interface PostCommentRepository extends JpaRepository<PostComment, UUID> 
         """)
     List<UUID> findIdsByPostId(@Param("postId") UUID postId);
 
-    // 댓글의 deleted_at은 신고 숨김에서만 설정된다(사용자 삭제는 하드 삭제). 복구와 겹치지 않게 행을 잠근다.
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    // 댓글의 deleted_at은 신고 숨김에서만 설정된다(사용자 삭제는 하드 삭제).
     @Query("""
-        select pc
+        select pc.id
         from PostComment pc
         where pc.deletedAt is not null
           and pc.deletedAt <= :hiddenCutoff
         order by pc.deletedAt asc, pc.id asc
         """)
-    List<PostComment> findHiddenHardDeleteCandidates(@Param("hiddenCutoff") OffsetDateTime hiddenCutoff);
+    List<UUID> findHiddenIdsBefore(@Param("hiddenCutoff") OffsetDateTime hiddenCutoff);
+
+    // 잠금 순서(report_counts → post_comments)를 지키도록 신고 카운트를 먼저 잠근 뒤 호출한다.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+        select pc
+        from PostComment pc
+        where pc.id = :id
+          and pc.deletedAt is not null
+          and pc.deletedAt <= :hiddenCutoff
+        """)
+    Optional<PostComment> findHiddenHardDeleteCandidateForUpdate(
+            @Param("id") UUID id,
+            @Param("hiddenCutoff") OffsetDateTime hiddenCutoff
+    );
 }
