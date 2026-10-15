@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.payment.client.KakaoPayClient;
 import com.gamerin.backend.domain.payment.client.KakaoPayException;
 import com.gamerin.backend.domain.payment.dto.request.PaymentApproveRequest;
@@ -53,6 +54,7 @@ public class PaymentService {
     private final PaymentRepository paymentRepository;
     private final UserRepository userRepository;
     private final MileageService mileageService;
+    private final MembershipService membershipService;
     private final KakaoPayClient kakaoPayClient;
     private final TransactionTemplate transactionTemplate;
     private final String frontendBaseUrl;
@@ -60,12 +62,14 @@ public class PaymentService {
     public PaymentService(PaymentRepository paymentRepository,
                           UserRepository userRepository,
                           MileageService mileageService,
+                          MembershipService membershipService,
                           KakaoPayClient kakaoPayClient,
                           TransactionTemplate transactionTemplate,
                           @Value("${app.frontend.base-url}") String frontendBaseUrl) {
         this.paymentRepository = paymentRepository;
         this.userRepository = userRepository;
         this.mileageService = mileageService;
+        this.membershipService = membershipService;
         this.kakaoPayClient = kakaoPayClient;
         this.transactionTemplate = transactionTemplate;
         this.frontendBaseUrl = frontendBaseUrl.replaceAll("/+$", "");
@@ -84,7 +88,7 @@ public class PaymentService {
     public PaymentReadyResponse ready(UUID userId, PaymentReadyRequest request) {
         PaymentProduct product = PaymentProduct.fromCode(request.productCode());
         if (product.getPurpose() != PaymentPurpose.MILEAGE_CHARGE) {
-            // shortcut: 이용권 결제는 MembershipService.grant(#87 스텁)·CANCELING 중 ready 거부가 들어온 뒤 연다.
+            // 이용권 ready는 후속 주문·CANCELING 가드(#86)까지 검증한 뒤 연다.
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "허용하지 않은 상품 코드입니다.");
         }
         if (!kakaoPayClient.isConfigured()) {
@@ -254,7 +258,7 @@ public class PaymentService {
                 .orElse(null);
     }
 
-    // 검증 후 한 트랜잭션에서 APPROVED 전환과 충전 적립을 반영한다(6-2절 3·4번).
+    // 검증 후 한 트랜잭션에서 APPROVED 전환과 충전 적립·이용권 부여를 반영한다(6-2절 3·4번).
     private PaymentResponse completeApproval(Payment payment, OffsetDateTime claimedAt, ApprovalResult result) {
         if (!result.matches(payment)) {
             log.error("KakaoPay approval does not match stored order: orderId={}", payment.getId());
@@ -285,8 +289,7 @@ public class PaymentService {
                     CHARGE_DESCRIPTION, payment.getId());
             return;
         }
-        // shortcut: 이용권은 ready에서 막혀 있어 도달하지 않는다. #87 머지 후 MembershipService.grant로 바꾼다.
-        throw new IllegalStateException("Membership grant is not available yet.");
+        membershipService.grant(payment.getBuyer().getId(), payment.getId());
     }
 
     private PaymentReadyResponse replayReady(Payment payment, PaymentProduct product) {

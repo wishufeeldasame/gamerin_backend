@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.membership.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -25,6 +26,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.gamerin.backend.domain.membership.repository.UserMembershipRepository;
+import com.gamerin.backend.domain.membership.repository.MembershipGrantRepository;
+import com.gamerin.backend.domain.payment.repository.PaymentRepository;
+import com.gamerin.backend.domain.user.repository.UserRepository;
+import org.springframework.web.server.ResponseStatusException;
 
 @ExtendWith(MockitoExtension.class)
 class MembershipServiceTest {
@@ -34,12 +39,15 @@ class MembershipServiceTest {
 
     @Mock
     private UserMembershipRepository membershipRepository;
+    @Mock private MembershipGrantRepository grantRepository;
+    @Mock private PaymentRepository paymentRepository;
+    @Mock private UserRepository userRepository;
 
     private MembershipService membershipService;
 
     @BeforeEach
     void setUp() {
-        membershipService = new MembershipService(membershipRepository,
+        membershipService = new MembershipService(membershipRepository, grantRepository, paymentRepository, userRepository,
                 Clock.fixed(FIXED_INSTANT, ZoneOffset.UTC));
     }
 
@@ -100,7 +108,7 @@ class MembershipServiceTest {
 
     @Test
     void timeZoneOfTheClockDoesNotChangeTheQueryInstant() {
-        MembershipService localClockService = new MembershipService(membershipRepository,
+        MembershipService localClockService = new MembershipService(membershipRepository, grantRepository, paymentRepository, userRepository,
                 Clock.fixed(FIXED_INSTANT, ZoneOffset.ofHours(9)));
         UUID userId = UUID.randomUUID();
         when(membershipRepository.findActiveUserIds(anyCollection(), eq(QUERY_TIME))).thenReturn(List.of(userId));
@@ -110,12 +118,16 @@ class MembershipServiceTest {
     }
 
     @Test
-    void reservedPaymentHooksDoNotWriteMembershipState() {
+    void missingUserAndGrantAreRejectedWithoutWritingMembershipState() {
         UUID userId = UUID.randomUUID();
         UUID paymentId = UUID.randomUUID();
 
-        membershipService.grant(userId, paymentId);
-        membershipService.revoke(paymentId);
+        assertThatThrownBy(() -> membershipService.grant(userId, paymentId))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        error -> assertThat(error.getStatusCode().value()).isEqualTo(404));
+        assertThatThrownBy(() -> membershipService.revoke(paymentId))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        error -> assertThat(error.getStatusCode().value()).isEqualTo(409));
 
         verifyNoInteractions(membershipRepository);
     }

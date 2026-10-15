@@ -33,6 +33,8 @@ import org.springframework.test.context.DynamicPropertySource;
 
 import com.gamerin.backend.domain.membership.entity.UserMembership;
 import com.gamerin.backend.domain.membership.repository.UserMembershipRepository;
+import com.gamerin.backend.domain.membership.repository.MembershipGrantRepository;
+import com.gamerin.backend.domain.payment.repository.PaymentRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -59,6 +61,8 @@ class MembershipPostgresIntegrationTest {
     private EntityManager entityManager;
     @Autowired
     private JdbcTemplate jdbcTemplate;
+    @Autowired private MembershipGrantRepository grantRepository;
+    @Autowired private PaymentRepository paymentRepository;
 
     @DynamicPropertySource
     static void configurePostgres(DynamicPropertyRegistry registry) {
@@ -89,7 +93,7 @@ class MembershipPostgresIntegrationTest {
     void singleAndBulkLookupUseTheSameStrictMicrosecondBoundary(long microseconds, boolean active) {
         User user = saveUser();
         saveMembership(user, NOW.plusNanos(microseconds * 1000));
-        MembershipService service = new MembershipService(membershipRepository, FIXED_CLOCK);
+        MembershipService service = service();
 
         assertThat(service.isActive(user.getId())).isEqualTo(active);
         assertThat(service.findActiveUserIds(List.of(user.getId())))
@@ -109,7 +113,7 @@ class MembershipPostgresIntegrationTest {
         Statistics statistics = statistics();
         statistics.clear();
 
-        Set<UUID> activeIds = new MembershipService(membershipRepository, FIXED_CLOCK).findActiveUserIds(
+        Set<UUID> activeIds = service().findActiveUserIds(
                 List.of(active.getId(), farFuture.getId(), expired.getId(), withoutMembership.getId(),
                         UUID.randomUUID(), active.getId()));
 
@@ -122,7 +126,7 @@ class MembershipPostgresIntegrationTest {
         Statistics statistics = statistics();
         statistics.clear();
 
-        assertThat(new MembershipService(membershipRepository, FIXED_CLOCK).findActiveUserIds(List.of())).isEmpty();
+        assertThat(service().findActiveUserIds(List.of())).isEmpty();
         assertThat(statistics.getPrepareStatementCount()).isZero();
     }
 
@@ -137,7 +141,7 @@ class MembershipPostgresIntegrationTest {
 
         UserMembership reloaded = membershipRepository.findById(user.getId()).orElseThrow();
         assertThat(reloaded.getExpiresAt().toInstant()).isEqualTo(expiresAt.toInstant());
-        assertThat(new MembershipService(membershipRepository, FIXED_CLOCK).isActive(user.getId())).isTrue();
+        assertThat(service().isActive(user.getId())).isTrue();
 
         OffsetDateTime previousUpdate = OffsetDateTime.parse("2000-01-01T00:00:00Z");
         jdbcTemplate.update("update user_memberships set updated_at = ? where user_id = ?",
@@ -173,6 +177,10 @@ class MembershipPostgresIntegrationTest {
 
     private Statistics statistics() {
         return entityManager.getEntityManagerFactory().unwrap(SessionFactory.class).getStatistics();
+    }
+
+    private MembershipService service() {
+        return new MembershipService(membershipRepository, grantRepository, paymentRepository, userRepository, FIXED_CLOCK);
     }
 
     private User saveUser() {

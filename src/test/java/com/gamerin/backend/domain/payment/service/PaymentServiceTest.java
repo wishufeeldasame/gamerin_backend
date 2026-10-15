@@ -3,12 +3,15 @@ package com.gamerin.backend.domain.payment.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
@@ -24,6 +27,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.payment.client.KakaoPayClient;
 import com.gamerin.backend.domain.payment.client.KakaoPayException;
 import com.gamerin.backend.domain.payment.dto.request.PaymentApproveRequest;
@@ -31,7 +35,9 @@ import com.gamerin.backend.domain.payment.dto.request.PaymentReadyRequest;
 import com.gamerin.backend.domain.payment.dto.response.PaymentProductResponse;
 import com.gamerin.backend.domain.payment.dto.response.PaymentReadyResponse;
 import com.gamerin.backend.domain.payment.dto.response.PaymentResponse;
+import com.gamerin.backend.domain.payment.entity.Payment;
 import com.gamerin.backend.domain.payment.entity.PaymentStatus;
+import com.gamerin.backend.domain.payment.model.PaymentProduct;
 import com.gamerin.backend.domain.payment.repository.PaymentRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
@@ -56,6 +62,8 @@ class PaymentServiceTest {
 
     @MockitoBean
     private KakaoPayClient kakaoPayClient;
+    @MockitoBean
+    private MembershipService membershipService;
 
     private UUID userId;
     private String tid;
@@ -116,6 +124,18 @@ class PaymentServiceTest {
         assertStatus(() -> paymentService.ready(userId, new PaymentReadyRequest("CHARGE_1", UUID.randomUUID())),
                 HttpStatus.BAD_REQUEST);
         verify(kakaoPayClient, never()).ready(any());
+    }
+
+    @Test
+    void membershipReadyRemainsBlockedUntilPendingOrderAndCancelingGuardsAreAvailable() {
+        UUID requestId = UUID.randomUUID();
+
+        assertStatus(() -> paymentService.ready(userId, new PaymentReadyRequest("MEMBERSHIP_30D", requestId)),
+                HttpStatus.BAD_REQUEST);
+
+        assertThat(paymentRepository.findByBuyerIdAndRequestId(userId, requestId)).isEmpty();
+        verify(kakaoPayClient, never()).ready(any());
+        verifyNoInteractions(membershipService);
     }
 
     @Test
@@ -193,12 +213,62 @@ class PaymentServiceTest {
         verify(kakaoPayClient, times(1)).approve(any());
         assertThat(balance()).isEqualTo(30_000L);
         assertThat(chargeRows(orderId)).isEqualTo(1);
+        verifyNoInteractions(membershipService);
 
         ArgumentCaptor<KakaoPayClient.ApproveRequest> captor = ArgumentCaptor.forClass(KakaoPayClient.ApproveRequest.class);
         verify(kakaoPayClient).approve(captor.capture());
         assertThat(captor.getValue().totalAmount()).isEqualTo(30_000L);
         assertThat(captor.getValue().partnerUserId()).isEqualTo(userId.toString());
         assertThat(captor.getValue().tid()).isEqualTo(tid);
+    }
+
+    @Test
+    void approveMembershipGrantsByBuyerAndPaymentOnceAndRefreshDoesNotRepeat() {
+        UUID orderId = readyMembershipOrder();
+        when(kakaoPayClient.approve(any())).thenReturn(approveResponse(orderId, 4_900L));
+
+        PaymentResponse approved = paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token"));
+        PaymentResponse refreshed = paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token"));
+
+        assertThat(approved.status()).isEqualTo(PaymentStatus.APPROVED);
+        assertThat(approved.approvedAt()).isNotNull();
+        assertThat(refreshed.status()).isEqualTo(PaymentStatus.APPROVED);
+        verify(membershipService, times(1)).grant(userId, orderId);
+        verify(kakaoPayClient, times(1)).approve(any());
+        assertThat(balance()).isZero();
+        assertThat(chargeRows(orderId)).isZero();
+    }
+
+    @Test
+    void membershipGrantFailureRollsBackApprovedTransitionAndApprovalDetails() {
+        UUID orderId = readyMembershipOrder();
+        when(kakaoPayClient.approve(any())).thenReturn(approveResponse(orderId, 4_900L));
+        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "Membership grant rejected."))
+                .when(membershipService).grant(userId, orderId);
+
+        assertStatus(() -> paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")),
+                HttpStatus.CONFLICT);
+
+        Payment payment = paymentRepository.findById(orderId).orElseThrow();
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.APPROVING);
+        assertThat(payment.getApprovedAid()).isNull();
+        assertThat(payment.getApprovedAt()).isNull();
+        assertThat(payment.getPaymentMethodType()).isNull();
+        assertThat(balance()).isZero();
+    }
+
+    @Test
+    void approveRejectedThenMembershipLookupSuccessUsesTheSameGrantHook() {
+        UUID orderId = readyMembershipOrder();
+        when(kakaoPayClient.approve(any())).thenThrow(
+                new KakaoPayException("approve", KakaoPayException.Kind.REJECTED, 400, -702, null));
+        when(kakaoPayClient.order(any())).thenReturn(orderResponse(orderId, "SUCCESS_PAYMENT", 4_900L));
+
+        PaymentResponse response = paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token"));
+
+        assertThat(response.status()).isEqualTo(PaymentStatus.APPROVED);
+        verify(membershipService).grant(userId, orderId);
+        assertThat(chargeRows(orderId)).isZero();
     }
 
     @Test
@@ -336,6 +406,20 @@ class PaymentServiceTest {
         PaymentReadyResponse response = paymentService.ready(userId, new PaymentReadyRequest(productCode, UUID.randomUUID()));
         assertThat(response.status()).isEqualTo(PaymentStatus.READY);
         return response.orderId();
+    }
+
+    // ready stays blocked publicly; approval must support already prepared membership orders for #86.
+    private UUID readyMembershipOrder() {
+        return transactionTemplate.execute(status -> {
+            OffsetDateTime now = OffsetDateTime.now().truncatedTo(ChronoUnit.MICROS);
+            Payment payment = paymentRepository.saveAndFlush(Payment.create(
+                    userRepository.getReferenceById(userId), UUID.randomUUID(), PaymentProduct.MEMBERSHIP_30D,
+                    CID, now));
+            paymentRepository.transition(payment.getId(), PaymentStatus.CREATED, now, PaymentStatus.READY, now);
+            paymentRepository.findById(payment.getId()).orElseThrow()
+                    .recordReady(tid, "https://pc", "https://mobile", now, now);
+            return payment.getId();
+        });
     }
 
     private KakaoPayClient.ApproveResponse approveResponse(UUID orderId, long total) {
