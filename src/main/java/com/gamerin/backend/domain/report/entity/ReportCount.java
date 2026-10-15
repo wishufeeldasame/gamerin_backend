@@ -63,8 +63,10 @@ public class ReportCount {
         this.isHidden = true;
     }
 
+    // 복구 후 기존 누적분으로 바로 재숨김되지 않도록 횟수를 초기화한다.
     public void restore() {
         this.isHidden = false;
+        this.reportCount = 0L;
     }
 
     public UUID getId() {
