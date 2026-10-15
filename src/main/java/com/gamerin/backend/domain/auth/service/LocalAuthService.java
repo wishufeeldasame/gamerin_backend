@@ -41,6 +41,7 @@ public class LocalAuthService {
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokenService;
     private final PasswordResetMailService passwordResetMailService;
+    private final EmailVerificationService emailVerificationService;
     private final long passwordResetExpirationMinutes;
     private final LoginFailureTracker loginFailureTracker = new LoginFailureTracker();
 
@@ -53,6 +54,7 @@ public class LocalAuthService {
             PasswordEncoder passwordEncoder,
             TokenService tokenService,
             PasswordResetMailService passwordResetMailService,
+            EmailVerificationService emailVerificationService,
             @Value("${app.auth.password-reset.expiration-minutes:30}") long passwordResetExpirationMinutes) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
@@ -62,6 +64,7 @@ public class LocalAuthService {
         this.passwordEncoder = passwordEncoder;
         this.tokenService = tokenService;
         this.passwordResetMailService = passwordResetMailService;
+        this.emailVerificationService = emailVerificationService;
         this.passwordResetExpirationMinutes = passwordResetExpirationMinutes;
     }
 
@@ -86,6 +89,7 @@ public class LocalAuthService {
         if (userRepository.existsByEmail(email)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 사용 중인 이메일입니다.");
         }
+        emailVerificationService.consumeSignupToken(email, request.emailVerificationToken());
 
         String encodedPassword = passwordEncoder.encode(request.password());
         User user = User.createLocal(email, handle, request.nickname().trim(), encodedPassword);

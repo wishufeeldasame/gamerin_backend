@@ -39,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -71,6 +72,9 @@ class LocalAuthServiceTest {
         @Mock
         private PasswordResetMailService passwordResetMailService;
 
+        @Mock
+        private EmailVerificationService emailVerificationService;
+
         private LocalAuthService localAuthService;
 
         @BeforeEach
@@ -84,6 +88,7 @@ class LocalAuthServiceTest {
                                 passwordEncoder,
                                 tokenService,
                                 passwordResetMailService,
+                                emailVerificationService,
                                 30L);
         }
 
@@ -118,7 +123,8 @@ class LocalAuthServiceTest {
                                 "Password1!",
                                 "Password1!",
                                 true,
-                                true);
+                                true,
+                                "verify-token");
                 TokenService.AuthResult authResult = authResult(userId, "test_user", "Tester");
 
                 when(userRepository.existsByHandle("test_user")).thenReturn(false);
@@ -142,6 +148,33 @@ class LocalAuthServiceTest {
                 assertThat(savedUser.getNickname()).isEqualTo("Tester");
                 assertThat(savedUser.getPasswordHash()).isEqualTo("encoded-password");
                 assertThat(result).isEqualTo(authResult);
+                verify(emailVerificationService).consumeSignupToken("test@example.com", "verify-token");
+        }
+
+        @Test
+        void signUpRejectsInvalidEmailVerificationToken() {
+                SignUpRequest request = new SignUpRequest(
+                                "tester",
+                                "Tester",
+                                "test@example.com",
+                                "Password1!",
+                                "Password1!",
+                                true,
+                                true,
+                                "bad-token");
+
+                when(userRepository.existsByHandle("tester")).thenReturn(false);
+                when(userRepository.existsByEmail("test@example.com")).thenReturn(false);
+                doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "이메일 인증이 만료되었거나 유효하지 않습니다."))
+                                .when(emailVerificationService).consumeSignupToken("test@example.com", "bad-token");
+
+                assertThatThrownBy(() -> localAuthService.signUp(request))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                                .isEqualTo(HttpStatus.BAD_REQUEST.value());
+
+                verify(userRepository, never()).save(any(User.class));
+                verify(tokenService, never()).issueTokens(any(User.class));
         }
 
         @Test
@@ -153,7 +186,8 @@ class LocalAuthServiceTest {
                                 "Password1!",
                                 "Password1!",
                                 true,
-                                true);
+                                true,
+                                "verify-token");
 
                 when(userRepository.existsByHandle("tester")).thenReturn(false);
                 when(userRepository.existsByEmail("test@example.com")).thenReturn(true);
@@ -165,6 +199,7 @@ class LocalAuthServiceTest {
 
                 verify(userRepository, never()).save(any(User.class));
                 verify(tokenService, never()).issueTokens(any(User.class));
+                verifyNoInteractions(emailVerificationService);
         }
 
         @Test

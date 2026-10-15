@@ -54,7 +54,8 @@ class AuthControllerTest {
                 "Password1!",
                 "Password1!",
                 true,
-                true
+                true,
+                "verify-token"
         );
         TokenService.AuthResult authResult = authResult(UUID.randomUUID(), "tester", "Tester");
         MockHttpServletResponse response = new MockHttpServletResponse();
