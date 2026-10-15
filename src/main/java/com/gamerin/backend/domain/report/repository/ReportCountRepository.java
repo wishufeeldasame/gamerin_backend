@@ -18,9 +18,17 @@ import org.springframework.data.repository.query.Param;
 
 public interface ReportCountRepository extends JpaRepository<ReportCount, UUID> {
 
-    // 동시 신고 시 카운트 유실 및 Race Condition 방지를 위한 비관적 락 조회
+    // 동시 신고 시 카운트 유실 및 Race Condition 방지를 위한 비관적 락 조회 (쓰기 경로 전용)
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<ReportCount> findByTargetTypeAndTargetId(ReportTargetType targetType, UUID targetId);
+
+    // [이슈 #76 해결] 읽기 전용 트랜잭션(readOnly = true)에서 사용할 비잠금 엔티티 조회 메서드
+    @Query("select rc from ReportCount rc where rc.targetType = :targetType and rc.targetId = :targetId")
+    Optional<ReportCount> findWithoutLockByTargetTypeAndTargetId(@Param("targetType") ReportTargetType targetType,
+            @Param("targetId") UUID targetId);
+
+    // [이슈 #76 해결] 읽기 전용 트랜잭션에서 행 잠금(FOR UPDATE) 없이 숨김 처리 여부만 인덱스로 빠르게 확인
+    boolean existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType targetType, UUID targetId);
 
     // 대상별 신고 카운트 레코드 존재 여부 확인
     boolean existsByTargetTypeAndTargetId(ReportTargetType targetType, UUID targetId);
@@ -35,11 +43,12 @@ public interface ReportCountRepository extends JpaRepository<ReportCount, UUID> 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select rc from ReportCount rc where rc.targetType = :targetType and rc.targetId in :targetIds")
     List<ReportCount> lockByTargets(@Param("targetType") ReportTargetType targetType,
-                                    @Param("targetIds") Collection<UUID> targetIds);
+            @Param("targetIds") Collection<UUID> targetIds);
 
     // 영구 삭제된 콘텐츠의 신고 카운트 정리
     @Modifying
     @Query("delete from ReportCount rc where rc.targetType = :targetType and rc.targetId in :targetIds")
     int deleteByTargets(@Param("targetType") ReportTargetType targetType,
-                        @Param("targetIds") Collection<UUID> targetIds);
+            @Param("targetIds") Collection<UUID> targetIds);
+
 }

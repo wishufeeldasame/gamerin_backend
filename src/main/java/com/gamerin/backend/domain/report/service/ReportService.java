@@ -234,11 +234,9 @@ public class ReportService {
                 ? createReporterSummary(targetUser)
                 : null;
 
-        // 3. 콘텐츠 숨김 여부
+        // 3. 콘텐츠 숨김 여부 (이슈 #76: 읽기 전용 트랜잭션에서 행 잠금 FOR UPDATE 실행 방지를 위해 비잠금 조회 사용)
         boolean isHidden = reportCountRepository
-                .findByTargetTypeAndTargetId(report.getTargetType(), report.getTargetId())
-                .map(ReportCount::isHidden)
-                .orElse(false);
+                .existsByTargetTypeAndTargetIdAndIsHiddenTrue(report.getTargetType(), report.getTargetId());
 
         return new AdminReportDetailResponse(
                 ReportResponse.from(report),

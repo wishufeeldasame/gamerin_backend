@@ -142,9 +142,9 @@ class AdminReportServiceTest {
         given(userPenaltyService.getUserPenalties(any(UUID.class), any(Pageable.class)))
                 .willReturn(new PageImpl<>(List.of()));
 
-        // 콘텐츠 숨김 여부
-        given(reportCountRepository.findByTargetTypeAndTargetId(ReportTargetType.POST, postId))
-                .willReturn(Optional.of(reportCount));
+        // [이슈 #76 반영] 행 잠금 없는 숨김 여부 확인 메서드 목 스터빙
+        given(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .willReturn(reportCount.isHidden());
     }
 
     @Test
@@ -212,43 +212,46 @@ class AdminReportServiceTest {
     }
 
     @Test
-        @DisplayName("원클릭 판정(RESOLVED) 시 상태 변경, 콘텐츠 숨김(소프트삭제), 피신고자 제재, 감사 로그가 일괄 처리된다")
-        void resolveReport_resolved_withSanctionAndContentHide() {
-            // given
-            AdminReportResolutionRequest request = new AdminReportResolutionRequest(
-                    ReportStatus.RESOLVED,
-                    true, // hideTargetContent
-                    PenaltyType.SUSPENSION_7D, // 제재 7일 정지
-                    "반복적인 욕설 및 비방 행위 확인",
-                    "1차 7일 정지 부여함");
+    @DisplayName("원클릭 판정(RESOLVED) 시 상태 변경, 콘텐츠 숨김(소프트삭제), 피신고자 제재, 감사 로그가 일괄 처리된다")
+    void resolveReport_resolved_withSanctionAndContentHide() {
+        // given
+        AdminReportResolutionRequest request = new AdminReportResolutionRequest(
+                ReportStatus.RESOLVED,
+                true, // hideTargetContent
+                PenaltyType.SUSPENSION_7D, // 제재 7일 정지
+                "반복적인 욕설 및 비방 행위 확인",
+                "1차 7일 정지 부여함");
 
-    
-            given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
-            given(reportRepository.findById(reportId)).willReturn(Optional.of(report)); // getAdminReportDetail 재조회용
-            given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
-            given(postRepository.findByIdAndDeletedAtIsNull(postId)).willReturn(Optional.of(post));
-            mockCommonReportDetailDependencies();
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
+        given(reportRepository.findById(reportId)).willReturn(Optional.of(report)); // getAdminReportDetail 재조회용
+        given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
+        given(postRepository.findByIdAndDeletedAtIsNull(postId)).willReturn(Optional.of(post));
 
-    
-            // when
-            AdminReportDetailResponse response = reportService.resolveReport(adminId, reportId.toString(),request);
-    
-            // then
-            // 1. 신고 상태 변경
-            assertThat(report.getStatus()).isEqualTo(ReportStatus.RESOLVED);
-            verify(reportRepository).save(report);
+        // [추가] 쓰기 경로(콘텐츠 숨김)에서 호출되는 비관적 락 조회 mock
+        given(reportCountRepository.findByTargetTypeAndTargetId(ReportTargetType.POST, postId))
+                .willReturn(Optional.of(reportCount));
 
-            // 2. 콘텐츠 숨김 및 소프트 삭제
-            assertThat(post.getDeletedAt()).isNotNull();
-            assertThat(reportCount.isHidden()).isTrue();
-            verify(reportCountRepository).save(reportCount);
+        mockCommonReportDetailDependencies();
 
-            // 3. 제재 생성 호출 검증
-            verify(userPenaltyService).createPenalty(eq(adminId), eq(targetUserId), any(UserPenaltyCreateRequest.class));
+        // when
+        AdminReportDetailResponse response = reportService.resolveReport(adminId, reportId.toString(), request);
 
-            // 4. 감사 로그 적재 검증 (콘텐츠 숨김 로그 1건 + 신고 판정 완료 로그 1건)
-            verify(adminAuditLogRepository, atLeast(2)).save(any(AdminAuditLog.class));
-        }
+        // then
+        // 1. 신고 상태 변경
+        assertThat(report.getStatus()).isEqualTo(ReportStatus.RESOLVED);
+        verify(reportRepository).save(report);
+
+        // 2. 콘텐츠 숨김 및 소프트 삭제
+        assertThat(post.getDeletedAt()).isNotNull();
+        assertThat(reportCount.isHidden()).isTrue();
+        verify(reportCountRepository).save(reportCount);
+
+        // 3. 제재 생성 호출 검증
+        verify(userPenaltyService).createPenalty(eq(adminId), eq(targetUserId), any(UserPenaltyCreateRequest.class));
+
+        // 4. 감사 로그 적재 검증 (콘텐츠 숨김 로그 1건 + 신고 판정 완료 로그 1건)
+        verify(adminAuditLogRepository, atLeast(2)).save(any(AdminAuditLog.class));
+    }
 
     @Test
     @DisplayName("원클릭 판정(REJECTED) 시 제재나 숨김 처리 없이 상태만 기각으로 변경된다")
@@ -261,12 +264,10 @@ class AdminReportServiceTest {
                 "정상적인 게임 공략 게시글로 확인됨",
                 null);
 
-
         given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
         given(reportRepository.findById(reportId)).willReturn(Optional.of(report)); // getAdminReportDetail 재조회용
         given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
         mockCommonReportDetailDependencies();
-
 
         // when
         AdminReportDetailResponse response = reportService.resolveReport(adminId, reportId.toString(),
