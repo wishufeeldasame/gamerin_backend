@@ -51,6 +51,8 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
     Optional<Post> findAccessibleByIdForShare(@Param("id") UUID id);
 
     // 신고로 숨긴 글(report_counts.is_hidden)은 hiddenCutoff, 사용자가 삭제한 글은 cutoff 기준으로 정리한다.
+    // 행을 잠가 정리 중 관리자 복구가 먼저 커밋되면 대상에서 빠지게 한다.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
         select p
         from Post p

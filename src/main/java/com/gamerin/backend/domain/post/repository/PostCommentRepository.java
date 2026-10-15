@@ -6,10 +6,13 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import com.gamerin.backend.domain.post.entity.PostComment;
+
+import jakarta.persistence.LockModeType;
 
 public interface PostCommentRepository extends JpaRepository<PostComment, UUID> {
 
@@ -46,7 +49,8 @@ public interface PostCommentRepository extends JpaRepository<PostComment, UUID> 
         """)
     List<UUID> findIdsByPostId(@Param("postId") UUID postId);
 
-    // 댓글의 deleted_at은 신고 숨김에서만 설정된다(사용자 삭제는 하드 삭제).
+    // 댓글의 deleted_at은 신고 숨김에서만 설정된다(사용자 삭제는 하드 삭제). 복구와 겹치지 않게 행을 잠근다.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
         select pc
         from PostComment pc
