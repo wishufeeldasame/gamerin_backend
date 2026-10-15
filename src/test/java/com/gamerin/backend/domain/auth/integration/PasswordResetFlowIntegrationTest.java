@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.auth.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gamerin.backend.domain.auth.service.EmailVerificationMailService;
 import com.gamerin.backend.domain.auth.service.PasswordResetMailService;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
@@ -39,12 +40,17 @@ class PasswordResetFlowIntegrationTest {
     @MockitoBean
     private PasswordResetMailService passwordResetMailService;
 
+    @MockitoBean
+    private EmailVerificationMailService emailVerificationMailService;
+
     @Test
     void passwordResetFlowInvalidatesOldCredentialsAndAllowsNewPassword() throws Exception {
         String handle = "reset" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         String email = "reset+" + UUID.randomUUID() + "@example.com";
         String oldPassword = "Password1!";
         String newPassword = "NewPassword1!";
+
+        String emailVerificationToken = verifyEmail(email);
 
         MvcResult signUpResult = mockMvc.perform(post("/api/v1/auth/signup")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -55,7 +61,8 @@ class PasswordResetFlowIntegrationTest {
                                 "password", oldPassword,
                                 "passwordConfirm", oldPassword,
                                 "agreedToTerms", true,
-                                "agreedToPrivacy", true
+                                "agreedToPrivacy", true,
+                                "emailVerificationToken", emailVerificationToken
                         ))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
@@ -134,6 +141,24 @@ class PasswordResetFlowIntegrationTest {
                 .andExpect(jsonPath("$.data").isEmpty());
 
         verifyNoInteractions(passwordResetMailService);
+    }
+
+    private String verifyEmail(String email) throws Exception {
+        mockMvc.perform(post("/api/v1/auth/email-verifications")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("email", email))))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<String> codeCaptor = ArgumentCaptor.forClass(String.class);
+        verify(emailVerificationMailService).sendSignupVerificationCode(eq(email), codeCaptor.capture());
+
+        MvcResult confirmResult = mockMvc.perform(post("/api/v1/auth/email-verifications/confirm")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("email", email, "code", codeCaptor.getValue()))))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(confirmResult.getResponse().getContentAsString())
+                .path("data").path("verificationToken").asText();
     }
 
     private String json(Object value) throws Exception {

@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.auth.service;
 
+import com.gamerin.backend.domain.auth.dto.request.ChangePasswordRequest;
 import com.gamerin.backend.domain.auth.dto.request.FindIdRequest;
 import com.gamerin.backend.domain.auth.dto.request.FindPasswordRequest;
 import com.gamerin.backend.domain.auth.dto.request.LoginRequest;
@@ -39,6 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -71,6 +73,9 @@ class LocalAuthServiceTest {
         @Mock
         private PasswordResetMailService passwordResetMailService;
 
+        @Mock
+        private EmailVerificationService emailVerificationService;
+
         private LocalAuthService localAuthService;
 
         @BeforeEach
@@ -84,6 +89,7 @@ class LocalAuthServiceTest {
                                 passwordEncoder,
                                 tokenService,
                                 passwordResetMailService,
+                                emailVerificationService,
                                 30L);
         }
 
@@ -118,7 +124,8 @@ class LocalAuthServiceTest {
                                 "Password1!",
                                 "Password1!",
                                 true,
-                                true);
+                                true,
+                                "verify-token");
                 TokenService.AuthResult authResult = authResult(userId, "test_user", "Tester");
 
                 when(userRepository.existsByHandle("test_user")).thenReturn(false);
@@ -142,6 +149,33 @@ class LocalAuthServiceTest {
                 assertThat(savedUser.getNickname()).isEqualTo("Tester");
                 assertThat(savedUser.getPasswordHash()).isEqualTo("encoded-password");
                 assertThat(result).isEqualTo(authResult);
+                verify(emailVerificationService).consumeSignupToken("test@example.com", "verify-token");
+        }
+
+        @Test
+        void signUpRejectsInvalidEmailVerificationToken() {
+                SignUpRequest request = new SignUpRequest(
+                                "tester",
+                                "Tester",
+                                "test@example.com",
+                                "Password1!",
+                                "Password1!",
+                                true,
+                                true,
+                                "bad-token");
+
+                when(userRepository.existsByHandle("tester")).thenReturn(false);
+                when(userRepository.existsByEmail("test@example.com")).thenReturn(false);
+                doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "이메일 인증이 만료되었거나 유효하지 않습니다."))
+                                .when(emailVerificationService).consumeSignupToken("test@example.com", "bad-token");
+
+                assertThatThrownBy(() -> localAuthService.signUp(request))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                                .isEqualTo(HttpStatus.BAD_REQUEST.value());
+
+                verify(userRepository, never()).save(any(User.class));
+                verify(tokenService, never()).issueTokens(any(User.class));
         }
 
         @Test
@@ -153,7 +187,8 @@ class LocalAuthServiceTest {
                                 "Password1!",
                                 "Password1!",
                                 true,
-                                true);
+                                true,
+                                "verify-token");
 
                 when(userRepository.existsByHandle("tester")).thenReturn(false);
                 when(userRepository.existsByEmail("test@example.com")).thenReturn(true);
@@ -165,6 +200,7 @@ class LocalAuthServiceTest {
 
                 verify(userRepository, never()).save(any(User.class));
                 verify(tokenService, never()).issueTokens(any(User.class));
+                verifyNoInteractions(emailVerificationService);
         }
 
         @Test
@@ -424,6 +460,91 @@ class LocalAuthServiceTest {
                 localAuthService.logout("raw-refresh-token");
 
                 assertThat(refreshToken.isRevoked()).isTrue();
+        }
+
+        @Test
+        void changePasswordUpdatesHashAndRevokesOnlyOtherRefreshTokens() {
+                UUID userId = UUID.randomUUID();
+                User user = savedUser(userId, "user@example.com", "tester", "Tester", "encoded-password");
+                RefreshToken currentToken = RefreshToken.issue(userId, "current-hash", OffsetDateTime.now().plusDays(1), null, null);
+                RefreshToken otherToken = RefreshToken.issue(userId, "other-hash", OffsetDateTime.now().plusDays(1), null, null);
+
+                when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+                when(passwordEncoder.matches("OldPassword1!", "encoded-password")).thenReturn(true);
+                when(passwordEncoder.matches("NewPassword1!", "encoded-password")).thenReturn(false);
+                when(passwordEncoder.encode("NewPassword1!")).thenReturn("new-encoded-password");
+                when(tokenService.sha256("raw-current")).thenReturn("current-hash");
+                when(refreshTokenRepository.findAllByUserIdAndRevokedAtIsNull(userId))
+                                .thenReturn(List.of(currentToken, otherToken));
+
+                localAuthService.changePassword(userId,
+                                new ChangePasswordRequest("OldPassword1!", "NewPassword1!", "NewPassword1!"),
+                                "raw-current");
+
+                assertThat(user.getPasswordHash()).isEqualTo("new-encoded-password");
+                assertThat(currentToken.isRevoked()).isFalse();
+                assertThat(otherToken.isRevoked()).isTrue();
+        }
+
+        @Test
+        void changePasswordRejectsWrongCurrentPasswordWithBadRequest() {
+                UUID userId = UUID.randomUUID();
+                User user = savedUser(userId, "user@example.com", "tester", "Tester", "encoded-password");
+                when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+                when(passwordEncoder.matches("WrongPassword1!", "encoded-password")).thenReturn(false);
+
+                assertThatThrownBy(() -> localAuthService.changePassword(userId,
+                                new ChangePasswordRequest("WrongPassword1!", "NewPassword1!", "NewPassword1!"),
+                                null))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                                .isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(user.getPasswordHash()).isEqualTo("encoded-password");
+                verify(passwordEncoder, never()).encode(any());
+        }
+
+        @Test
+        void changePasswordRejectsSocialOnlyAccount() {
+                UUID userId = UUID.randomUUID();
+                User user = User.createSocialOnly("user@example.com", "tester", "Tester");
+                ReflectionTestUtils.setField(user, "id", userId);
+                when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+
+                assertThatThrownBy(() -> localAuthService.changePassword(userId,
+                                new ChangePasswordRequest("Anything1!", "NewPassword1!", "NewPassword1!"),
+                                null))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                                .isEqualTo(HttpStatus.BAD_REQUEST);
+                verifyNoInteractions(passwordEncoder);
+        }
+
+        @Test
+        void changePasswordRejectsMismatchedConfirmation() {
+                UUID userId = UUID.randomUUID();
+                User user = savedUser(userId, "user@example.com", "tester", "Tester", "encoded-password");
+                when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+                when(passwordEncoder.matches("OldPassword1!", "encoded-password")).thenReturn(true);
+
+                assertThatThrownBy(() -> localAuthService.changePassword(userId,
+                                new ChangePasswordRequest("OldPassword1!", "NewPassword1!", "Different1!"),
+                                null))
+                                .isInstanceOf(ResponseStatusException.class);
+                assertThat(user.getPasswordHash()).isEqualTo("encoded-password");
+        }
+
+        @Test
+        void getMeReportsWhetherAccountHasPassword() {
+                UUID localId = UUID.randomUUID();
+                User local = savedUser(localId, "a@example.com", "local_user", "Local", "encoded-password");
+                UUID socialId = UUID.randomUUID();
+                User social = User.createSocialOnly("b@example.com", "social_user", "Social");
+                ReflectionTestUtils.setField(social, "id", socialId);
+                when(userRepository.findById(localId)).thenReturn(Optional.of(local));
+                when(userRepository.findById(socialId)).thenReturn(Optional.of(social));
+
+                assertThat(localAuthService.getMe(com.gamerin.backend.global.security.principal.CustomUserPrincipal.from(local)).hasPassword()).isTrue();
+                assertThat(localAuthService.getMe(com.gamerin.backend.global.security.principal.CustomUserPrincipal.from(social)).hasPassword()).isFalse();
         }
 
         private User savedUser(UUID id, String email, String handle, String nickname, String passwordHash) {

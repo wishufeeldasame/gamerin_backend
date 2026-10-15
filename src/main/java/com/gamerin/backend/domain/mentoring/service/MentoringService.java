@@ -229,6 +229,10 @@ public class MentoringService {
     @Transactional
     public MentoringApplicationResponse applyToProgram(CustomUserPrincipal principal,
             MentoringApplicationRequest request) {
+        // 멘티 행을 먼저 잠가 동시에 진행되는 회원 탈퇴(사용자 → 프로그램 순 잠금)와 직렬화하고 탈퇴 계정은 거부한다
+        User mentee = userRepository.findActiveByIdForUpdate(principal.getUserId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자 정보를 찾을 수 없습니다."));
+
         // 프로그램 존재 여부 확인
         MentoringProgram program = mentoringProgramRepository.findByIdForUpdate(request.programId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신청하려는 프로그램을 찾을 수 없습니다."));
@@ -248,10 +252,6 @@ public class MentoringService {
                 REAPPLY_BLOCKING_STATUSES)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 진행 중인 신청 내역이 있습니다.");
         }
-
-        // 멘티 유저 정보 조회
-        User mentee = userRepository.findById(principal.getUserId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자 정보를 찾을 수 없습니다."));
 
         // 1. 신청 내역 먼저 저장하여 ID 획득 (KP-C1 #90 F2)
         MentoringApplication application = new MentoringApplication();

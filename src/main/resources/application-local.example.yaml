@@ -69,6 +69,8 @@ app:
       refresh-cookie-name: refresh_token
       refresh-cookie-secure: false
       refresh-cookie-same-site: Lax
+    sse:
+      stream-token-cookie-secure: false
     password-reset:
       expiration-minutes: 30
 
