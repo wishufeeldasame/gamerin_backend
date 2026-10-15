@@ -179,7 +179,7 @@
 - JUnit/Mockito 단위 테스트, JPA 테스트, Spring 통합 테스트가 혼재한다.
 - H2 테스트 의존성이 있지만 전체 테스트가 로컬 설정이나 외부 DB와 무관하다고 가정하지 않는다.
 - `BackendApplicationTests`는 기본 `@SpringBootTest`이므로 프로필·DB 등 실행 환경은 `확인 필요`다.
-- PostgreSQL 동시성 테스트는 `HASHTAG_POSTGRES_TEST_URL`, `BOOKMARK_POSTGRES_TEST_URL`, `NOTIFICATION_POSTGRES_TEST_URL` 조건으로 활성화된다.
+- PostgreSQL 동시성 테스트는 `HASHTAG_POSTGRES_TEST_URL`, `BOOKMARK_POSTGRES_TEST_URL`, `NOTIFICATION_POSTGRES_TEST_URL`, `ACCOUNT_WITHDRAWAL_POSTGRES_TEST_URL` 조건으로 활성화된다.
 - 각 테스트의 username/password 환경변수와 스키마 생성·정리 동작을 확인하고 테스트 전용 DB를 사용한다.
 - 조건 미충족으로 건너뛴 테스트를 통과로 보고하지 않는다.
 - `R6DataLiveIntegrationTest`는 `R6DATA_LIVE_TEST=true`일 때 활성화된다. 외부 API 호출 및 필요한 설정을 확인한 뒤 실행한다.
