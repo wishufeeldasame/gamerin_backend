@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.report.repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -10,12 +12,18 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface ReportCountRepository extends JpaRepository<ReportCount, UUID> {
 
-    // 동시 신고 시 카운트 유실 및 Race Condition 방지를 위한 비관적 락 조회
+    // 동시 신고 시 카운트 유실 및 Race Condition 방지를 위한 비관적 락 조회 (쓰기 경로 전용)
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<ReportCount> findByTargetTypeAndTargetId(ReportTargetType targetType, UUID targetId);
+
+    // [이슈 #76 해결] 읽기 전용 트랜잭션에서 행 잠금(FOR UPDATE) 없이 숨김 처리 여부만 인덱스로 빠르게 확인
+    boolean existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType targetType, UUID targetId);
 
     // 대상별 신고 카운트 레코드 존재 여부 확인
     boolean existsByTargetTypeAndTargetId(ReportTargetType targetType, UUID targetId);
@@ -25,4 +33,17 @@ public interface ReportCountRepository extends JpaRepository<ReportCount, UUID> 
 
     // 총 숨김 처리 건수 (어드민 대시보드용)
     long countByIsHiddenTrue();
+
+    // 콘텐츠 정리 전 신고 카운트 잠금. 잠금 순서는 report_counts → posts → post_comments다.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select rc from ReportCount rc where rc.targetType = :targetType and rc.targetId in :targetIds")
+    List<ReportCount> lockByTargets(@Param("targetType") ReportTargetType targetType,
+            @Param("targetIds") Collection<UUID> targetIds);
+
+    // 영구 삭제된 콘텐츠의 신고 카운트 정리
+    @Modifying
+    @Query("delete from ReportCount rc where rc.targetType = :targetType and rc.targetId in :targetIds")
+    int deleteByTargets(@Param("targetType") ReportTargetType targetType,
+            @Param("targetIds") Collection<UUID> targetIds);
+
 }

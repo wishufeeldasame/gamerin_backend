@@ -107,6 +107,17 @@ public class AuthController {
     }
 
     @SecurityRequirement(name = "bearerAuth")
+    @PatchMapping("/password")
+    public ApiResponse<Void> changePassword(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @Valid @RequestBody ChangePasswordRequest request,
+            HttpServletRequest httpRequest
+    ) {
+        localAuthService.changePassword(principal.getUserId(), request, getRefreshTokenFromCookie(httpRequest));
+        return ApiResponse.ok(null);
+    }
+
+    @SecurityRequirement(name = "bearerAuth")
     @GetMapping("/me")
     public ApiResponse<MeResponse> me(@AuthenticationPrincipal CustomUserPrincipal principal) {
         return ApiResponse.ok(localAuthService.getMe(principal));

@@ -109,7 +109,7 @@ class MembershipGrantPostgresIntegrationTest {
         registry.add("spring.flyway.default-schema", postgresSchema::schema);
         registry.add("spring.flyway.create-schemas", () -> "false");
         registry.add("spring.flyway.baseline-on-migrate", () -> "false");
-        registry.add("spring.flyway.target", () -> "37");
+        registry.add("spring.flyway.target", () -> "41");
     }
 
     @AfterAll
@@ -344,8 +344,8 @@ class MembershipGrantPostgresIntegrationTest {
     }
 
     @Test
-    void flywayMigratesThroughV37AndCanValidateAndRunAgainWithoutChanges() {
-        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("37");
+    void flywayMigratesThroughV41AndCanValidateAndRunAgainWithoutChanges() {
+        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("41");
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
     }

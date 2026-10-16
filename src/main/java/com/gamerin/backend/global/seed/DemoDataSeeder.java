@@ -25,6 +25,8 @@ import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationReques
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringReviewRequest;
+import com.gamerin.backend.domain.mentoring.entity.MentorStatus;
+import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.service.MentoringService;
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
@@ -87,6 +89,7 @@ public class DemoDataSeeder implements ApplicationRunner {
     private final MessageService messageService;
     private final MileageService mileageService;
     private final MentoringService mentoringService;
+    private final MentorProfileRepository mentorProfileRepository;
 
     public DemoDataSeeder(
             UserRepository userRepository,
@@ -105,7 +108,8 @@ public class DemoDataSeeder implements ApplicationRunner {
             BookmarkCollectionService bookmarkCollectionService,
             MessageService messageService,
             MileageService mileageService,
-            MentoringService mentoringService
+            MentoringService mentoringService,
+            MentorProfileRepository mentorProfileRepository
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -124,6 +128,7 @@ public class DemoDataSeeder implements ApplicationRunner {
         this.messageService = messageService;
         this.mileageService = mileageService;
         this.mentoringService = mentoringService;
+        this.mentorProfileRepository = mentorProfileRepository;
     }
 
     public static String handle(int index) {
@@ -278,6 +283,8 @@ public class DemoDataSeeder implements ApplicationRunner {
         List<UUID> programIds = new ArrayList<>();
         for (int m = 0; m < MENTOR_COUNT; m++) {
             mentoringService.registerMentor(principals.get(m), new MentorRegistrationRequest(handle(m) + " 멘토입니다."));
+            // 프로그램 등록은 ACTIVE 멘토만 가능하므로 관리자 승인을 시드에서 대신한다.
+            mentorProfileRepository.findById(principals.get(m).getUserId()).orElseThrow().setStatus(MentorStatus.ACTIVE);
             for (int p = 0; p < PROGRAMS_PER_MENTOR; p++) {
                 GameType gameType = GAMES[(m + p) % GAMES.length];
                 String game = gameType.name();
