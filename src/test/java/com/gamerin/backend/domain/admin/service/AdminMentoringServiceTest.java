@@ -10,7 +10,6 @@ import com.gamerin.backend.domain.mentoring.entity.*;
 import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
-import com.gamerin.backend.domain.report.entity.ReportTargetType;
 import com.gamerin.backend.domain.report.repository.ReportRepository;
 import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.entity.User;
@@ -255,7 +254,7 @@ class AdminMentoringServiceTest {
         reportRows.add(new Object[]{programId, 2L});
         given(mentoringApplicationRepository.countByProgramIdIn(List.of(programId)))
                 .willReturn(sessionRows);
-        given(reportRepository.countByTargetTypeAndTargetIdIn(ReportTargetType.MENTORING, List.of(programId)))
+        given(reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)))
                 .willReturn(reportRows);
 
 
@@ -280,8 +279,8 @@ class AdminMentoringServiceTest {
         given(mentoringProgramRepository.findById(programId)).willReturn(Optional.of(program));
         given(mentoringProgramRepository.save(any(MentoringProgram.class))).willAnswer(inv -> inv.getArgument(0));
         given(mentoringApplicationRepository.countByProgramId(programId)).willReturn(5L);
-        given(reportRepository.countByTargetTypeAndTargetId(ReportTargetType.MENTORING, programId))
-                .willReturn(0L);
+        given(reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)))
+                .willReturn(List.of());
 
         // when
         AdminMentoringProgramResponse res = adminMentoringService.updateProgramStatus(adminId, programId, ProgramStatus.CLOSED);
@@ -289,6 +288,7 @@ class AdminMentoringServiceTest {
         // then
         assertThat(res.status()).isEqualTo(ProgramStatus.CLOSED);
         assertThat(program.getStatus()).isEqualTo(ProgramStatus.CLOSED);
+        assertThat(res.reports()).isZero();
 
         verify(adminAuditLogRepository, times(1)).save(any(AdminAuditLog.class));
     }
@@ -301,8 +301,10 @@ class AdminMentoringServiceTest {
         given(mentoringProgramRepository.findById(programId)).willReturn(Optional.of(program));
         given(mentoringProgramRepository.save(any(MentoringProgram.class))).willAnswer(inv -> inv.getArgument(0));
         given(mentoringApplicationRepository.countByProgramId(programId)).willReturn(3L);
-        given(reportRepository.countByTargetTypeAndTargetId(ReportTargetType.MENTORING, programId))
-                .willReturn(1L);
+        List<Object[]> reportRows = new java.util.ArrayList<>();
+        reportRows.add(new Object[]{programId, 1L});
+        given(reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)))
+                .willReturn(reportRows);
 
         // when
         AdminMentoringProgramResponse res = adminMentoringService.hideProgram(adminId, programId, "허위 정보 등록 의심");
@@ -310,6 +312,7 @@ class AdminMentoringServiceTest {
         // then
         assertThat(program.isDeleted()).isTrue();
         assertThat(program.getDeletedAt()).isNotNull();
+        assertThat(res.reports()).isEqualTo(1L);
 
         verify(adminAuditLogRepository, times(1)).save(any(AdminAuditLog.class));
     }
