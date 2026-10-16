@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.search.service;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
@@ -12,6 +13,7 @@ import com.gamerin.backend.domain.hashtag.dto.response.HashtagSummaryResponse;
 import com.gamerin.backend.domain.hashtag.model.HashtagSummary;
 import com.gamerin.backend.domain.hashtag.repository.HashtagQueryRepository;
 import com.gamerin.backend.domain.hashtag.service.HashtagParser;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.post.dto.response.PostCardResponse;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.service.PostResponseAssembler;
@@ -43,19 +45,22 @@ public class SearchService {
     private final HashtagParser hashtagParser;
     private final PostResponseAssembler postResponseAssembler;
     private final UserRepository userRepository;
+    private final MembershipService membershipService;
 
     public SearchService(
             SearchQueryRepository searchQueryRepository,
             HashtagQueryRepository hashtagQueryRepository,
             HashtagParser hashtagParser,
             PostResponseAssembler postResponseAssembler,
-            UserRepository userRepository
+            UserRepository userRepository,
+            MembershipService membershipService
     ) {
         this.searchQueryRepository = searchQueryRepository;
         this.hashtagQueryRepository = hashtagQueryRepository;
         this.hashtagParser = hashtagParser;
         this.postResponseAssembler = postResponseAssembler;
         this.userRepository = userRepository;
+        this.membershipService = membershipService;
     }
 
     public SearchOverviewResponse overview(
@@ -108,7 +113,7 @@ public class SearchService {
                 : null;
 
         return new CursorPageResponse<>(
-                page.stream().map(SimpleUserProfileResponse::from).toList(),
+                toAccountResponses(page),
                 nextCursor,
                 hasNext
         );
@@ -161,9 +166,19 @@ public class SearchService {
         boolean hasMore = loaded.size() > size;
         List<User> page = hasMore ? loaded.subList(0, size) : loaded;
         return new SearchSectionResponse<>(
-                page.stream().map(SimpleUserProfileResponse::from).toList(),
+                toAccountResponses(page),
                 hasMore
         );
+    }
+
+    private List<SimpleUserProfileResponse> toAccountResponses(List<User> users) {
+        if (users.isEmpty()) {
+            return List.of();
+        }
+        Set<UUID> activeUserIds = membershipService.findActiveUserIds(users.stream().map(User::getId).toList());
+        return users.stream()
+                .map(user -> SimpleUserProfileResponse.from(user, activeUserIds.contains(user.getId())))
+                .toList();
     }
 
     private SearchSectionResponse<PostCardResponse> postSection(

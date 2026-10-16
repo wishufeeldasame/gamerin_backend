@@ -6,6 +6,7 @@ import java.util.UUID;
 public record ReposterInfoResponse(
         UUID userId,
         String nickname,
-        OffsetDateTime repostedAt
+        OffsetDateTime repostedAt,
+        boolean membershipBadge
 ) {
 }

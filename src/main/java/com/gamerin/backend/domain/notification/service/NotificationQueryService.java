@@ -8,6 +8,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -18,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.notification.dto.response.NotificationActorResponse;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.notification.dto.response.NotificationResponse;
 import com.gamerin.backend.domain.notification.dto.response.UnreadNotificationCountResponse;
 import com.gamerin.backend.domain.notification.entity.Notification;
@@ -37,13 +39,16 @@ public class NotificationQueryService {
 
     private final UserRepository userRepository;
     private final NotificationRepository notificationRepository;
+    private final MembershipService membershipService;
 
     public NotificationQueryService(
             UserRepository userRepository,
-            NotificationRepository notificationRepository
+            NotificationRepository notificationRepository,
+            MembershipService membershipService
     ) {
         this.userRepository = userRepository;
         this.notificationRepository = notificationRepository;
+        this.membershipService = membershipService;
     }
 
     public CursorPageResponse<NotificationResponse> getNotifications(
@@ -76,8 +81,16 @@ public class NotificationQueryService {
         if (notifications.isEmpty()) {
             return new CursorPageResponse<>(List.of(), null, false);
         }
+        Set<UUID> actorIds = notifications.stream()
+                .map(Notification::getActor)
+                .filter(Objects::nonNull)
+                .map(User::getId)
+                .collect(Collectors.toSet());
+        Set<UUID> activeMemberIds = actorIds.isEmpty()
+                ? Set.of()
+                : membershipService.findActiveUserIds(actorIds);
         List<NotificationResponse> items = notifications.stream()
-                .map(this::toResponse)
+                .map(notification -> toResponse(notification, activeMemberIds))
                 .toList();
         String nextCursor = hasNext && !notifications.isEmpty()
                 ? buildCursor(notifications.get(notifications.size() - 1))
@@ -128,7 +141,7 @@ public class NotificationQueryService {
                 .toList();
     }
 
-    private NotificationResponse toResponse(Notification notification) {
+    private NotificationResponse toResponse(Notification notification, Set<UUID> activeMemberIds) {
         User actor = notification.getActor();
         UserProfile profile = actor != null ? actor.getProfile() : null;
         return new NotificationResponse(
@@ -140,7 +153,8 @@ public class NotificationQueryService {
                                 actor.getHandle(),
                                 actor.getNickname(),
                                 profile != null ? profile.getProfileImageUrl() : null,
-                                profile != null && profile.isVerifiedBadge()
+                                profile != null && profile.isVerifiedBadge(),
+                                activeMemberIds.contains(actor.getId())
                         )
                         : null,
                 notification.getPost() != null ? notification.getPost().getId() : null,

@@ -13,9 +13,10 @@ public record MentoringReviewResponse(
     String menteeNickname,
     int rating,
     String content,
-    OffsetDateTime createdAt
+    OffsetDateTime createdAt,
+    boolean membershipBadge
 ) {
-    public static MentoringReviewResponse from(MentoringReview review) {
+    public static MentoringReviewResponse from(MentoringReview review, boolean membershipBadge) {
         return new MentoringReviewResponse(
             review.getId(),
             review.getApplication().getId(),
@@ -24,7 +25,8 @@ public record MentoringReviewResponse(
             review.getMentee().getNickname(),
             review.getRating(),
             review.getContent(),
-            review.getCreatedAt()
+            review.getCreatedAt(),
+            membershipBadge
         );
     }
 } 

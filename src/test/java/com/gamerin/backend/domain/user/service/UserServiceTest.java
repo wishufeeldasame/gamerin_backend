@@ -14,6 +14,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
@@ -22,6 +24,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.post.service.LightweightSecurityScanService;
@@ -57,6 +60,9 @@ class UserServiceTest {
     @Mock
     private LightweightSecurityScanService lightweightSecurityScanService;
 
+    @Mock
+    private MembershipService membershipService;
+
     private UserService userService;
 
     @BeforeEach
@@ -68,8 +74,29 @@ class UserServiceTest {
                 postMediaRepository,
                 mediaStorageService,
                 mediaUploadSecurityService,
-                lightweightSecurityScanService
+                lightweightSecurityScanService,
+                membershipService
         );
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void ownAndPublicProfilesUseCurrentMembershipWithoutChangingVerifiedBadge(boolean active) {
+        User user = savedUser(UUID.randomUUID(), "member", "Member");
+        ReflectionTestUtils.setField(user.getProfile(), "verifiedBadge", true);
+        when(userRepository.findByIdAndDeletedAtIsNull(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findByHandleAndDeletedAtIsNull("member")).thenReturn(Optional.of(user));
+        when(membershipService.isActive(user.getId())).thenReturn(active);
+
+        var ownProfile = userService.getMyProfile(user.getId());
+        var publicProfile = userService.getProfile(null, "member");
+
+        assertThat(ownProfile.membershipBadge()).isEqualTo(active);
+        assertThat(publicProfile.membershipBadge()).isEqualTo(active);
+        assertThat(ownProfile.verifiedBadge()).isTrue();
+        assertThat(publicProfile.verifiedBadge()).isTrue();
+        verify(membershipService, org.mockito.Mockito.times(2)).isActive(user.getId());
+        verify(membershipService, never()).findActiveUserIds(any());
     }
 
     @Test
