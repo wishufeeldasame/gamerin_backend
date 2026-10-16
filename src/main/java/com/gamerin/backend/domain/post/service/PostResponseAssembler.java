@@ -11,6 +11,7 @@ import java.util.UUID;
 
 import org.springframework.stereotype.Component;
 
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostCardResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
@@ -35,17 +36,20 @@ public class PostResponseAssembler {
     private final PostLikeRepository postLikeRepository;
     private final PostBookmarkRepository postBookmarkRepository;
     private final RepostQueryRepository repostQueryRepository;
+    private final MembershipService membershipService;
 
     public PostResponseAssembler(
             PostMediaRepository postMediaRepository,
             PostLikeRepository postLikeRepository,
             PostBookmarkRepository postBookmarkRepository,
-            RepostQueryRepository repostQueryRepository
+            RepostQueryRepository repostQueryRepository,
+            MembershipService membershipService
     ) {
         this.postMediaRepository = postMediaRepository;
         this.postLikeRepository = postLikeRepository;
         this.postBookmarkRepository = postBookmarkRepository;
         this.repostQueryRepository = repostQueryRepository;
+        this.membershipService = membershipService;
     }
 
     public List<PostCardResponse> toPostCards(List<Post> posts, UUID viewerId) {
@@ -81,6 +85,10 @@ public class PostResponseAssembler {
         Set<UUID> likedPostIds = buildLikedPostIds(viewerId, postIds);
         Set<UUID> bookmarkedPostIds = buildBookmarkedPostIds(viewerId, postIds);
         Map<UUID, RepostMetrics> repostMetrics = repostQueryRepository.findMetrics(viewerId, postIds);
+        Set<UUID> displayedUserIds = new HashSet<>();
+        posts.forEach(post -> displayedUserIds.add(post.getAuthor().getId()));
+        reposterInfoByPostId.values().forEach(reposter -> displayedUserIds.add(reposter.userId()));
+        Set<UUID> activeUserIds = membershipService.findActiveUserIds(displayedUserIds);
 
         List<PostCardResponse> responses = new ArrayList<>();
         for (Post post : posts) {
@@ -90,8 +98,9 @@ public class PostResponseAssembler {
                     likedPostIds.contains(post.getId()),
                     bookmarkedPostIds.contains(post.getId()),
                     repostMetrics.getOrDefault(post.getId(), new RepostMetrics(0L, false)),
-                    reposterInfoByPostId.get(post.getId()),
-                    viewerId
+                    withMembershipBadge(reposterInfoByPostId.get(post.getId()), activeUserIds),
+                    viewerId,
+                    activeUserIds.contains(post.getAuthor().getId())
             ));
         }
         return responses;
@@ -116,6 +125,7 @@ public class PostResponseAssembler {
                 post.getAuthor().getHandle(),
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
+                membershipService.isActive(post.getAuthor().getId()),
                 post.getContent(),
                 media,
                 post.getLikeCount(),
@@ -132,6 +142,22 @@ public class PostResponseAssembler {
     }
 
     public CommentResponse toCommentResponse(PostComment comment, UUID viewerId) {
+        return toCommentResponse(comment, viewerId, membershipService.isActive(comment.getAuthor().getId()));
+    }
+
+    public List<CommentResponse> toCommentResponses(List<PostComment> comments, UUID viewerId) {
+        if (comments.isEmpty()) {
+            return List.of();
+        }
+        Set<UUID> userIds = new HashSet<>();
+        comments.forEach(comment -> userIds.add(comment.getAuthor().getId()));
+        Set<UUID> activeUserIds = membershipService.findActiveUserIds(userIds);
+        return comments.stream()
+                .map(comment -> toCommentResponse(comment, viewerId, activeUserIds.contains(comment.getAuthor().getId())))
+                .toList();
+    }
+
+    private CommentResponse toCommentResponse(PostComment comment, UUID viewerId, boolean membershipBadge) {
         UserProfile profile = comment.getAuthor().getProfile();
         return new CommentResponse(
                 comment.getId(),
@@ -139,6 +165,7 @@ public class PostResponseAssembler {
                 comment.getAuthor().getHandle(),
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
+                membershipBadge,
                 comment.getContent(),
                 comment.getCreatedAt(),
                 viewerId != null && comment.getAuthor().getId().equals(viewerId)
@@ -166,7 +193,8 @@ public class PostResponseAssembler {
             boolean bookmarkedByMe,
             RepostMetrics repostMetrics,
             ReposterInfoResponse reposterInfo,
-            UUID viewerId
+            UUID viewerId,
+            boolean membershipBadge
     ) {
         UserProfile profile = post.getAuthor().getProfile();
         return new PostCardResponse(
@@ -175,6 +203,7 @@ public class PostResponseAssembler {
                 post.getAuthor().getHandle(),
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
+                membershipBadge,
                 post.getContent(),
                 media,
                 post.getLikeCount(),
@@ -188,6 +217,14 @@ public class PostResponseAssembler {
                 viewerId != null && post.getAuthor().getId().equals(viewerId),
                 post.getCreatedAt()
         );
+    }
+
+    private ReposterInfoResponse withMembershipBadge(ReposterInfoResponse reposter, Set<UUID> activeUserIds) {
+        if (reposter == null) {
+            return null;
+        }
+        return new ReposterInfoResponse(reposter.userId(), reposter.nickname(), reposter.repostedAt(),
+                activeUserIds.contains(reposter.userId()));
     }
 
     private Map<UUID, List<PostMediaResponse>> buildMediaMap(Collection<UUID> postIds) {

@@ -242,10 +242,7 @@ public class PostService {
         User user = getCurrentUser(principal);
         getActivePost(postId);
 
-        return postCommentRepository.findActiveByPostId(postId)
-                .stream()
-                .map(comment -> postResponseAssembler.toCommentResponse(comment, user.getId()))
-                .toList();
+        return postResponseAssembler.toCommentResponses(postCommentRepository.findActiveByPostId(postId), user.getId());
     }
 
     public void deleteComment(CustomUserPrincipal principal, UUID postId, UUID commentId) {

@@ -6,11 +6,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +27,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.follow.entity.Follow;
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
@@ -44,11 +47,14 @@ class FollowServiceTest {
     @Mock
     private NotificationCommandService notificationCommandService;
 
+    @Mock
+    private MembershipService membershipService;
+
     private FollowService followService;
 
     @BeforeEach
     void setUp() {
-        followService = new FollowService(userRepository, followRepository, notificationCommandService);
+        followService = new FollowService(userRepository, followRepository, notificationCommandService, membershipService);
     }
 
     @Test
@@ -161,6 +167,7 @@ class FollowServiceTest {
         when(followRepository.findAllWithUsersByIdIn(List.of(followId))).thenReturn(List.of(follow));
         when(followRepository.findFolloweeIdsByFollowerIdAndFolloweeIdIn(eq(viewerId), any()))
                 .thenReturn(List.of(followerId));
+        when(membershipService.findActiveUserIds(Set.of(followerId))).thenReturn(Set.of(followerId));
 
         CursorPageResponse<?> response = followService.getFollowers(
                 CustomUserPrincipal.from(viewer),
@@ -176,9 +183,12 @@ class FollowServiceTest {
                 .hasFieldOrPropertyWithValue("handle", "fan")
                 .hasFieldOrPropertyWithValue("nickname", "Fan")
                 .hasFieldOrPropertyWithValue("isFollowing", true)
+                .hasFieldOrPropertyWithValue("membershipBadge", true)
                 .hasFieldOrPropertyWithValue("followedAt", followedAt);
         assertThat(response.hasNext()).isFalse();
         assertThat(response.nextCursor()).isNull();
+        verify(membershipService).findActiveUserIds(Set.of(followerId));
+        verify(membershipService, never()).isActive(any());
     }
 
     @Test
@@ -214,6 +224,7 @@ class FollowServiceTest {
 
         assertThat(firstPage.items()).hasSize(1);
         assertThat(firstPage.items().get(0).handle()).isEqualTo("first");
+        assertThat(firstPage.items().get(0).membershipBadge()).isFalse();
         assertThat(firstPage.hasNext()).isTrue();
         assertThat(firstPage.nextCursor()).isNotBlank();
         assertThat(firstPage.nextCursor()).doesNotContain("|");
@@ -248,6 +259,33 @@ class FollowServiceTest {
         assertThat(response.hasNext()).isFalse();
         assertThat(response.nextCursor()).isNull();
         verify(followRepository).findFollowingPageIds(targetId, 51);
+        verifyNoInteractions(membershipService);
+    }
+
+    @Test
+    void followingMembershipBatchIncludesViewerEvenThoughFollowingFlagExcludesSelf() {
+        User viewer = savedUser(UUID.randomUUID(), "viewer", "Viewer");
+        User target = savedUser(UUID.randomUUID(), "target", "Target");
+        User other = savedUser(UUID.randomUUID(), "other", "Other");
+        OffsetDateTime followedAt = OffsetDateTime.parse("2026-10-15T00:00:00Z");
+        Follow viewerFollow = savedFollow(UUID.randomUUID(), target, viewer, followedAt);
+        Follow otherFollow = savedFollow(UUID.randomUUID(), target, other, followedAt.minusHours(1));
+        List<UUID> ids = List.of(viewerFollow.getId(), otherFollow.getId());
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(target));
+        when(followRepository.findFollowingPageIds(target.getId(), 21))
+                .thenReturn(ids.stream().map(UUID::toString).toList());
+        when(followRepository.findAllWithUsersByIdIn(ids)).thenReturn(List.of(viewerFollow, otherFollow));
+        when(membershipService.findActiveUserIds(Set.of(viewer.getId(), other.getId())))
+                .thenReturn(Set.of(viewer.getId()));
+
+        var response = followService.getFollowing(CustomUserPrincipal.from(viewer), "target", null, 20);
+
+        assertThat(response.items()).extracting(item -> item.membershipBadge()).containsExactly(true, false);
+        assertThat(response.items().getFirst().isFollowing()).isFalse();
+        verify(membershipService).findActiveUserIds(Set.of(viewer.getId(), other.getId()));
+        verify(membershipService, never()).isActive(any());
+        verify(followRepository).findFolloweeIdsByFollowerIdAndFolloweeIdIn(viewer.getId(), Set.of(other.getId()));
     }
 
     private User savedUser(UUID id, String handle, String nickname) {

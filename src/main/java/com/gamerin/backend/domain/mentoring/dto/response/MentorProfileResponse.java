@@ -11,9 +11,10 @@ public record MentorProfileResponse(
     String about,
     double ratingAvg,
     int reviewCount,
-    int menteeCount
+    int menteeCount,
+    boolean membershipBadge
 ){
-    public static MentorProfileResponse from (MentorProfile profile) {
+    public static MentorProfileResponse from (MentorProfile profile, boolean membershipBadge) {
         return new MentorProfileResponse(
             profile.getUserId(),
             profile.getUser().getNickname(),
@@ -21,7 +22,8 @@ public record MentorProfileResponse(
             profile.getAbout(),
             profile.getRatingAvg().doubleValue(),
             profile.getReviewCount(),
-            profile.getMenteeCount()
+            profile.getMenteeCount(),
+            membershipBadge
         );
     }
 }

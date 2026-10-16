@@ -686,6 +686,7 @@ class PostServiceTest {
                 "actor",
                 null,
                 false,
+                false,
                 "hello",
                 OffsetDateTime.now(),
                 true
@@ -724,6 +725,7 @@ class PostServiceTest {
                 "tester",
                 null,
                 false,
+                false,
                 "hello",
                 OffsetDateTime.now(),
                 true
@@ -732,7 +734,7 @@ class PostServiceTest {
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
         when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
         when(postCommentRepository.findActiveByPostId(postId)).thenReturn(List.of(comment));
-        when(postResponseAssembler.toCommentResponse(comment, userId)).thenReturn(response);
+        when(postResponseAssembler.toCommentResponses(List.of(comment), userId)).thenReturn(List.of(response));
 
         List<CommentResponse> comments = postService.getComments(CustomUserPrincipal.from(user), postId);
 
@@ -791,6 +793,7 @@ class PostServiceTest {
                 "Tester",
                 "tester",
                 null,
+                false,
                 false,
                 null,
                 List.of(),

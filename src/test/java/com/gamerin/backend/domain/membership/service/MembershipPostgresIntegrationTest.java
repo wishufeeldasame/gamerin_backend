@@ -9,6 +9,7 @@ import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Arrays;
 import java.util.Set;
 import java.util.UUID;
 
@@ -26,6 +27,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -35,6 +37,14 @@ import com.gamerin.backend.domain.membership.entity.UserMembership;
 import com.gamerin.backend.domain.membership.repository.UserMembershipRepository;
 import com.gamerin.backend.domain.membership.repository.MembershipGrantRepository;
 import com.gamerin.backend.domain.payment.repository.PaymentRepository;
+import com.gamerin.backend.domain.post.entity.Post;
+import com.gamerin.backend.domain.post.repository.PostBookmarkRepository;
+import com.gamerin.backend.domain.post.repository.PostLikeRepository;
+import com.gamerin.backend.domain.post.repository.PostMediaRepository;
+import com.gamerin.backend.domain.post.service.PostResponseAssembler;
+import com.gamerin.backend.domain.repost.dto.response.ReposterInfoResponse;
+import com.gamerin.backend.domain.repost.model.PostTimelineItem;
+import com.gamerin.backend.domain.repost.repository.RepostQueryRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -47,6 +57,7 @@ import jakarta.persistence.EntityManager;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("local")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@Import(RepostQueryRepository.class)
 class MembershipPostgresIntegrationTest {
 
     private static final OffsetDateTime NOW = OffsetDateTime.parse("2026-10-12T00:00:00.123456Z");
@@ -63,6 +74,14 @@ class MembershipPostgresIntegrationTest {
     private JdbcTemplate jdbcTemplate;
     @Autowired private MembershipGrantRepository grantRepository;
     @Autowired private PaymentRepository paymentRepository;
+    @Autowired
+    private PostMediaRepository postMediaRepository;
+    @Autowired
+    private PostLikeRepository postLikeRepository;
+    @Autowired
+    private PostBookmarkRepository postBookmarkRepository;
+    @Autowired
+    private RepostQueryRepository repostQueryRepository;
 
     @DynamicPropertySource
     static void configurePostgres(DynamicPropertyRegistry registry) {
@@ -181,6 +200,41 @@ class MembershipPostgresIntegrationTest {
 
     private MembershipService service() {
         return new MembershipService(membershipRepository, grantRepository, paymentRepository, userRepository, FIXED_CLOCK);
+    }
+
+    @Test
+    void timelineBadgesForAuthorsAndRepostersUseOneMembershipQuery() {
+        User active = saveUser();
+        User expired = saveUser();
+        User reposter = saveUser();
+        saveMembership(active, NOW.plusDays(30));
+        saveMembership(expired, NOW);
+        saveMembership(reposter, NOW.plusDays(30));
+        Post first = Post.create(active, "active author");
+        Post second = Post.create(expired, "expired author");
+        entityManager.persist(first);
+        entityManager.persist(second);
+        entityManager.flush();
+        PostResponseAssembler assembler = new PostResponseAssembler(postMediaRepository, postLikeRepository,
+                postBookmarkRepository, repostQueryRepository, service());
+        Statistics statistics = statistics();
+        statistics.clear();
+
+        var responses = assembler.toTimelinePostCards(List.of(
+                new PostTimelineItem(first, new ReposterInfoResponse(reposter.getId(), "Reposter", NOW, false), NOW),
+                new PostTimelineItem(second, null, NOW)), null);
+
+        assertThat(responses).extracting(response -> response.authorMembershipBadge()).containsExactly(true, false);
+        assertThat(responses.getFirst().reposterInfo().membershipBadge()).isTrue();
+        long membershipQueries = Arrays.stream(statistics.getQueries())
+                .filter(query -> query.contains("UserMembership"))
+                .mapToLong(query -> statistics.getQueryStatistics(query).getExecutionCount())
+                .sum();
+        assertThat(membershipQueries).isEqualTo(1);
+
+        statistics.clear();
+        assertThat(assembler.toTimelinePostCards(List.of(), null)).isEmpty();
+        assertThat(statistics.getPrepareStatementCount()).isZero();
     }
 
     private User saveUser() {

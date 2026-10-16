@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
@@ -51,6 +52,9 @@ class UserServiceGameStatsTest {
     @Mock
     private LightweightSecurityScanService lightweightSecurityScanService;
 
+    @Mock
+    private MembershipService membershipService;
+
     private UserService userService;
 
     @BeforeEach
@@ -62,7 +66,8 @@ class UserServiceGameStatsTest {
                 postMediaRepository,
                 mediaStorageService,
                 mediaUploadSecurityService,
-                lightweightSecurityScanService
+                lightweightSecurityScanService,
+                membershipService
         );
     }
 
