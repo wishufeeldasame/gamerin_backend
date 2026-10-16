@@ -27,6 +27,7 @@ import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequ
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringReviewRequest;
 import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
+import com.gamerin.backend.domain.mentoring.entity.MentorStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
 import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
@@ -372,6 +373,7 @@ class ExtendedNotificationIntegrationTest {
 
             MentorProfile profile = new MentorProfile();
             profile.setUser(managedMentor);
+            profile.setStatus(MentorStatus.ACTIVE);
             profile = mentorProfileRepository.saveAndFlush(profile);
 
             MentoringProgram program = new MentoringProgram();
