@@ -229,16 +229,14 @@ public class ReportService {
         AdminReportDetailResponse.ReportUserSummary reporterSummary = createReporterSummary(report.getReporter());
 
         // 2. 피신고자(대상자) 요약 정보 식별
-        User targetUser = resolveTargetUser(report.getTargetType(), report.getTargetId());
+        User targetUser = resolveTargetUser(report);
         AdminReportDetailResponse.ReportUserSummary targetUserSummary = (targetUser != null)
                 ? createReporterSummary(targetUser)
                 : null;
 
-        // 3. 콘텐츠 숨김 여부
+        // 3. 콘텐츠 숨김 여부 (이슈 #76: 읽기 전용 트랜잭션에서 행 잠금 FOR UPDATE 실행 방지를 위해 비잠금 조회 사용)
         boolean isHidden = reportCountRepository
-                .findByTargetTypeAndTargetId(report.getTargetType(), report.getTargetId())
-                .map(ReportCount::isHidden)
-                .orElse(false);
+                .existsByTargetTypeAndTargetIdAndIsHiddenTrue(report.getTargetType(), report.getTargetId());
 
         return new AdminReportDetailResponse(
                 ReportResponse.from(report),
@@ -252,7 +250,7 @@ public class ReportService {
      */
     @Transactional
     public AdminReportDetailResponse startReportReview(UUID adminId, String reportIdOrCode) {
-        Report report = findReportByIdOrCode(reportIdOrCode);
+        Report report = findReportByIdOrCodeForUpdate(reportIdOrCode);
         User admin = userRepository.findById(adminId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
 
@@ -276,19 +274,7 @@ public class ReportService {
     @Transactional
     public AdminReportDetailResponse resolveReport(UUID adminId, String reportIdOrCode,
             AdminReportResolutionRequest request) {
-
-        // [변경] 일반 조회 → 비관적 쓰기 락 조회로 교체 (동시 요청 중복 처리 방지)
-        Report report;
-        try {
-            UUID reportId = UUID.fromString(reportIdOrCode);
-            report = reportRepository.findByIdForUpdate(reportId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신고 건을 찾을 수 없습니다."));
-        } catch (IllegalArgumentException e) {
-            // UUID 형식이 아니면 신고 코드로 조회
-            report = reportRepository.findByReportCodeForUpdate(reportIdOrCode)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                            "신고 코드를 찾을 수 없습니다: " + reportIdOrCode));
-        }
+        Report report = findReportByIdOrCodeForUpdate(reportIdOrCode);
 
         // 이미 종결된 신고 중복 처리 방어 (락 획득 후 상태 재확인)
         if (report.getStatus() == ReportStatus.RESOLVED || report.getStatus() == ReportStatus.REJECTED) {
@@ -331,7 +317,7 @@ public class ReportService {
 
         // 3. 피신고자 제재 부여 (처리 완료이고 제재 유형이 선택된 경우)
         if (request.decision() == ReportStatus.RESOLVED && request.penaltyType() != null) {
-            User targetUser = resolveTargetUser(report.getTargetType(), report.getTargetId());
+            User targetUser = resolveTargetUser(report);
             if (targetUser != null) {
                 UserPenaltyCreateRequest penaltyRequest = new UserPenaltyCreateRequest(
                         request.penaltyType(),
@@ -422,6 +408,20 @@ public class ReportService {
         }
     }
 
+    private Report findReportByIdOrCodeForUpdate(String reportIdOrCode) {
+        try {
+            UUID id = UUID.fromString(reportIdOrCode);
+            return reportRepository.findByIdForUpdate(id)
+                    .orElseGet(() -> reportRepository.findByReportCodeForUpdate(reportIdOrCode)
+                            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                                    "신고 내역을 찾을 수 없습니다: " + reportIdOrCode)));
+        } catch (IllegalArgumentException e) {
+            return reportRepository.findByReportCodeForUpdate(reportIdOrCode)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                            "신고 내역을 찾을 수 없습니다: " + reportIdOrCode));
+        }
+    }
+
     private AdminReportDetailResponse.ReportUserSummary createReporterSummary(User user) {
         long reportsCount = reportRepository.countByTargetTypeAndTargetId(ReportTargetType.USER, user.getId());
         List<UserPenaltyResponse> penalties = userPenaltyService.getUserPenalties(user.getId(), PageRequest.of(0, 5))
@@ -441,18 +441,38 @@ public class ReportService {
                 activeSanction);
     }
 
-    private User resolveTargetUser(ReportTargetType targetType, UUID targetId) {
-        return switch (targetType) {
+    private User resolveTargetUser(Report report) {
+        UUID targetId = report.getTargetId();
+        return switch (report.getTargetType()) {
             case USER -> userRepository.findById(targetId).orElse(null);
             case POST -> postRepository.findById(targetId).map(Post::getAuthor).orElse(null);
             case COMMENT -> postCommentRepository.findById(targetId).map(PostComment::getAuthor).orElse(null);
             case MESSAGE -> directMessageRepository.findById(targetId).map(DirectMessage::getSender).orElse(null);
             case MENTORING -> mentoringApplicationRepository.findById(targetId)
-                    .map(app -> (app.getProgram() != null && app.getProgram().getMentor() != null)
-                            ? app.getProgram().getMentor().getUser()
-                            : app.getMentee())
+                    .map(app -> mentoringCounterpart(app, report.getReporter().getId()))
                     .orElse(null);
         };
+    }
+
+    /**
+     * 멘토링 신청 건에서 신고자의 상대방(멘토↔멘티)을 반환한다. 신고자가 참여자가 아니면 null.
+     */
+    private User mentoringCounterpart(MentoringApplication app, UUID reporterId) {
+        User mentee = app.getMentee();
+        User mentor = (app.getProgram() != null && app.getProgram().getMentor() != null)
+                ? app.getProgram().getMentor().getUser()
+                : null;
+        // 멘토·멘티가 같은 비정상 데이터에서도 신고자 본인이 피신고자가 되지 않게 한다.
+        if (mentor == null || mentee == null || mentor.getId().equals(mentee.getId())) {
+            return null;
+        }
+        if (reporterId.equals(mentor.getId())) {
+            return mentee;
+        }
+        if (reporterId.equals(mentee.getId())) {
+            return mentor;
+        }
+        return null;
     }
 
     /**
@@ -466,14 +486,17 @@ public class ReportService {
                     .map(comment -> comment.getDeletedAt() == null && comment.getPost().getDeletedAt() == null)
                     .orElse(false);
             case USER -> userRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
-            case MENTORING -> mentoringApplicationRepository.existsById(targetId);
+            // 신청 건 참여자(멘토·멘티)만 상대방을 신고할 수 있다.
+            case MENTORING -> mentoringApplicationRepository.findById(targetId)
+                    .map(app -> mentoringCounterpart(app, reporterId) != null)
+                    .orElse(false);
             case MESSAGE ->
                 directMessageRepository.findActiveByIdAndParticipantUserId(targetId, reporterId).isPresent();
         };
 
         if (!exists) {
-            String message = targetType == ReportTargetType.MESSAGE
-                    ? "신고 대상 메시지이(가) 존재하지 않거나 접근 권한이 없습니다."
+            String message = (targetType == ReportTargetType.MESSAGE || targetType == ReportTargetType.MENTORING)
+                    ? "신고 대상 " + targetType.getDescription() + "이(가) 존재하지 않거나 접근 권한이 없습니다."
                     : "신고 대상 " + targetType.getDescription() + "이(가) 존재하지 않거나 이미 삭제되었습니다.";
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, message);
         }
