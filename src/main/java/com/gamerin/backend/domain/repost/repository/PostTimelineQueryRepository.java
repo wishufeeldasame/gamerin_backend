@@ -196,7 +196,8 @@ public class PostTimelineQueryRepository {
                                 : new ReposterInfoResponse(
                                         row.reposterId(),
                                         row.reposterNickname(),
-                                        row.repostedAt()
+                                        row.repostedAt(),
+                                        false
                                 ),
                         row.activityAt()
                 ))

@@ -136,6 +136,11 @@ public class Payment {
         this.paymentMethodType = paymentMethodType;
     }
 
+    public void recordCancel(String aid, OffsetDateTime canceledAt) {
+        this.canceledAid = aid;
+        this.canceledAt = canceledAt;
+    }
+
     public boolean isReadyExpired(OffsetDateTime now) {
         return readyAt == null || !readyAt.plus(READY_TTL).isAfter(now);
     }

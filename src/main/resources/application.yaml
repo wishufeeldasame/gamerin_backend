@@ -49,6 +49,10 @@ app:
       hidden-hard-delete-after: 14d
       initial-delay-ms: 60000
       fixed-delay-ms: 3600000
+  payment:
+    recovery:
+      initial-delay-ms: 60000
+      fixed-delay-ms: 300000
   hashtag:
     backfill:
       enabled: ${APP_HASHTAG_BACKFILL_ENABLED:false}
@@ -78,6 +82,8 @@ kakaopay:
     read-timeout: 15s
   # 허용하는 유일한 CID. 비어 있으면 결제 준비를 거부한다.
   cid: ${KAKAOPAY_CID:}
+  # 결제 취소 API 기능 플래그. 사용자 화면 연결은 없다.
+  cancel-enabled: ${KAKAOPAY_CANCEL_ENABLED:false}
 
 openai:
   api:

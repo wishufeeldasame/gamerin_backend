@@ -16,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.post.service.LightweightSecurityScanService;
 import com.gamerin.backend.domain.post.service.MediaStorageService;
 import com.gamerin.backend.domain.post.service.MediaUploadSecurityService;
@@ -45,6 +46,7 @@ public class UserService {
     private final MediaStorageService mediaStorageService;
     private final MediaUploadSecurityService mediaUploadSecurityService;
     private final LightweightSecurityScanService lightweightSecurityScanService;
+    private final MembershipService membershipService;
 
     public UserService(
             UserRepository userRepository,
@@ -53,7 +55,8 @@ public class UserService {
             PostMediaRepository postMediaRepository,
             MediaStorageService mediaStorageService,
             MediaUploadSecurityService mediaUploadSecurityService,
-            LightweightSecurityScanService lightweightSecurityScanService
+            LightweightSecurityScanService lightweightSecurityScanService,
+            MembershipService membershipService
     ) {
         this.userRepository = userRepository;
         this.followRepository = followRepository;
@@ -62,6 +65,7 @@ public class UserService {
         this.mediaStorageService = mediaStorageService;
         this.mediaUploadSecurityService = mediaUploadSecurityService;
         this.lightweightSecurityScanService = lightweightSecurityScanService;
+        this.membershipService = membershipService;
     }
 
     @Transactional(readOnly = true)
@@ -111,6 +115,7 @@ public class UserService {
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null ? toPublicGameStats(profile.getGameStats()) : null,
                 profile != null && profile.isVerifiedBadge(),
+                membershipService.isActive(user.getId()),
                 isFollowing,
                 followsViewer,
                 followersCount,

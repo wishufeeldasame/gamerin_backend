@@ -183,13 +183,15 @@ class AuthControllerTest {
         );
         ReflectionTestUtils.setField(user, "id", userId);
         CustomUserPrincipal principal = CustomUserPrincipal.from(user);
-        MeResponse meResponse = new MeResponse(userId, "tester", "Tester", "ROLE_USER", "ACTIVE", true);
+        MeResponse meResponse = new MeResponse(userId, "tester", "Tester", "ROLE_USER", "ACTIVE", true, false);
 
         when(localAuthService.getMe(principal)).thenReturn(meResponse);
 
         ApiResponse<MeResponse> response = authController.me(principal);
 
         assertThat(response.data()).isEqualTo(meResponse);
+        assertThat(response.data().hasPassword()).isTrue();
+        assertThat(response.data().membershipBadge()).isFalse();
     }
 
     private TokenService.AuthResult authResult(UUID userId, String handle, String nickname) {

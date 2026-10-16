@@ -30,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -99,6 +100,30 @@ class UserPenaltyServiceTest {
     }
 
     @Test
+    @DisplayName("경고 제재는 이력 전용으로 비활성 저장되고 계정 상태와 토큰은 유지된다")
+    void createPenalty_warning_savedInactive() {
+        // given
+        UserPenaltyCreateRequest request = new UserPenaltyCreateRequest(
+                PenaltyType.WARNING, "욕설", null, null
+        );
+
+        given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
+        given(userRepository.findActiveByIdForUpdate(targetUserId)).willReturn(Optional.of(targetUser));
+        given(userPenaltyRepository.save(any(UserPenalty.class))).willAnswer(invocation -> invocation.getArgument(0));
+
+        // when
+        UserPenaltyResponse response = userPenaltyService.createPenalty(adminId, targetUserId, request);
+
+        // then
+        assertThat(response.penaltyType()).isEqualTo(PenaltyType.WARNING);
+        assertThat(response.isActive()).isFalse();
+        assertThat(response.endAt()).isNull();
+        assertThat(targetUser.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(refreshTokenRepository, never()).findAllByUserIdAndRevokedAtIsNull(any());
+        verify(adminAuditLogRepository).save(any());
+    }
+
+    @Test
     @DisplayName("관리자 본인 계정에 제재를 부여하려고 하면 400 예외가 발생한다")
     void createPenalty_selfPenalty_throwsException() {
         // given
@@ -145,16 +170,14 @@ class UserPenaltyServiceTest {
     void releaseExpiredPenalties_success() {
         // given
         targetUser.suspend();
-        UserPenalty expiredPenalty = UserPenalty.create(
-                targetUser, null, PenaltyType.SUSPENSION_7D, "스팸", OffsetDateTime.now().minusMinutes(5), admin
-        );
-        ReflectionTestUtils.setField(expiredPenalty, "id", UUID.randomUUID());
+        UserPenalty expiredPenalty = expiredPenalty(targetUser, PenaltyType.SUSPENSION_7D);
 
         given(userPenaltyRepository.findExpiredPenalties(any(OffsetDateTime.class)))
                 .willReturn(List.of(expiredPenalty));
         // 스케줄러에서 유저 락 획득 후 계정 복구하므로 스텁 추가
-        given(userRepository.findActiveByIdForUpdate(targetUserId))
+        given(userRepository.findByIdForUpdate(targetUserId))
                 .willReturn(Optional.of(targetUser));
+        given(userPenaltyRepository.deactivateIfActive(expiredPenalty.getId())).willReturn(1);
         given(userPenaltyRepository.existsActiveSuspensionByUserId(targetUserId))
                 .willReturn(false);
 
@@ -163,7 +186,70 @@ class UserPenaltyServiceTest {
 
         // then
         assertThat(releasedCount).isEqualTo(1);
-        assertThat(expiredPenalty.isActive()).isFalse();
+        verify(userPenaltyRepository).deactivateIfActive(expiredPenalty.getId());
         assertThat(targetUser.getStatus()).isEqualTo(UserStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("탈퇴한 유저의 만료 제재도 비활성화되고 유저는 DELETED 상태로 유지되며 반환값은 실제 해제 건수와 같다")
+    void releaseExpiredPenalties_withdrawnUser_deactivatesPenaltyOnly() {
+        // given: 정지 중 탈퇴한 유저와 정지 중인 일반 유저의 만료 제재
+        targetUser.suspend();
+        targetUser.withdraw();
+        UserPenalty withdrawnPenalty = expiredPenalty(targetUser, PenaltyType.SUSPENSION_7D);
+
+        UUID otherUserId = UUID.randomUUID();
+        User otherUser = User.createLocal("other@gamerin.com", "other", "다른유저", "hash");
+        ReflectionTestUtils.setField(otherUser, "id", otherUserId);
+        otherUser.suspend();
+        UserPenalty otherPenalty = expiredPenalty(otherUser, PenaltyType.SUSPENSION_3D);
+
+        given(userPenaltyRepository.findExpiredPenalties(any(OffsetDateTime.class)))
+                .willReturn(List.of(withdrawnPenalty, otherPenalty));
+        given(userRepository.findByIdForUpdate(targetUserId)).willReturn(Optional.of(targetUser));
+        given(userRepository.findByIdForUpdate(otherUserId)).willReturn(Optional.of(otherUser));
+        given(userPenaltyRepository.deactivateIfActive(withdrawnPenalty.getId())).willReturn(1);
+        given(userPenaltyRepository.deactivateIfActive(otherPenalty.getId())).willReturn(1);
+        given(userPenaltyRepository.existsActiveSuspensionByUserId(otherUserId)).willReturn(false);
+
+        // when
+        int releasedCount = userPenaltyService.releaseExpiredPenalties();
+
+        // then
+        assertThat(releasedCount).isEqualTo(2);
+        verify(userPenaltyRepository).deactivateIfActive(withdrawnPenalty.getId());
+        verify(userPenaltyRepository).deactivateIfActive(otherPenalty.getId());
+        assertThat(targetUser.getStatus()).isEqualTo(UserStatus.DELETED);
+        assertThat(otherUser.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(userRepository, never()).findActiveByIdForUpdate(any());
+    }
+
+    @Test
+    @DisplayName("조회 이후 수동 해제되어 이미 비활성인 제재는 해제 건수에 포함하지 않고 계정 상태도 바꾸지 않는다")
+    void releaseExpiredPenalties_alreadyRevoked_notCounted() {
+        // given
+        targetUser.suspend();
+        UserPenalty revokedMeanwhile = expiredPenalty(targetUser, PenaltyType.SUSPENSION_7D);
+
+        given(userPenaltyRepository.findExpiredPenalties(any(OffsetDateTime.class)))
+                .willReturn(List.of(revokedMeanwhile));
+        given(userRepository.findByIdForUpdate(targetUserId)).willReturn(Optional.of(targetUser));
+        given(userPenaltyRepository.deactivateIfActive(revokedMeanwhile.getId())).willReturn(0);
+
+        // when
+        int releasedCount = userPenaltyService.releaseExpiredPenalties();
+
+        // then
+        assertThat(releasedCount).isZero();
+        assertThat(targetUser.getStatus()).isEqualTo(UserStatus.SUSPENDED);
+        verify(userPenaltyRepository, never()).existsActiveSuspensionByUserId(any());
+    }
+
+    private UserPenalty expiredPenalty(User user, PenaltyType penaltyType) {
+        UserPenalty penalty = UserPenalty.create(
+                user, null, penaltyType, "스팸", OffsetDateTime.now().minusMinutes(5), admin
+        );
+        ReflectionTestUtils.setField(penalty, "id", UUID.randomUUID());
+        return penalty;
     }
 }

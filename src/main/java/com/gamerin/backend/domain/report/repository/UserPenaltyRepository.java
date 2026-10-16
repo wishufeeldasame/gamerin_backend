@@ -6,6 +6,7 @@ import org.antlr.v4.runtime.atn.SemanticContext.AND;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import jakarta.persistence.LockModeType;
@@ -25,6 +26,11 @@ public interface UserPenaltyRepository extends JpaRepository<UserPenalty, UUID> 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select p from UserPenalty p where p.id = :id")
     java.util.Optional<UserPenalty> findByIdForUpdate(@Param("id") UUID id);
+
+    // 아직 활성인 제재만 비활성화하고 실제 변경 건수 반환 (만료 스케줄러와 수동 해제 경합 시 중복 집계 방지)
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE UserPenalty p SET p.isActive = false WHERE p.id = :id AND p.isActive = true")
+    int deactivateIfActive(@Param("id") UUID id);
 
     // 경고(WARNING)를 제외한 실제 활성 '정지' 제재가 존재하는지 확인 (미들웨어 차단 및 해제 복구 판단용)
     @Query("SELECT COUNT(p) > 0 FROM UserPenalty p WHERE p.user.id = :userId AND p.isActive = true AND p.penaltyType <> com.gamerin.backend.domain.report.entity.PenaltyType.WARNING")
