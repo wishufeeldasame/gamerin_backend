@@ -18,10 +18,9 @@ public record MentoringProgramResponse(
     ProgramStatus status,
     Long price,
     List<String> tags,
-    OffsetDateTime createdAt,
-    boolean membershipBadge
+    OffsetDateTime createdAt
 ) {
-    public static MentoringProgramResponse from(MentoringProgram program, boolean membershipBadge) {
+    public static MentoringProgramResponse from(MentoringProgram program) {
         return new MentoringProgramResponse(
             program.getId(),
             program.getMentor().getId(),
@@ -33,8 +32,7 @@ public record MentoringProgramResponse(
             program.getStatus(),
             program.getPrice(),
             program.getTags(),
-            program.getCreatedAt(),
-            membershipBadge
+            program.getCreatedAt()
         );
     }
 }

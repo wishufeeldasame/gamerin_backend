@@ -12,7 +12,6 @@ public record PostCardResponse(
         String authorHandle,
         String authorProfileImageUrl,
         boolean authorVerifiedBadge,
-        boolean authorMembershipBadge,
         String content,
         List<PostMediaResponse> media,
         long likes,

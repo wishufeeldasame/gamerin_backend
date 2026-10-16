@@ -27,7 +27,6 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
-import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramUpdateRequest;
 import com.gamerin.backend.domain.mentoring.dto.response.MentorProfileResponse;
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringApplicationResponse;
@@ -80,9 +79,6 @@ class MentoringServiceTest {
         @Mock
         private NotificationCommandService notificationCommandService;
 
-        @Mock
-        private MembershipService membershipService;
-
         private MentoringService mentoringService;
 
         @BeforeEach
@@ -95,8 +91,7 @@ class MentoringServiceTest {
                                 mentoringReviewRepository,
                                 mileageService,
                                 settlementProcessor,
-                                notificationCommandService,
-                                membershipService);
+                                notificationCommandService);
         }
 
         @Test

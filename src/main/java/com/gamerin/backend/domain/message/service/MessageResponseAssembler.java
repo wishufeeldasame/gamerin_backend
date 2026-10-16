@@ -80,8 +80,7 @@ public class MessageResponseAssembler {
                 "@" + user.getHandle(),
                 user.getRole().name(),
                 isOnline(user),
-                profile != null ? profile.getProfileImageUrl() : null,
-                false
+                profile != null ? profile.getProfileImageUrl() : null
         );
     }
 

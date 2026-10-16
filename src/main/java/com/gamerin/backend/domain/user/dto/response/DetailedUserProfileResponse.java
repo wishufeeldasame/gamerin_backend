@@ -14,7 +14,6 @@ public record DetailedUserProfileResponse(
         String profileImageUrl,
         Map<String, Object> gameStats,
         boolean verifiedBadge,
-        boolean membershipBadge,
         boolean isFollowing,
         boolean followsViewer,
         long followersCount,

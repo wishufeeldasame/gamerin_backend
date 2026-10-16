@@ -1,7 +1,6 @@
 package com.gamerin.backend.domain.auth.service;
 
 import com.gamerin.backend.domain.auth.dto.request.ChangePasswordRequest;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamerin.backend.domain.auth.dto.request.FindIdRequest;
 import com.gamerin.backend.domain.auth.dto.request.FindPasswordRequest;
 import com.gamerin.backend.domain.auth.dto.request.LoginRequest;
@@ -18,16 +17,12 @@ import com.gamerin.backend.domain.auth.repository.PasswordResetTokenRepository;
 import com.gamerin.backend.domain.auth.repository.RefreshTokenRepository;
 import com.gamerin.backend.domain.auth.repository.SocialAccountRepository;
 import com.gamerin.backend.domain.auth.repository.SocialSignupSessionRepository;
-import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserStatus;
 import com.gamerin.backend.domain.user.repository.UserRepository;
-import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -79,9 +74,6 @@ class LocalAuthServiceTest {
         private PasswordResetMailService passwordResetMailService;
 
         @Mock
-        private MembershipService membershipService;
-
-        @Mock
         private EmailVerificationService emailVerificationService;
 
         private LocalAuthService localAuthService;
@@ -98,38 +90,7 @@ class LocalAuthServiceTest {
                                 tokenService,
                                 passwordResetMailService,
                                 emailVerificationService,
-                                30L,
-                                membershipService);
-        }
-
-        @ParameterizedTest
-        @CsvSource({"true,true", "true,false", "false,true", "false,false"})
-        void getMePreservesPasswordCapabilityAndMembershipIndependently(boolean hasPassword, boolean active) {
-                User user = User.createLocal("member@example.com", "member", "Member", "encoded");
-                UUID userId = UUID.randomUUID();
-                ReflectionTestUtils.setField(user, "id", userId);
-                if (!hasPassword) {
-                        ReflectionTestUtils.setField(user, "passwordHash", null);
-                }
-                when(userRepository.findById(userId)).thenReturn(Optional.of(user));
-                when(membershipService.isActive(userId)).thenReturn(active);
-
-                var response = localAuthService.getMe(CustomUserPrincipal.from(user));
-
-                assertThat(response.userId()).isEqualTo(userId);
-                assertThat(response.handle()).isEqualTo("member");
-                assertThat(response.nickname()).isEqualTo("Member");
-                assertThat(response.role()).isEqualTo("ROLE_USER");
-                assertThat(response.status()).isEqualTo("ACTIVE");
-                assertThat(response.hasPassword()).isEqualTo(hasPassword);
-                assertThat(response.membershipBadge()).isEqualTo(active);
-                var json = new ObjectMapper().valueToTree(response);
-                assertThat(json.has("hasPassword")).isTrue();
-                assertThat(json.has("membershipBadge")).isTrue();
-                assertThat(json.get("hasPassword").booleanValue()).isEqualTo(hasPassword);
-                assertThat(json.get("membershipBadge").booleanValue()).isEqualTo(active);
-                verify(membershipService).isActive(userId);
-                verify(membershipService, never()).findActiveUserIds(any());
+                                30L);
         }
 
         @Test

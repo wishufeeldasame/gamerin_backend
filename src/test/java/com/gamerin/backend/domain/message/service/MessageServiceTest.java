@@ -8,14 +8,12 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -31,12 +29,9 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMultipartMessageRequest;
-import com.gamerin.backend.domain.message.dto.request.SharePostMessageRequest;
 import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
 import com.gamerin.backend.domain.message.entity.DirectMessage;
 import com.gamerin.backend.domain.message.entity.DirectMessageAttachment;
@@ -113,9 +108,6 @@ class MessageServiceTest {
     @Mock
     private NotificationCommandService notificationCommandService;
 
-    @Mock
-    private MembershipService membershipService;
-
     private MessageService messageService;
 
     @BeforeEach
@@ -137,8 +129,7 @@ class MessageServiceTest {
                 videoMetadataService,
                 videoOptimizationService,
                 sseStreamTokenService,
-                notificationCommandService,
-                membershipService
+                notificationCommandService
         );
     }
 
@@ -279,121 +270,6 @@ class MessageServiceTest {
     }
 
     @Test
-    void getConversationsEnrichesNestedRecipientsWithOneMembershipLookup() throws Exception {
-        User viewer = user("viewer");
-        User activeRecipient = user("active");
-        User inactiveRecipient = user("inactive");
-        MessageConversation first = conversation();
-        MessageConversation second = conversation();
-        MessageParticipant firstViewer = participant(first, viewer);
-        MessageParticipant secondViewer = participant(second, viewer);
-        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(messageParticipantRepository.findActiveByUserIdWithConversation(viewer.getId()))
-                .thenReturn(List.of(firstViewer, secondViewer));
-        when(messageParticipantRepository.findByConversationId(first.getId()))
-                .thenReturn(List.of(firstViewer, participant(first, activeRecipient)));
-        when(messageParticipantRepository.findByConversationId(second.getId()))
-                .thenReturn(List.of(secondViewer, participant(second, inactiveRecipient)));
-        when(membershipService.findActiveUserIds(List.of(activeRecipient.getId(), inactiveRecipient.getId())))
-                .thenReturn(Set.of(activeRecipient.getId()));
-
-        List<ConversationResponse> responses = messageService.getConversations(CustomUserPrincipal.from(viewer));
-
-        assertThat(responses).extracting(response -> response.recipient().membershipBadge())
-                .containsExactly(true, false);
-        var json = new ObjectMapper().findAndRegisterModules().valueToTree(responses);
-        assertThat(json.get(0).get("recipient").get("membershipBadge").booleanValue()).isTrue();
-        assertThat(json.get(1).get("recipient").get("membershipBadge").booleanValue()).isFalse();
-        assertThat(json.get(0).has("participants")).isFalse();
-        assertThat(responses).extracting(ConversationResponse::id).containsExactly(first.getId(), second.getId());
-        verify(membershipService).findActiveUserIds(List.of(activeRecipient.getId(), inactiveRecipient.getId()));
-        verify(membershipService, never()).isActive(any());
-    }
-
-    @Test
-    void getConversationsSkipsMembershipLookupForEmptyResult() {
-        User viewer = user("viewer");
-        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-
-        assertThat(messageService.getConversations(CustomUserPrincipal.from(viewer))).isEmpty();
-
-        verifyNoInteractions(membershipService);
-    }
-
-    @Test
-    void searchRecipientsAddsMembershipBadgesWithOneLookup() {
-        User viewer = user("viewer");
-        User active = user("active");
-        User inactive = user("inactive");
-        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(userRepository.searchMessageRecipients(eq(viewer.getId()), eq("recipient"), any()))
-                .thenReturn(List.of(active, inactive));
-        when(membershipService.findActiveUserIds(List.of(active.getId(), inactive.getId())))
-                .thenReturn(Set.of(active.getId()));
-
-        var responses = messageService.searchRecipients(CustomUserPrincipal.from(viewer), " recipient ", 20);
-
-        assertThat(responses).extracting(response -> response.membershipBadge()).containsExactly(true, false);
-        assertThat(responses).extracting(response -> response.id()).containsExactly(active.getId(), inactive.getId());
-        verify(membershipService).findActiveUserIds(List.of(active.getId(), inactive.getId()));
-        verify(membershipService, never()).isActive(any());
-    }
-
-    @Test
-    void searchRecipientsSkipsMembershipLookupForEmptyResult() {
-        User viewer = user("viewer");
-        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-
-        assertThat(messageService.searchRecipients(CustomUserPrincipal.from(viewer), "unknown", 20)).isEmpty();
-
-        verifyNoInteractions(membershipService);
-    }
-
-    @Test
-    void sharePostEnrichesRecipientsInRequestedOrderWithOneMembershipLookup() {
-        User viewer = user("viewer");
-        User active = user("active");
-        User inactive = user("inactive");
-        Post sharedPost = post(viewer);
-        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(postRepository.findByIdAndDeletedAtIsNull(sharedPost.getId())).thenReturn(Optional.of(sharedPost));
-        for (User recipient : List.of(active, inactive)) {
-            MessageConversation conversation = conversation();
-            MessageParticipant viewerParticipant = participant(conversation, viewer);
-            MessageParticipant recipientParticipant = participant(conversation, recipient);
-            List<MessageParticipant> participants = List.of(viewerParticipant, recipientParticipant);
-            List<String> orderedIds = new java.util.ArrayList<>(List.of(viewer.getId().toString(), recipient.getId().toString()));
-            orderedIds.sort(String::compareTo);
-            when(userRepository.findByIdAndDeletedAtIsNull(recipient.getId())).thenReturn(Optional.of(recipient));
-            when(messageConversationRepository.findActiveByDirectKeyForUpdate(String.join(":", orderedIds)))
-                    .thenReturn(Optional.of(conversation));
-            when(messageParticipantRepository.findByConversationIdAndUserId(conversation.getId(), viewer.getId()))
-                    .thenReturn(Optional.of(viewerParticipant));
-            when(messageParticipantRepository.findByConversationId(conversation.getId())).thenReturn(participants);
-            when(messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(conversation.getId()))
-                    .thenReturn(participants);
-        }
-        when(directMessageRepository.save(any(DirectMessage.class))).thenAnswer(invocation -> {
-            DirectMessage saved = invocation.getArgument(0);
-            ReflectionTestUtils.setField(saved, "id", UUID.randomUUID());
-            ReflectionTestUtils.setField(saved, "createdAt", OffsetDateTime.now());
-            return saved;
-        });
-        when(membershipService.findActiveUserIds(List.of(inactive.getId(), active.getId())))
-                .thenReturn(Set.of(active.getId()));
-
-        var responses = messageService.sharePost(CustomUserPrincipal.from(viewer),
-                new SharePostMessageRequest(sharedPost.getId(), null, List.of(inactive.getId(), active.getId()), null));
-
-        assertThat(responses).extracting(response -> response.recipient().id())
-                .containsExactly(inactive.getId(), active.getId());
-        assertThat(responses).extracting(response -> response.recipient().membershipBadge())
-                .containsExactly(false, true);
-        verify(membershipService).findActiveUserIds(List.of(inactive.getId(), active.getId()));
-        verify(membershipService, never()).isActive(any());
-    }
-
-    @Test
     void createConversationReactivatesDeletedParticipant() {
         User viewer = user("viewer");
         User recipient = user("recipient");
@@ -412,9 +288,8 @@ class MessageServiceTest {
         when(messageParticipantRepository.findByConversationId(conversation.getId()))
                 .thenReturn(List.of(viewerParticipant, recipientParticipant));
         when(directMessageRepository.findRecentActiveByConversationIdAfter(any(), any(), any())).thenReturn(List.of());
-        when(membershipService.isActive(recipient.getId())).thenReturn(true);
 
-        ConversationResponse response = messageService.createConversation(
+        messageService.createConversation(
                 CustomUserPrincipal.from(viewer),
                 new CreateConversationRequest(null, recipient.getId())
         );
@@ -422,8 +297,6 @@ class MessageServiceTest {
         assertThat(viewerParticipant.getDeletedAt()).isNull();
         assertThat(viewerParticipant.getClearedAt()).isEqualTo(clearedAt);
         assertThat(viewerParticipant.getLastReadAt()).isNotNull();
-        assertThat(response.recipient().membershipBadge()).isTrue();
-        verify(membershipService).isActive(recipient.getId());
         verify(messageConversationRepository).insertDirectConversationIfAbsent(any());
         verify(messageParticipantRepository).insertParticipantIfAbsent(conversation.getId(), viewer.getId());
         verify(messageParticipantRepository).insertParticipantIfAbsent(conversation.getId(), recipient.getId());
@@ -451,7 +324,7 @@ class MessageServiceTest {
                 .thenReturn(List.of(viewerParticipant, recipientParticipant));
         when(directMessageRepository.findRecentActiveByConversationId(any(), any())).thenReturn(List.of());
 
-        ConversationResponse response = messageService.createConversation(
+        messageService.createConversation(
                 CustomUserPrincipal.from(viewer),
                 new CreateConversationRequest(null, recipient.getId())
         );
@@ -459,7 +332,6 @@ class MessageServiceTest {
         assertThat(recipientParticipant.getDeletedAt()).isNotNull();
         assertThat(recipientParticipant.getClearedAt()).isEqualTo(recipientClearedAt);
         assertThat(recipientParticipant.getLastReadAt()).isNull();
-        assertThat(response.recipient().membershipBadge()).isFalse();
     }
 
     @Test

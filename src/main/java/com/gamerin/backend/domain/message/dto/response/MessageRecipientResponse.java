@@ -8,10 +8,6 @@ public record MessageRecipientResponse(
         String handle,
         String role,
         boolean online,
-        String profileImageUrl,
-        boolean membershipBadge
+        String profileImageUrl
 ) {
-    public MessageRecipientResponse withMembershipBadge(boolean active) {
-        return new MessageRecipientResponse(id, name, handle, role, online, profileImageUrl, active);
-    }
 }

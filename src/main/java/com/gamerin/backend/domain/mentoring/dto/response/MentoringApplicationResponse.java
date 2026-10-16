@@ -3,7 +3,6 @@ package com.gamerin.backend.domain.mentoring.dto.response;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
 import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
@@ -21,22 +20,13 @@ public record MentoringApplicationResponse(
     PaymentStatus paymentStatus,
     String message,
     OffsetDateTime createdAt,
-    boolean reviewed,
-    @JsonInclude(JsonInclude.Include.NON_NULL) Boolean mentorMembershipBadge,
-    @JsonInclude(JsonInclude.Include.NON_NULL) Boolean menteeMembershipBadge
+    boolean reviewed
 ) {
     public static MentoringApplicationResponse from(MentoringApplication application){
-        // Admin endpoints share this response but do not expose membership badges.
-        return create(application, false, null, null);
+        return from(application, false);
     }
 
-    public static MentoringApplicationResponse from(MentoringApplication application, boolean reviewed,
-            boolean mentorMembershipBadge, boolean menteeMembershipBadge){
-        return create(application, reviewed, mentorMembershipBadge, menteeMembershipBadge);
-    }
-
-    private static MentoringApplicationResponse create(MentoringApplication application, boolean reviewed,
-            Boolean mentorMembershipBadge, Boolean menteeMembershipBadge){
+    public static MentoringApplicationResponse from(MentoringApplication application, boolean reviewed){
         return new MentoringApplicationResponse(
             application.getId(),
             application.getProgram().getId(),
@@ -50,9 +40,7 @@ public record MentoringApplicationResponse(
             application.getPaymentStatus(),
             application.getMessage(),
             application.getCreatedAt(),
-            reviewed,
-            mentorMembershipBadge,
-            menteeMembershipBadge
+            reviewed
         );
     }
 }

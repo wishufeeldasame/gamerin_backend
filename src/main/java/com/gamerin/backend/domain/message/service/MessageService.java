@@ -11,7 +11,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.data.domain.PageRequest;
@@ -23,7 +22,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
-import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMultipartMessageRequest;
@@ -88,7 +86,6 @@ public class MessageService {
     private final VideoOptimizationService videoOptimizationService;
     private final SseStreamTokenService sseStreamTokenService;
     private final NotificationCommandService notificationCommandService;
-    private final MembershipService membershipService;
 
     public MessageService(
             UserRepository userRepository,
@@ -107,8 +104,7 @@ public class MessageService {
             VideoMetadataService videoMetadataService,
             VideoOptimizationService videoOptimizationService,
             SseStreamTokenService sseStreamTokenService,
-            NotificationCommandService notificationCommandService,
-            MembershipService membershipService
+            NotificationCommandService notificationCommandService
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -127,7 +123,6 @@ public class MessageService {
         this.videoOptimizationService = videoOptimizationService;
         this.sseStreamTokenService = sseStreamTokenService;
         this.notificationCommandService = notificationCommandService;
-        this.membershipService = membershipService;
     }
 
     @Transactional(readOnly = true)
@@ -136,10 +131,9 @@ public class MessageService {
         List<MessageParticipant> viewerParticipants =
                 messageParticipantRepository.findActiveByUserIdWithConversation(viewer.getId());
 
-        List<ConversationResponse> responses = viewerParticipants.stream()
+        return viewerParticipants.stream()
                 .map(participant -> toConversationResponse(participant.getConversation(), viewer.getId(), participant))
                 .toList();
-        return withMembershipBadges(responses);
     }
 
     public ConversationResponse createConversation(
@@ -151,10 +145,7 @@ public class MessageService {
 
         MessageConversation conversation = getOrCreateDirectConversation(viewer, recipient);
         MessageParticipant viewerParticipant = getOrCreateParticipant(conversation, viewer);
-        return withMembershipBadge(
-                toConversationResponse(conversation, viewer.getId(), viewerParticipant),
-                membershipService.isActive(recipient.getId())
-        );
+        return toConversationResponse(conversation, viewer.getId(), viewerParticipant);
     }
 
     public SseEmitter streamMessages(CustomUserPrincipal principal) {
@@ -358,7 +349,7 @@ public class MessageService {
         String normalizedKeyword = keyword == null ? "" : keyword.trim();
         int pageSize = clampSize(size, DEFAULT_RECIPIENT_SEARCH_SIZE);
 
-        List<MessageRecipientResponse> recipients = userRepository.searchMessageRecipients(
+        return userRepository.searchMessageRecipients(
                         viewer.getId(),
                         normalizedKeyword,
                         PageRequest.of(0, pageSize)
@@ -366,15 +357,6 @@ public class MessageService {
                 .stream()
                 .filter(User::isActive)
                 .map(messageResponseAssembler::toRecipient)
-                .toList();
-        if (recipients.isEmpty()) {
-            return recipients;
-        }
-        Set<UUID> activeUserIds = membershipService.findActiveUserIds(
-                recipients.stream().map(MessageRecipientResponse::id).toList()
-        );
-        return recipients.stream()
-                .map(recipient -> recipient.withMembershipBadge(activeUserIds.contains(recipient.id())))
                 .toList();
     }
 
@@ -404,31 +386,7 @@ public class MessageService {
                     toConversationResponse(conversation, viewer.getId(), viewerParticipant)
             );
         }
-        return withMembershipBadges(
-                recipients.stream().map(recipient -> responsesByRecipient.get(recipient.getId())).toList()
-        );
-    }
-
-    private List<ConversationResponse> withMembershipBadges(List<ConversationResponse> responses) {
-        if (responses.isEmpty()) {
-            return responses;
-        }
-        Set<UUID> activeUserIds = membershipService.findActiveUserIds(
-                responses.stream().map(response -> response.recipient().id()).distinct().toList()
-        );
-        return responses.stream()
-                .map(response -> withMembershipBadge(response, activeUserIds.contains(response.recipient().id())))
-                .toList();
-    }
-
-    private ConversationResponse withMembershipBadge(ConversationResponse response, boolean active) {
-        return new ConversationResponse(
-                response.id(),
-                response.recipient().withMembershipBadge(active),
-                response.messages(),
-                response.unreadCount(),
-                response.updatedAt()
-        );
+        return recipients.stream().map(recipient -> responsesByRecipient.get(recipient.getId())).toList();
     }
 
     private MessageConversation getOrCreateDirectConversation(User viewer, User recipient) {
