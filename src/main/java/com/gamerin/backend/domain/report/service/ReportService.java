@@ -229,7 +229,7 @@ public class ReportService {
         AdminReportDetailResponse.ReportUserSummary reporterSummary = createReporterSummary(report.getReporter());
 
         // 2. 피신고자(대상자) 요약 정보 식별
-        User targetUser = resolveTargetUser(report.getTargetType(), report.getTargetId());
+        User targetUser = resolveTargetUser(report);
         AdminReportDetailResponse.ReportUserSummary targetUserSummary = (targetUser != null)
                 ? createReporterSummary(targetUser)
                 : null;
@@ -317,7 +317,7 @@ public class ReportService {
 
         // 3. 피신고자 제재 부여 (처리 완료이고 제재 유형이 선택된 경우)
         if (request.decision() == ReportStatus.RESOLVED && request.penaltyType() != null) {
-            User targetUser = resolveTargetUser(report.getTargetType(), report.getTargetId());
+            User targetUser = resolveTargetUser(report);
             if (targetUser != null) {
                 UserPenaltyCreateRequest penaltyRequest = new UserPenaltyCreateRequest(
                         request.penaltyType(),
@@ -441,18 +441,38 @@ public class ReportService {
                 activeSanction);
     }
 
-    private User resolveTargetUser(ReportTargetType targetType, UUID targetId) {
-        return switch (targetType) {
+    private User resolveTargetUser(Report report) {
+        UUID targetId = report.getTargetId();
+        return switch (report.getTargetType()) {
             case USER -> userRepository.findById(targetId).orElse(null);
             case POST -> postRepository.findById(targetId).map(Post::getAuthor).orElse(null);
             case COMMENT -> postCommentRepository.findById(targetId).map(PostComment::getAuthor).orElse(null);
             case MESSAGE -> directMessageRepository.findById(targetId).map(DirectMessage::getSender).orElse(null);
             case MENTORING -> mentoringApplicationRepository.findById(targetId)
-                    .map(app -> (app.getProgram() != null && app.getProgram().getMentor() != null)
-                            ? app.getProgram().getMentor().getUser()
-                            : app.getMentee())
+                    .map(app -> mentoringCounterpart(app, report.getReporter().getId()))
                     .orElse(null);
         };
+    }
+
+    /**
+     * 멘토링 신청 건에서 신고자의 상대방(멘토↔멘티)을 반환한다. 신고자가 참여자가 아니면 null.
+     */
+    private User mentoringCounterpart(MentoringApplication app, UUID reporterId) {
+        User mentee = app.getMentee();
+        User mentor = (app.getProgram() != null && app.getProgram().getMentor() != null)
+                ? app.getProgram().getMentor().getUser()
+                : null;
+        // 멘토·멘티가 같은 비정상 데이터에서도 신고자 본인이 피신고자가 되지 않게 한다.
+        if (mentor == null || mentee == null || mentor.getId().equals(mentee.getId())) {
+            return null;
+        }
+        if (reporterId.equals(mentor.getId())) {
+            return mentee;
+        }
+        if (reporterId.equals(mentee.getId())) {
+            return mentor;
+        }
+        return null;
     }
 
     /**
@@ -466,14 +486,17 @@ public class ReportService {
                     .map(comment -> comment.getDeletedAt() == null && comment.getPost().getDeletedAt() == null)
                     .orElse(false);
             case USER -> userRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
-            case MENTORING -> mentoringApplicationRepository.existsById(targetId);
+            // 신청 건 참여자(멘토·멘티)만 상대방을 신고할 수 있다.
+            case MENTORING -> mentoringApplicationRepository.findById(targetId)
+                    .map(app -> mentoringCounterpart(app, reporterId) != null)
+                    .orElse(false);
             case MESSAGE ->
                 directMessageRepository.findActiveByIdAndParticipantUserId(targetId, reporterId).isPresent();
         };
 
         if (!exists) {
-            String message = targetType == ReportTargetType.MESSAGE
-                    ? "신고 대상 메시지이(가) 존재하지 않거나 접근 권한이 없습니다."
+            String message = (targetType == ReportTargetType.MESSAGE || targetType == ReportTargetType.MENTORING)
+                    ? "신고 대상 " + targetType.getDescription() + "이(가) 존재하지 않거나 접근 권한이 없습니다."
                     : "신고 대상 " + targetType.getDescription() + "이(가) 존재하지 않거나 이미 삭제되었습니다.";
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, message);
         }
