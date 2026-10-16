@@ -6,14 +6,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -26,7 +23,6 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.notification.entity.Notification;
-import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.notification.repository.NotificationRepository;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostLike;
@@ -42,14 +38,12 @@ class NotificationQueryServiceTest {
     private UserRepository userRepository;
     @Mock
     private NotificationRepository notificationRepository;
-    @Mock
-    private MembershipService membershipService;
 
     private NotificationQueryService service;
 
     @BeforeEach
     void setUp() {
-        service = new NotificationQueryService(userRepository, notificationRepository, membershipService);
+        service = new NotificationQueryService(userRepository, notificationRepository);
     }
 
     @Test
@@ -67,7 +61,6 @@ class NotificationQueryServiceTest {
                 .thenReturn(List.of(notificationId.toString(), nextId.toString()));
         when(notificationRepository.findAllWithDetailsByIdIn(List.of(notificationId, nextId)))
                 .thenReturn(List.of(notification));
-        when(membershipService.findActiveUserIds(Set.of(actor.getId()))).thenReturn(Set.of(actor.getId()));
 
         var firstPage = service.getNotifications(CustomUserPrincipal.from(recipient), null, 1);
 
@@ -76,7 +69,6 @@ class NotificationQueryServiceTest {
         assertThat(firstPage.nextCursor()).isNotBlank();
         assertThat(firstPage.items().getFirst().type()).isEqualTo("like");
         assertThat(firstPage.items().getFirst().actor().handle()).isEqualTo("actor");
-        assertThat(firstPage.items().getFirst().actor().membershipBadge()).isTrue();
         assertThat(firstPage.items().getFirst().postId()).isEqualTo(post.getId());
         assertThat(firstPage.items().getFirst().read()).isFalse();
 
@@ -94,8 +86,6 @@ class NotificationQueryServiceTest {
         );
 
         assertThat(secondPage.items()).isEmpty();
-        verify(membershipService).findActiveUserIds(Set.of(actor.getId()));
-        verify(membershipService, never()).isActive(any());
         verify(notificationRepository).findValidPageIdsBefore(
                 recipient.getId(),
                 createdAt,
@@ -134,61 +124,6 @@ class NotificationQueryServiceTest {
         verify(notificationRepository, org.mockito.Mockito.times(2))
                 .findValidPageIds(recipient.getId(), 21);
         verify(notificationRepository).findValidPageIds(recipient.getId(), 51);
-        verifyNoInteractions(membershipService);
-    }
-
-    @Test
-    void actorBadgesUseOneBatchWithDuplicateAndMissingActors() {
-        User recipient = savedUser("recipient", "Recipient");
-        User member = savedUser("member", "Member");
-        User nonMember = savedUser("other", "Other");
-        ReflectionTestUtils.setField(nonMember.getProfile(), "verifiedBadge", true);
-        Post post = savedPost(recipient);
-        OffsetDateTime time = OffsetDateTime.parse("2026-10-15T00:00:00Z");
-        Notification first = savedLikeNotification(UUID.randomUUID(), time, recipient, member, post);
-        Notification duplicate = savedLikeNotification(UUID.randomUUID(), time.minusSeconds(1), recipient, member, post);
-        Notification inactive = savedLikeNotification(UUID.randomUUID(), time.minusSeconds(2), recipient, nonMember, post);
-        Notification missing = savedLikeNotification(UUID.randomUUID(), time.minusSeconds(3), recipient, member, post);
-        ReflectionTestUtils.setField(missing, "actor", null);
-        List<Notification> notifications = List.of(first, duplicate, inactive, missing);
-        List<UUID> ids = notifications.stream().map(Notification::getId).toList();
-        when(userRepository.findByIdAndDeletedAtIsNull(recipient.getId())).thenReturn(Optional.of(recipient));
-        when(notificationRepository.findValidPageIds(recipient.getId(), 21))
-                .thenReturn(ids.stream().map(UUID::toString).toList());
-        when(notificationRepository.findAllWithDetailsByIdIn(ids)).thenReturn(notifications);
-        when(membershipService.findActiveUserIds(Set.of(member.getId(), nonMember.getId())))
-                .thenReturn(Set.of(member.getId()));
-
-        var response = service.getNotifications(CustomUserPrincipal.from(recipient), null, 20);
-
-        assertThat(response.items().get(0).actor().membershipBadge()).isTrue();
-        assertThat(response.items().get(1).actor().membershipBadge()).isTrue();
-        assertThat(response.items().get(2).actor().membershipBadge()).isFalse();
-        assertThat(response.items().get(2).actor().verifiedBadge()).isTrue();
-        assertThat(response.items().get(3).actor()).isNull();
-        verify(membershipService).findActiveUserIds(Set.of(member.getId(), nonMember.getId()));
-        verify(membershipService, never()).isActive(any());
-    }
-
-    @Test
-    void actorlessNotificationsDoNotQueryMembership() {
-        User recipient = savedUser("recipient", "Recipient");
-        Notification notification = savedLikeNotification(
-                UUID.randomUUID(), OffsetDateTime.parse("2026-10-15T00:00:00Z"),
-                recipient, recipient, savedPost(recipient)
-        );
-        ReflectionTestUtils.setField(notification, "actor", null);
-        when(userRepository.findByIdAndDeletedAtIsNull(recipient.getId())).thenReturn(Optional.of(recipient));
-        when(notificationRepository.findValidPageIds(recipient.getId(), 21))
-                .thenReturn(List.of(notification.getId().toString()));
-        when(notificationRepository.findAllWithDetailsByIdIn(List.of(notification.getId())))
-                .thenReturn(List.of(notification));
-
-        var response = service.getNotifications(CustomUserPrincipal.from(recipient), null, 20);
-
-        assertThat(response.items()).hasSize(1);
-        assertThat(response.items().getFirst().actor()).isNull();
-        verifyNoInteractions(membershipService);
     }
 
     @Test
