@@ -3,12 +3,16 @@ package com.gamerin.backend.domain.report.service;
 import com.gamerin.backend.domain.admin.entity.AdminAuditLog;
 import com.gamerin.backend.domain.admin.repository.AdminAuditLogRepository;
 import com.gamerin.backend.domain.admin.repository.SystemConfigRepository;
+import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
+import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
+import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.message.repository.DirectMessageRepository;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.report.dto.request.AdminReportResolutionRequest;
+import com.gamerin.backend.domain.report.dto.request.ReportCreateRequest;
 import com.gamerin.backend.domain.report.dto.request.UserPenaltyCreateRequest;
 import com.gamerin.backend.domain.report.dto.response.AdminReportDetailResponse;
 import com.gamerin.backend.domain.report.entity.PenaltyType;
@@ -21,6 +25,7 @@ import com.gamerin.backend.domain.report.repository.ReportCountRepository;
 import com.gamerin.backend.domain.report.repository.ReportRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
+import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,6 +35,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -295,5 +301,122 @@ class AdminReportServiceTest {
         // when & then
         assertThatThrownBy(() -> reportService.getAdminReportDetail("NON-EXISTENT"))
                 .isInstanceOf(ResponseStatusException.class);
+    }
+
+    // ================= [이슈 #79] MENTORING 신고의 피신고자는 신고자의 상대방 =================
+
+    private UUID mentoringApplicationId;
+    private User mentorUser;
+    private User menteeUser;
+
+    private void setUpMentoringApplication() {
+        mentoringApplicationId = UUID.randomUUID();
+
+        mentorUser = User.createLocal("mentor@gamerin.com", "mentor01", "멘토", "hash");
+        ReflectionTestUtils.setField(mentorUser, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(mentorUser, "createdAt", OffsetDateTime.now());
+
+        menteeUser = User.createLocal("mentee@gamerin.com", "mentee01", "멘티", "hash");
+        ReflectionTestUtils.setField(menteeUser, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(menteeUser, "createdAt", OffsetDateTime.now());
+
+        MentorProfile profile = new MentorProfile();
+        profile.setUser(mentorUser);
+        MentoringProgram program = new MentoringProgram();
+        program.setMentor(profile);
+        program.setTitle("coaching");
+        MentoringApplication application = new MentoringApplication();
+        ReflectionTestUtils.setField(application, "id", mentoringApplicationId);
+        application.setProgram(program);
+        application.setMentee(menteeUser);
+
+        given(mentoringApplicationRepository.findById(mentoringApplicationId)).willReturn(Optional.of(application));
+    }
+
+    private Report mentoringReportBy(User mentoringReporter) {
+        Report mentoringReport = Report.create(
+                mentoringReporter,
+                ReportTargetType.MENTORING,
+                mentoringApplicationId,
+                "멘토링 신청 (프로그램: coaching)",
+                ReportReasonCode.PROFANITY,
+                "멘토링 중 욕설");
+        ReflectionTestUtils.setField(mentoringReport, "id", reportId);
+        ReflectionTestUtils.setField(mentoringReport, "reportCode", "RPT-2001");
+        ReflectionTestUtils.setField(mentoringReport, "createdAt", OffsetDateTime.now());
+        ReflectionTestUtils.setField(mentoringReport, "updatedAt", OffsetDateTime.now());
+        return mentoringReport;
+    }
+
+    private AdminReportDetailResponse resolveMentoringReportWithSuspension(Report mentoringReport) {
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(mentoringReport));
+        given(reportRepository.findById(reportId)).willReturn(Optional.of(mentoringReport));
+        given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
+        given(reportRepository.countByTargetTypeAndTargetId(eq(ReportTargetType.USER), any(UUID.class)))
+                .willReturn(0L);
+        given(userPenaltyService.getUserPenalties(any(UUID.class), any(Pageable.class)))
+                .willReturn(new PageImpl<>(List.of()));
+
+        return reportService.resolveReport(adminId, reportId.toString(), new AdminReportResolutionRequest(
+                ReportStatus.RESOLVED, false, PenaltyType.SUSPENSION_7D, "멘토링 중 욕설 확인", null));
+    }
+
+    @Test
+    @DisplayName("[#79] 멘토가 신청 건을 신고하면 멘티가 피신고자로 식별되고 제재도 멘티에게만 부과된다")
+    void resolveMentoringReport_byMentor_sanctionsMentee() {
+        setUpMentoringApplication();
+
+        AdminReportDetailResponse response = resolveMentoringReportWithSuspension(mentoringReportBy(mentorUser));
+
+        verify(userPenaltyService).createPenalty(eq(adminId), eq(menteeUser.getId()), any(UserPenaltyCreateRequest.class));
+        verify(userPenaltyService, never()).createPenalty(any(), eq(mentorUser.getId()), any());
+        assertThat(response.targetUser().id()).isEqualTo(menteeUser.getId());
+    }
+
+    @Test
+    @DisplayName("[#79] 멘티가 신청 건을 신고하면 멘토가 피신고자로 식별되고 제재도 멘토에게만 부과된다")
+    void resolveMentoringReport_byMentee_sanctionsMentor() {
+        setUpMentoringApplication();
+
+        AdminReportDetailResponse response = resolveMentoringReportWithSuspension(mentoringReportBy(menteeUser));
+
+        verify(userPenaltyService).createPenalty(eq(adminId), eq(mentorUser.getId()), any(UserPenaltyCreateRequest.class));
+        verify(userPenaltyService, never()).createPenalty(any(), eq(menteeUser.getId()), any());
+        assertThat(response.targetUser().id()).isEqualTo(mentorUser.getId());
+    }
+
+    @Test
+    @DisplayName("[#79] 신청 건 참여자가 아닌 유저의 MENTORING 신고는 404로 거부되고 저장되지 않는다")
+    void createMentoringReport_byNonParticipant_rejected() {
+        setUpMentoringApplication();
+        given(userRepository.findById(reporterId)).willReturn(Optional.of(reporter));
+        CustomUserPrincipal principal = CustomUserPrincipal.from(reporter);
+
+        assertThatThrownBy(() -> reportService.createReport(principal, new ReportCreateRequest(
+                ReportTargetType.MENTORING, mentoringApplicationId, ReportReasonCode.PROFANITY, "참여하지 않은 신청 건")))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+
+        verify(reportRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("[#79] 신청 건 참여자(멘토)의 MENTORING 신고는 정상 접수된다")
+    void createMentoringReport_byParticipant_accepted() {
+        setUpMentoringApplication();
+        given(userRepository.findById(mentorUser.getId())).willReturn(Optional.of(mentorUser));
+        given(reportRepository.saveAndFlush(any(Report.class))).willAnswer(invocation -> {
+            Report saved = invocation.getArgument(0);
+            ReflectionTestUtils.setField(saved, "id", reportId);
+            given(reportRepository.findById(reportId)).willReturn(Optional.of(saved));
+            return saved;
+        });
+        given(reportCountRepository.findByTargetTypeAndTargetId(ReportTargetType.MENTORING, mentoringApplicationId))
+                .willReturn(Optional.of(ReportCount.create(ReportTargetType.MENTORING, mentoringApplicationId)));
+
+        reportService.createReport(CustomUserPrincipal.from(mentorUser), new ReportCreateRequest(
+                ReportTargetType.MENTORING, mentoringApplicationId, ReportReasonCode.PROFANITY, "멘티의 욕설"));
+
+        verify(reportRepository).saveAndFlush(any(Report.class));
     }
 }
