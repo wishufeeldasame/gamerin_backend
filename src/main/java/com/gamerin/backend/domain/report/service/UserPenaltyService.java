@@ -196,25 +196,29 @@ public class UserPenaltyService {
             return 0;
         }
 
+        int releasedCount = 0;
         for (UserPenalty penalty : expiredPenalties) {
             UUID userId = penalty.getUser().getId();
 
             // 1. 잠금 순서 일원화: 수동 해제/신규 제재와 동일하게 User를 먼저 비관적 락으로 잠금 (교착 상태 방지)
-            userRepository.findActiveByIdForUpdate(userId).ifPresent(user -> {
-                // 2. User 락을 획득한 상태에서 제재 비활성화 진행
-                penalty.deactivate();
-                userPenaltyRepository.save(penalty);
+            //    탈퇴 유저의 만료 제재도 해제해야 하므로 deletedAt 조건 없이 잠근다
+            User user = userRepository.findByIdForUpdate(userId).orElse(null);
 
-                // 3. 잔여 활성 정지 제재 여부 확인 후 계정 정상화
-                boolean hasActiveSuspension = userPenaltyRepository.existsActiveSuspensionByUserId(userId);
-                if (!hasActiveSuspension && user.getStatus() == UserStatus.SUSPENDED) {
-                    user.activate();
-                    userRepository.save(user);
-                }
-            });
+            // 2. User 락을 획득한 상태에서 아직 활성인 제재만 비활성화 (조회 이후 수동 해제된 제재는 건너뜀)
+            if (userPenaltyRepository.deactivateIfActive(penalty.getId()) == 0) {
+                continue;
+            }
+            releasedCount++;
+
+            // 3. 잔여 활성 정지 제재 여부 확인 후 계정 정상화 (탈퇴 유저는 DELETED라 복구 대상이 아님)
+            if (user != null && user.getStatus() == UserStatus.SUSPENDED
+                    && !userPenaltyRepository.existsActiveSuspensionByUserId(userId)) {
+                user.activate();
+                userRepository.save(user);
+            }
         }
 
-        return expiredPenalties.size();
+        return releasedCount;
     }
 
     /**
