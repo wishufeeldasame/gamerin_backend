@@ -188,6 +188,8 @@ public class AdminMentoringService {
 
         /**
          * 프로그램 운영 상태 변경 (운영 중 ACTIVE <-> 일시정지 CLOSED)
+         * - 관리자가 CLOSED 처리 시 adminSuspendedAt을 기록하여 멘토가 임의로 다시 열지 못하도록 방지
+         * - 관리자가 ACTIVE 처리 시 adminSuspendedAt을 초기화하여 정지 해제
          */
         public AdminMentoringProgramResponse updateProgramStatus(UUID adminId, UUID programId,
                         ProgramStatus newStatus) {
@@ -198,6 +200,14 @@ public class AdminMentoringService {
 
                 ProgramStatus oldStatus = program.getStatus();
                 program.setStatus(newStatus);
+
+                // 관리자 정지 시각 설정 및 해제
+                if (newStatus == ProgramStatus.CLOSED) {
+                        program.setAdminSuspendedAt(OffsetDateTime.now());
+                } else if (newStatus == ProgramStatus.ACTIVE) {
+                        program.setAdminSuspendedAt(null);
+                }
+
                 MentoringProgram saved = mentoringProgramRepository.save(program);
 
                 adminAuditLogRepository.save(AdminAuditLog.create(

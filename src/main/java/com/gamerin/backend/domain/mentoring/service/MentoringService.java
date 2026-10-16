@@ -192,6 +192,16 @@ public class MentoringService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "해당 프로그램을 수정할 권한이 없습니다.");
         }
 
+        // [추가] 멘토 활동 상태 확인 (비활성화/반려된 멘토는 프로그램 수정 불가)
+        if (program.getMentor().getStatus() != MentorStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "활동 중인 멘토만 프로그램을 수정할 수 있습니다.");
+        }
+
+        // [추가] 관리자에 의해 일시정지된 프로그램은 멘토가 다시 ACTIVE로 열 수 없음
+        if (program.isAdminSuspended() && request.status() == ProgramStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자가 일시정지한 프로그램은 멘토가 다시 열 수 없습니다.");
+        }
+
         if (request.price() == null || request.price() < 0) {
             throw new IllegalArgumentException("가격은 0원 이상이어야 합니다.");
         }
@@ -251,8 +261,14 @@ public class MentoringService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "자신이 등록한 프로그램에는 신청할 수 없습니다.");
         }
 
+        // 프로그램 마감 여부 확인
         if (program.getStatus() != ProgramStatus.ACTIVE) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "마감된 프로그램에는 신청할 수 없습니다.");
+        }
+
+        // [추가] 멘토 활동 상태 확인 (반려/비활성 상태인 멘토의 프로그램에는 신청 불가)
+        if (program.getMentor().getStatus() != MentorStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "활동 중인 멘토의 프로그램만 신청할 수 있습니다.");
         }
 
         if (mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(

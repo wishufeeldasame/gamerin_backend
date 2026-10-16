@@ -65,6 +65,25 @@ public class MentoringProgram {
     @Column(name = "deleted_at")
     private OffsetDateTime deletedAt;
 
+    // 관리자 일시정지 시각. NULL = 정상 운영 또는 멘토 자율 마감, NOT NULL = 관리자가 일시정지(CLOSED) 처리한 시각
+    @Column(name = "admin_suspended_at")
+    private OffsetDateTime adminSuspendedAt;
+
+    public OffsetDateTime getAdminSuspendedAt() {
+        return adminSuspendedAt;
+    }
+
+    public void setAdminSuspendedAt(OffsetDateTime adminSuspendedAt) {
+        this.adminSuspendedAt = adminSuspendedAt;
+    }
+
+    /**
+     * 관리자에 의해 일시정지된 프로그램인지 여부 확인
+     */
+    public boolean isAdminSuspended() {
+        return this.adminSuspendedAt != null;
+    }
+
     @PrePersist
     protected void onCreate() {
         OffsetDateTime now = OffsetDateTime.now();
@@ -164,6 +183,7 @@ public class MentoringProgram {
 
     /**
      * 소프트 삭제 처리. deleted_at을 현재 시각으로 설정한다.
+     * 
      * @Transactional 범위 안에서 Dirty Checking에 의해 자동으로 UPDATE 쿼리가 발행된다.
      */
     public void softDelete() {
