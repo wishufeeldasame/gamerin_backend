@@ -1,6 +1,9 @@
 package com.gamerin.backend.domain.user.service;
 
+import com.gamerin.backend.domain.game.model.GameType;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -66,7 +69,7 @@ public class UserService {
         User user = userRepository.findByIdAndDeletedAtIsNull(userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
-        return toProfileResponse(user, false);
+        return toProfileResponse(user, false, false);
     }
 
     @Transactional(readOnly = true)
@@ -74,14 +77,21 @@ public class UserService {
         User user = userRepository.findByHandleAndDeletedAtIsNull(handle)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
-        boolean isFollowing = viewerId != null
-                && !viewerId.equals(user.getId())
-                && followRepository.existsByFollowerIdAndFolloweeId(viewerId, user.getId());
+        boolean isFollowing = false;
+        boolean followsViewer = false;
+        if (viewerId != null && !viewerId.equals(user.getId())) {
+            isFollowing = followRepository.existsByFollowerIdAndFolloweeId(viewerId, user.getId());
+            followsViewer = followRepository.existsByFollowerIdAndFolloweeId(user.getId(), viewerId);
+        }
 
-        return toProfileResponse(user, isFollowing);
+        return toProfileResponse(user, isFollowing, followsViewer);
     }
 
-    private DetailedUserProfileResponse toProfileResponse(User user, boolean isFollowing) {
+    private DetailedUserProfileResponse toProfileResponse(
+            User user,
+            boolean isFollowing,
+            boolean followsViewer
+    ) {
         UserProfile profile = user.getProfile();
 
         long followersCount = followRepository.countActiveFollowersByFolloweeId(user.getId());
@@ -99,15 +109,58 @@ public class UserService {
                 profile != null ? profile.getWebsite() : null,
                 profile != null ? profile.getCoverImageUrl() : null,
                 profile != null ? profile.getProfileImageUrl() : null,
-                profile != null ? profile.getGameStats() : null,
+                profile != null ? toPublicGameStats(profile.getGameStats()) : null,
                 profile != null && profile.isVerifiedBadge(),
                 isFollowing,
+                followsViewer,
                 followersCount,
                 followingCount,
                 postCount,
                 mediaPostCount,
                 mediaItemCount
         );
+    }
+
+    private Map<String, Object> toPublicGameStats(Map<String, Object> gameStats) {
+        if (gameStats == null) {
+            return null;
+        }
+
+        Map<String, Object> publicGameStats = new HashMap<>();
+        for (Map.Entry<String, Object> entry : gameStats.entrySet()) {
+            Object value = entry.getValue();
+            if (value instanceof Map<?, ?> map) {
+                publicGameStats.put(entry.getKey(), copyStringKeyedMap(map));
+            } else {
+                publicGameStats.put(entry.getKey(), value);
+            }
+        }
+
+        removeInternalFields(publicGameStats, GameType.R6.name(), "accountId");
+        return publicGameStats;
+    }
+
+    private Map<String, Object> copyStringKeyedMap(Map<?, ?> source) {
+        Map<String, Object> copy = new HashMap<>();
+        for (Map.Entry<?, ?> entry : source.entrySet()) {
+            if (entry.getKey() instanceof String key) {
+                copy.put(key, entry.getValue());
+            }
+        }
+        return copy;
+    }
+
+    private void removeInternalFields(Map<String, Object> gameStats, String gameKey, String... fieldNames) {
+        Object stats = gameStats.get(gameKey);
+        if (!(stats instanceof Map<?, ?> map)) {
+            return;
+        }
+
+        Map<String, Object> publicStats = copyStringKeyedMap(map);
+        for (String fieldName : fieldNames) {
+            publicStats.remove(fieldName);
+        }
+        gameStats.put(gameKey, publicStats);
     }
 
     @Transactional

@@ -134,4 +134,8 @@ public class Post {
     public OffsetDateTime getDeletedAt() {
         return deletedAt;
     }
+
+    public void restore() {
+        this.deletedAt = null;
+    }
 }

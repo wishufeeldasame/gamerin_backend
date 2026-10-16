@@ -4,6 +4,8 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+import com.gamerin.backend.domain.repost.dto.response.ReposterInfoResponse;
+
 public record PostCardResponse(
         UUID postId,
         String author,
@@ -15,6 +17,9 @@ public record PostCardResponse(
         long likes,
         long comments,
         long shares,
+        boolean isReposted,
+        long repostCount,
+        ReposterInfoResponse reposterInfo,
         boolean likedByMe,
         boolean bookmarkedByMe,
         boolean mine,

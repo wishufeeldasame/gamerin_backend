@@ -42,6 +42,7 @@ import com.gamerin.backend.domain.message.repository.DirectMessageAttachmentRepo
 import com.gamerin.backend.domain.message.repository.DirectMessageRepository;
 import com.gamerin.backend.domain.message.repository.MessageConversationRepository;
 import com.gamerin.backend.domain.message.repository.MessageParticipantRepository;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.moderation.ContentModerationService;
 import com.gamerin.backend.domain.post.repository.PostRepository;
@@ -104,6 +105,9 @@ class MessageServiceTest {
     @Mock
     private SseStreamTokenService sseStreamTokenService;
 
+    @Mock
+    private NotificationCommandService notificationCommandService;
+
     private MessageService messageService;
 
     @BeforeEach
@@ -124,7 +128,8 @@ class MessageServiceTest {
                 textSecurityService,
                 videoMetadataService,
                 videoOptimizationService,
-                sseStreamTokenService
+                sseStreamTokenService,
+                notificationCommandService
         );
     }
 
@@ -136,6 +141,8 @@ class MessageServiceTest {
         DirectMessage message = message(conversation, viewer, "message");
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
                 viewer.getId()
@@ -167,6 +174,8 @@ class MessageServiceTest {
         );
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
                 viewer.getId()
@@ -208,6 +217,8 @@ class MessageServiceTest {
         MessageParticipant viewerParticipant = participant(conversation, viewer);
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
                 viewer.getId()
@@ -270,7 +281,7 @@ class MessageServiceTest {
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
         when(userRepository.findByIdAndDeletedAtIsNull(recipient.getId())).thenReturn(Optional.of(recipient));
-        when(messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(any()))
+        when(messageConversationRepository.findActiveByDirectKeyForUpdate(any()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserId(conversation.getId(), viewer.getId()))
                 .thenReturn(Optional.of(viewerParticipant));
@@ -305,7 +316,7 @@ class MessageServiceTest {
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
         when(userRepository.findByIdAndDeletedAtIsNull(recipient.getId())).thenReturn(Optional.of(recipient));
-        when(messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(any()))
+        when(messageConversationRepository.findActiveByDirectKeyForUpdate(any()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserId(conversation.getId(), viewer.getId()))
                 .thenReturn(Optional.of(viewerParticipant));
@@ -333,7 +344,7 @@ class MessageServiceTest {
         MessageParticipant recipientParticipant = participant(conversation, recipient);
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
@@ -386,7 +397,7 @@ class MessageServiceTest {
         MessageParticipant viewerParticipant = participant(conversation, viewer);
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
@@ -710,6 +721,8 @@ class MessageServiceTest {
     ) {
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
         when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),

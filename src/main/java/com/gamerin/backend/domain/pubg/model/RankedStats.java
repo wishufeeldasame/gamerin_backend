@@ -1,9 +1,9 @@
 package com.gamerin.backend.domain.pubg.model;
 
 public record RankedStats(
-        double kda,
+        Double kd,
         int roundsPlayed,
-        int wins,
+        Integer wins,
         String currentTier,
         String currentSubTier
 ) {

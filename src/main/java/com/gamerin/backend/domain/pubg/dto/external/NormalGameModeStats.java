@@ -8,6 +8,7 @@ public record NormalGameModeStats(
         @JsonAlias({"kda", "killDeathRatio"})
         Double kda,
         Integer kills,
+        Integer deaths,
         Integer losses
 ) {
 }
