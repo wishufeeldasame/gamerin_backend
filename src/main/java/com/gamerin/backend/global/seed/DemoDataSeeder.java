@@ -45,7 +45,6 @@ import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.post.service.PostService;
 import com.gamerin.backend.domain.repost.service.PostRepostService;
-import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -199,8 +198,7 @@ public class DemoDataSeeder implements ApplicationRunner {
             profile.updateLolSummary(TIERS[(i + 2) % TIERS.length] + " II", 2.0 + i / 10.0, 45 + i, 80 + i);
             user.setProfile(profile);
             User saved = userRepository.save(user);
-            // 결제 없이 지급하는 데모 초기 마일리지. 결제 참조가 없어 reference_id는 비운다.
-            mileageService.addMileage(saved, INITIAL_MILEAGE, TransactionType.CHARGE, "데모 초기 마일리지", null);
+            mileageService.chargeMileage(saved, INITIAL_MILEAGE);
             users.add(saved);
         }
         return users;

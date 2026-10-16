@@ -57,8 +57,7 @@ public class UserPenalty {
         penalty.reason = reason;
         penalty.startAt = OffsetDateTime.now();
         penalty.endAt = endAt;
-        // 경고는 유효 기간 없는 이력 전용이라 활성 제재 목록·지표에 남지 않도록 비활성으로 저장
-        penalty.isActive = penaltyType != PenaltyType.WARNING;
+        penalty.isActive = true;
         penalty.administeredBy = administeredBy;
         return penalty;
     }

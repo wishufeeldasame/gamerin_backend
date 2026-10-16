@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.user.controller;
 
+import com.gamerin.backend.domain.user.dto.request.MileageChargeRequest;
 import com.gamerin.backend.domain.user.dto.response.MileageTransactionResponse;
 import com.gamerin.backend.domain.user.dto.response.MyMileageResponse;
 import com.gamerin.backend.domain.user.entity.User;
@@ -17,6 +18,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -51,6 +54,18 @@ public class MileageController {
         User user = userRepository.findById(principal.getUserId())
                 .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
         return ApiResponse.ok(mileageService.getMyTransactions(user, pageable));
+    }
+
+    @Operation(summary = "마일리지 가상 충전 (테스트용)", description = "테스트를  위해 입력한 금액만큼 마일리지를 충전합니다.")
+    @PostMapping("/charge")
+    public ApiResponse<MyMileageResponse> chargeMileage(
+        @AuthenticationPrincipal CustomUserPrincipal principal,
+        @RequestBody MileageChargeRequest request
+    ) {
+        User user = userRepository.findById(principal.getUserId())
+                .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
+
+        return ApiResponse.ok(mileageService.chargeMileage(user, request.amount()));
     }
 
 }

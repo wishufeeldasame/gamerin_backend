@@ -193,46 +193,6 @@ class AdminUserPenaltyIntegrationTest {
     }
 
     @Test
-    @DisplayName("[경고 이력 전용] 경고는 이력에만 남고 활성 제재 목록·집계·activeSanction에 포함되지 않는다")
-    void warningPenalty_isHistoryOnly() throws Exception {
-        long activeUsersBefore = userPenaltyRepository.countDistinctUserIdByIsActiveTrue();
-
-        UserPenaltyCreateRequest request = new UserPenaltyCreateRequest(
-                PenaltyType.WARNING, "욕설 경고", null, null
-        );
-        mockMvc.perform(post("/api/v1/admin/users/{userId}/penalties", regularUser.getId())
-                        .header("Authorization", "Bearer " + adminToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.penaltyType").value("WARNING"))
-                .andExpect(jsonPath("$.data.isActive").value(false));
-
-        // 활성 제재 목록·집계 제외
-        org.assertj.core.api.Assertions.assertThat(
-                userPenaltyRepository.findByUserIdAndIsActiveTrueOrderByCreatedAtDesc(regularUser.getId())).isEmpty();
-        org.assertj.core.api.Assertions.assertThat(
-                userPenaltyRepository.countDistinctUserIdByIsActiveTrue()).isEqualTo(activeUsersBefore);
-
-        // 유저 이력에는 남는다
-        mockMvc.perform(get("/api/v1/admin/users/{userId}/penalties", regularUser.getId())
-                        .header("Authorization", "Bearer " + adminToken))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.content[0].penaltyType").value("WARNING"));
-
-        // 관리자 유저 상세의 활성 제재는 "없음"
-        mockMvc.perform(get("/api/v1/admin/users/{userId}", regularUser.getId())
-                        .header("Authorization", "Bearer " + adminToken))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.activeSanction").value("없음"));
-
-        // 경고만 받은 유저는 계속 접근 가능
-        mockMvc.perform(get("/api/v1/auth/me")
-                        .header("Authorization", "Bearer " + userToken))
-                .andExpect(status().isOk());
-    }
-
-    @Test
     @DisplayName("[제재 유효성 검증] 존재하지 않는 reportId로 제재를 시도하면 404 Not Found로 차단된다")
     void createPenalty_invalidReportId_throwsNotFound() throws Exception {
         UUID nonExistentReportId = UUID.randomUUID();

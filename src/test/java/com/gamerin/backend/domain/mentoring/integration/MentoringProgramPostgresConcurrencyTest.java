@@ -31,7 +31,6 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.Connection;
@@ -76,8 +75,6 @@ class MentoringProgramPostgresConcurrencyTest {
     private UserRepository userRepository;
     @Autowired
     private MileageWalletRepository mileageWalletRepository;
-    @Autowired
-    private TransactionTemplate transactionTemplate;
 
     @DynamicPropertySource
     static void configurePostgres(DynamicPropertyRegistry registry) {
@@ -145,7 +142,10 @@ class MentoringProgramPostgresConcurrencyTest {
         MentorProfile profile = createMentorProfile(mentor);
         User mentee = createTestUser("mentee");
 
-        createWallet(mentee, 50000L);
+        MileageWallet wallet = new MileageWallet();
+        wallet.setUser(mentee);
+        wallet.setBalance(50000L);
+        mileageWalletRepository.save(wallet);
 
         MentoringProgram program = createProgram(profile, "배틀그라운드 코칭", 1000L);
         UUID programId = program.getId();
@@ -232,23 +232,10 @@ class MentoringProgramPostgresConcurrencyTest {
     }
 
     private MentorProfile createMentorProfile(User user) {
-        // @MapsId로 PK를 공유하므로 detached User가 아닌 같은 트랜잭션의 managed User로 저장
-        return transactionTemplate.execute(status -> {
-            MentorProfile profile = new MentorProfile();
-            profile.setUser(userRepository.findById(user.getId()).orElseThrow());
-            profile.setAbout("소개");
-            return mentorProfileRepository.save(profile);
-        });
-    }
-
-    private void createWallet(User user, long balance) {
-        // MentorProfile과 같이 @MapsId 구조라 managed User로 저장
-        transactionTemplate.executeWithoutResult(status -> {
-            MileageWallet wallet = new MileageWallet();
-            wallet.setUser(userRepository.findById(user.getId()).orElseThrow());
-            wallet.setBalance(balance);
-            mileageWalletRepository.save(wallet);
-        });
+        MentorProfile profile = new MentorProfile();
+        profile.setUser(user);
+        profile.setAbout("소개");
+        return mentorProfileRepository.save(profile);
     }
 
     private MentoringProgram createProgram(MentorProfile mentor, String title, Long price) {

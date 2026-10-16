@@ -7,7 +7,6 @@ public record NotificationActorResponse(
         String handle,
         String nickname,
         String profileImageUrl,
-        boolean verifiedBadge,
-        boolean membershipBadge
+        boolean verifiedBadge
 ) {
 }

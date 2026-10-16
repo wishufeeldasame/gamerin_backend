@@ -1,17 +1,17 @@
 package com.gamerin.backend.domain.payment.service;
 
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -27,15 +27,16 @@ import com.gamerin.backend.domain.payment.dto.response.PaymentResponse;
 import com.gamerin.backend.domain.payment.entity.Payment;
 import com.gamerin.backend.domain.payment.entity.PaymentPurpose;
 import com.gamerin.backend.domain.payment.entity.PaymentStatus;
-import com.gamerin.backend.domain.payment.model.PaymentCursor;
 import com.gamerin.backend.domain.payment.model.PaymentProduct;
 import com.gamerin.backend.domain.payment.repository.PaymentRepository;
+import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.repository.UserRepository;
-import com.gamerin.backend.global.response.CursorPageResponse;
+import com.gamerin.backend.domain.user.service.MileageService;
 
 /**
- * 카카오페이 결제 API (04 문서 6-1·6-2·6-6절).
- * 외부 호출은 트랜잭션 밖에서 하고, 처리권 확보와 결과 반영은 PaymentStateService의 조건부 전이로 한다.
+ * 카카오페이 결제 준비·승인·조회 (04 문서 6-1·6-2·6-6절).
+ * 외부 호출은 트랜잭션 밖에서 하고, 처리권 확보와 결과 반영은 짧은 트랜잭션의 조건부 전이로 한다.
+ * 결과 불명 주문의 조회 시점 복구·스케줄러·만료 전이·취소·목록은 A2(#86) 범위다.
  */
 @Service
 public class PaymentService {
@@ -43,39 +44,31 @@ public class PaymentService {
     private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
 
     private static final String RESULT_PATH = "/payments/result";
+    private static final String CHARGE_DESCRIPTION = "카카오페이 충전";
+    private static final String KAKAOPAY_SUCCESS = "SUCCESS_PAYMENT";
+    private static final List<String> KAKAOPAY_FAILED = List.of("FAIL_PAYMENT", "QUIT_PAYMENT", "FAIL_AUTH_PASSWORD");
+    private static final List<String> KAKAOPAY_CANCELED = List.of("CANCEL_PAYMENT", "PART_CANCEL_PAYMENT");
     private static final String NOT_CONFIGURED_MESSAGE = "결제 기능을 사용할 수 없습니다. 잠시 후 다시 시도해주세요.";
-    private static final int DEFAULT_PAGE_SIZE = 20;
-    private static final int MAX_PAGE_SIZE = 50;
-    // 결제 목록 대상: 실제 결제가 일어났거나 확인 중인 주문 (6-6절 결제 목록)
-    private static final List<PaymentStatus> LISTED_STATUSES = List.of(
-            PaymentStatus.APPROVING, PaymentStatus.APPROVED, PaymentStatus.CANCELING,
-            PaymentStatus.CANCELED, PaymentStatus.NEEDS_REVIEW);
 
     private final PaymentRepository paymentRepository;
     private final UserRepository userRepository;
-    private final PaymentStateService stateService;
-    private final PaymentRecoveryService recoveryService;
+    private final MileageService mileageService;
     private final KakaoPayClient kakaoPayClient;
     private final TransactionTemplate transactionTemplate;
     private final String frontendBaseUrl;
-    private final boolean cancelEnabled;
 
     public PaymentService(PaymentRepository paymentRepository,
                           UserRepository userRepository,
-                          PaymentStateService stateService,
-                          PaymentRecoveryService recoveryService,
+                          MileageService mileageService,
                           KakaoPayClient kakaoPayClient,
                           TransactionTemplate transactionTemplate,
-                          @Value("${app.frontend.base-url}") String frontendBaseUrl,
-                          @Value("${kakaopay.cancel-enabled:false}") boolean cancelEnabled) {
+                          @Value("${app.frontend.base-url}") String frontendBaseUrl) {
         this.paymentRepository = paymentRepository;
         this.userRepository = userRepository;
-        this.stateService = stateService;
-        this.recoveryService = recoveryService;
+        this.mileageService = mileageService;
         this.kakaoPayClient = kakaoPayClient;
         this.transactionTemplate = transactionTemplate;
         this.frontendBaseUrl = frontendBaseUrl.replaceAll("/+$", "");
-        this.cancelEnabled = cancelEnabled;
     }
 
     public List<PaymentProductResponse> getProducts() {
@@ -84,27 +77,8 @@ public class PaymentService {
                 .toList();
     }
 
-    // 결과 불명·만료 후보면 조회 시점 복구 후 결과를 반환한다(6-6절 복구 실행).
     public PaymentResponse getPayment(UUID userId, UUID orderId) {
-        Payment payment = findOwned(userId, orderId);
-        return PaymentResponse.from(configGuarded(() -> recoveryService.recoverIfNeeded(payment)));
-    }
-
-    // 본인 결제만, 결제가 일어났거나 확인 중인 상태만 (createdAt, id) 내림차순 커서로 반환한다.
-    public CursorPageResponse<PaymentResponse> getMyPayments(UUID userId, String cursor, int size) {
-        int pageSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
-        PaymentCursor parsedCursor = PaymentCursor.parse(cursor);
-        PageRequest limit = PageRequest.of(0, pageSize + 1);
-        List<Payment> loaded = parsedCursor == null
-                ? paymentRepository.findFirstPage(userId, LISTED_STATUSES, limit)
-                : paymentRepository.findPageBefore(userId, LISTED_STATUSES,
-                        parsedCursor.createdAt(), parsedCursor.paymentId(), limit);
-        boolean hasNext = loaded.size() > pageSize;
-        List<Payment> page = hasNext ? loaded.subList(0, pageSize) : loaded;
-        String nextCursor = hasNext
-                ? PaymentCursor.encode(page.getLast().getCreatedAt(), page.getLast().getId())
-                : null;
-        return new CursorPageResponse<>(page.stream().map(PaymentResponse::from).toList(), nextCursor, hasNext);
+        return PaymentResponse.from(findOwned(userId, orderId));
     }
 
     public PaymentReadyResponse ready(UUID userId, PaymentReadyRequest request) {
@@ -129,7 +103,7 @@ public class PaymentService {
                     request.requestId(),
                     product,
                     kakaoPayClient.cid(),
-                    PaymentStateService.now()
+                    now()
             )));
         } catch (DataIntegrityViolationException e) {
             // 같은 requestId의 동시 요청: 먼저 저장된 주문으로 재응답한다.
@@ -143,19 +117,18 @@ public class PaymentService {
             response = kakaoPayClient.ready(readyRequest(payment, userId));
         } catch (KakaoPayException e) {
             // TID를 받지 못했으면 결제가 시작되지 않은 것이므로 FAILED로 닫는다(6-2절 9·12번).
-            stateService.transition(payment.getId(), PaymentStatus.CREATED, payment.getStatusChangedAt(),
-                    PaymentStatus.FAILED);
+            transition(payment.getId(), PaymentStatus.CREATED, payment.getStatusChangedAt(), PaymentStatus.FAILED);
             if (e.getKind() == KakaoPayException.Kind.CONFIGURATION) {
                 throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, NOT_CONFIGURED_MESSAGE);
             }
-            return PaymentReadyResponse.from(stateService.reload(payment.getId()), PaymentStateService.now());
+            return PaymentReadyResponse.from(reload(payment.getId()), now());
         }
 
-        OffsetDateTime readyAt = PaymentStateService.now();
+        OffsetDateTime readyAt = now();
         transactionTemplate.executeWithoutResult(status -> {
             if (paymentRepository.transition(payment.getId(), PaymentStatus.CREATED, payment.getStatusChangedAt(),
                     PaymentStatus.READY, readyAt) == 1) {
-                stateService.reload(payment.getId()).recordReady(
+                reload(payment.getId()).recordReady(
                         response.tid(),
                         response.nextRedirectPcUrl(),
                         response.nextRedirectMobileUrl(),
@@ -164,12 +137,11 @@ public class PaymentService {
                 );
             }
         });
-        return PaymentReadyResponse.from(stateService.reload(payment.getId()), PaymentStateService.now());
+        return PaymentReadyResponse.from(reload(payment.getId()), now());
     }
 
     public PaymentResponse approve(UUID userId, PaymentApproveRequest request) {
-        Payment owned = findOwned(userId, request.orderId());
-        Payment payment = configGuarded(() -> recoveryService.recoverIfNeeded(owned));
+        Payment payment = findOwned(userId, request.orderId());
         switch (payment.getStatus()) {
             case READY -> {
             }
@@ -179,17 +151,19 @@ public class PaymentService {
             }
             default -> throw new ResponseStatusException(HttpStatus.CONFLICT, "승인할 수 없는 결제 주문입니다.");
         }
-        if (payment.isReadyExpired(PaymentStateService.now())) {
-            // 만료 후보지만 조회 실패 등으로 아직 READY인 경우에도 승인하지 않는다.
+        if (payment.isReadyExpired(now())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 요청 시간이 만료되었습니다. 다시 결제해주세요.");
         }
-        requireConfiguredCid(payment);
+        if (!payment.getCid().equals(kakaoPayClient.cid())) {
+            log.error("Payment CID does not match configured CID: orderId={}", payment.getId());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, NOT_CONFIGURED_MESSAGE);
+        }
 
-        OffsetDateTime claimedAt = PaymentStateService.now();
-        if (!stateService.transition(payment.getId(), PaymentStatus.READY, payment.getStatusChangedAt(),
+        OffsetDateTime claimedAt = now();
+        if (!transition(payment.getId(), PaymentStatus.READY, payment.getStatusChangedAt(),
                 PaymentStatus.APPROVING, claimedAt)) {
             // 다른 요청이 처리권을 가져갔다.
-            return PaymentResponse.from(stateService.reload(payment.getId()));
+            return PaymentResponse.from(reload(payment.getId()));
         }
 
         KakaoPayClient.ApproveResponse response;
@@ -203,20 +177,9 @@ public class PaymentService {
                     payment.getAmount()
             ));
         } catch (KakaoPayException e) {
-            // approve 4xx는 실패로 단정하지 않고 TID 주문 조회로 판정한다. 타임아웃·5xx는 APPROVING으로 둔다(6-2절 12번).
-            switch (e.getKind()) {
-                case CONFIGURATION -> throw notConfigured();
-                case REJECTED -> configGuarded(() -> {
-                    recoveryService.resolveApproveRejection(payment, claimedAt);
-                    return null;
-                });
-                case UNKNOWN -> {
-                }
-                default -> throw new IllegalStateException("Unhandled KakaoPay failure kind: " + e.getKind());
-            }
-            return PaymentResponse.from(stateService.reload(payment.getId()));
+            return handleApproveFailure(payment, claimedAt, e);
         }
-        stateService.completeApproval(payment, claimedAt, new PaymentStateService.ApprovalResult(
+        return completeApproval(payment, claimedAt, new ApprovalResult(
                 response.aid(),
                 response.tid(),
                 response.cid(),
@@ -226,45 +189,111 @@ public class PaymentService {
                 response.paymentMethodType(),
                 KakaoPayClient.toOffsetDateTime(response.approvedAt())
         ));
-        return PaymentResponse.from(stateService.reload(payment.getId()));
     }
 
-    /**
-     * 전액 결제 취소 (6-6절 결제 취소). 소유자 + kakaopay.cancel-enabled + 주문 CID와 설정 CID 일치일 때만 동작한다.
-     * 내부 회수를 CANCELING 전환과 함께 먼저 반영한 뒤 외부 취소를 호출한다.
-     */
-    public PaymentResponse cancel(UUID userId, UUID orderId) {
-        Payment owned = findOwned(userId, orderId);
-        if (!cancelEnabled || !owned.getCid().equals(kakaoPayClient.cid())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "결제를 취소할 수 없습니다.");
-        }
-        Payment payment = configGuarded(() -> recoveryService.recoverIfNeeded(owned));
-        switch (payment.getStatus()) {
-            case APPROVED -> {
+    // approve 4xx는 실패로 단정하지 않고 TID 주문 조회로 판정한다. 타임아웃·5xx는 APPROVING으로 둔다(6-2절 12번).
+    private PaymentResponse handleApproveFailure(Payment payment, OffsetDateTime claimedAt, KakaoPayException e) {
+        switch (e.getKind()) {
+            case CONFIGURATION -> throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, NOT_CONFIGURED_MESSAGE);
+            case UNKNOWN -> {
+                return PaymentResponse.from(reload(payment.getId()));
             }
-            // 재호출: 외부 호출 없이 현재 상태 (6-6절 재호출 응답)
-            case CANCELING, CANCELED -> {
-                return PaymentResponse.from(payment);
+            case REJECTED -> {
+                KakaoPayClient.OrderResponse order;
+                try {
+                    order = kakaoPayClient.order(new KakaoPayClient.OrderRequest(payment.getCid(), payment.getTid()));
+                } catch (KakaoPayException lookupError) {
+                    if (lookupError.getKind() == KakaoPayException.Kind.CONFIGURATION) {
+                        throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, NOT_CONFIGURED_MESSAGE);
+                    }
+                    return PaymentResponse.from(reload(payment.getId()));
+                }
+                return applyOrderStatus(payment, claimedAt, order);
             }
-            default -> throw new ResponseStatusException(HttpStatus.CONFLICT, "취소할 수 없는 결제 주문입니다.");
+            default -> throw new IllegalStateException("Unhandled KakaoPay failure kind: " + e.getKind());
         }
+    }
 
-        OffsetDateTime claimedAt = PaymentStateService.now();
-        if (!stateService.beginCancel(payment, claimedAt)) {
-            return PaymentResponse.from(stateService.reload(payment.getId()));
+    // 주문 조회 status를 APPROVING 주문의 다음 상태로 옮긴다(6-2절 11번).
+    private PaymentResponse applyOrderStatus(Payment payment, OffsetDateTime claimedAt,
+                                             KakaoPayClient.OrderResponse order) {
+        String status = order.status();
+        if (KAKAOPAY_SUCCESS.equals(status)) {
+            return completeApproval(payment, claimedAt, new ApprovalResult(
+                    paymentAid(order),
+                    order.tid(),
+                    order.cid(),
+                    order.partnerOrderId(),
+                    order.partnerUserId(),
+                    order.amount() == null ? null : order.amount().total(),
+                    order.paymentMethodType(),
+                    KakaoPayClient.toOffsetDateTime(order.approvedAt())
+            ));
         }
-        configGuarded(() -> {
-            recoveryService.requestCancel(payment, claimedAt);
+        if (KAKAOPAY_FAILED.contains(status)) {
+            transition(payment.getId(), PaymentStatus.APPROVING, claimedAt, PaymentStatus.FAILED);
+        } else if (KAKAOPAY_CANCELED.contains(status)) {
+            // 승인 반영 전 취소·부분 취소는 이번 범위에서 발생하지 않아야 하므로 수동 확인 대상이다.
+            log.error("KakaoPay order canceled before internal approval: orderId={}, status={}",
+                    payment.getId(), status);
+            transition(payment.getId(), PaymentStatus.APPROVING, claimedAt, PaymentStatus.NEEDS_REVIEW);
+        }
+        // 그 밖의 status는 진행 중이므로 APPROVING을 유지하고 복구로 넘긴다.
+        return PaymentResponse.from(reload(payment.getId()));
+    }
+
+    private String paymentAid(KakaoPayClient.OrderResponse order) {
+        if (order.paymentActionDetails() == null) {
             return null;
-        });
-        return PaymentResponse.from(stateService.reload(payment.getId()));
+        }
+        return order.paymentActionDetails().stream()
+                .filter(detail -> "PAYMENT".equals(detail.paymentActionType()))
+                .map(KakaoPayClient.PaymentActionDetail::aid)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+    }
+
+    // 검증 후 한 트랜잭션에서 APPROVED 전환과 충전 적립을 반영한다(6-2절 3·4번).
+    private PaymentResponse completeApproval(Payment payment, OffsetDateTime claimedAt, ApprovalResult result) {
+        if (!result.matches(payment)) {
+            log.error("KakaoPay approval does not match stored order: orderId={}", payment.getId());
+            transition(payment.getId(), PaymentStatus.APPROVING, claimedAt, PaymentStatus.NEEDS_REVIEW);
+            return PaymentResponse.from(reload(payment.getId()));
+        }
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                if (paymentRepository.transition(payment.getId(), PaymentStatus.APPROVING, claimedAt,
+                        PaymentStatus.APPROVED, now()) == 0) {
+                    // 처리권을 잃은 늦은 응답은 새 상태를 덮어쓰지 않는다.
+                    return;
+                }
+                Payment approved = reload(payment.getId());
+                approved.recordApproval(result.aid(), result.approvedAt(), result.paymentMethodType());
+                grantBenefit(approved);
+            });
+        } catch (DataIntegrityViolationException e) {
+            // 원장 (type, reference_id) 부분 UNIQUE가 중복 적립을 막았다. 주문은 APPROVING으로 남아 복구 대상이 된다.
+            log.error("Payment benefit already reflected: orderId={}", payment.getId());
+        }
+        return PaymentResponse.from(reload(payment.getId()));
+    }
+
+    private void grantBenefit(Payment payment) {
+        if (payment.getPurpose() == PaymentPurpose.MILEAGE_CHARGE) {
+            mileageService.addMileage(payment.getBuyer(), payment.getAmount(), TransactionType.CHARGE,
+                    CHARGE_DESCRIPTION, payment.getId());
+            return;
+        }
+        // shortcut: 이용권은 ready에서 막혀 있어 도달하지 않는다. #87 머지 후 MembershipService.grant로 바꾼다.
+        throw new IllegalStateException("Membership grant is not available yet.");
     }
 
     private PaymentReadyResponse replayReady(Payment payment, PaymentProduct product) {
         if (payment.getProductCode() != product) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "같은 요청 ID로 다른 상품을 결제할 수 없습니다.");
         }
-        return PaymentReadyResponse.from(payment, PaymentStateService.now());
+        return PaymentReadyResponse.from(payment, now());
     }
 
     private KakaoPayClient.ReadyRequest readyRequest(Payment payment, UUID userId) {
@@ -289,13 +318,6 @@ public class PaymentService {
         return frontendBaseUrl + RESULT_PATH + "?orderId=" + orderId + "&result=" + result;
     }
 
-    private void requireConfiguredCid(Payment payment) {
-        if (!payment.getCid().equals(kakaoPayClient.cid())) {
-            log.error("Payment CID does not match configured CID: orderId={}", payment.getId());
-            throw notConfigured();
-        }
-    }
-
     private Payment findOwned(UUID userId, UUID orderId) {
         Payment payment = paymentRepository.findById(orderId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "결제 주문을 찾을 수 없습니다."));
@@ -305,19 +327,45 @@ public class PaymentService {
         return payment;
     }
 
-    // 카카오페이 설정 오류는 상태를 유지한 채 503으로 응답한다(6-1절 오류 표).
-    private <T> T configGuarded(Supplier<T> action) {
-        try {
-            return action.get();
-        } catch (KakaoPayException e) {
-            if (e.getKind() == KakaoPayException.Kind.CONFIGURATION) {
-                throw notConfigured();
-            }
-            throw e;
-        }
+    private Payment reload(UUID paymentId) {
+        return paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new IllegalStateException("Payment disappeared: " + paymentId));
     }
 
-    private static ResponseStatusException notConfigured() {
-        return new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, NOT_CONFIGURED_MESSAGE);
+    private boolean transition(UUID paymentId, PaymentStatus observed, OffsetDateTime observedAt, PaymentStatus next) {
+        return transition(paymentId, observed, observedAt, next, now());
+    }
+
+    private boolean transition(UUID paymentId, PaymentStatus observed, OffsetDateTime observedAt,
+                               PaymentStatus next, OffsetDateTime now) {
+        Integer updated = transactionTemplate.execute(status ->
+                paymentRepository.transition(paymentId, observed, observedAt, next, now));
+        return updated != null && updated == 1;
+    }
+
+    // DB(PostgreSQL)는 마이크로초까지 저장하므로 status_changed_at 비교가 어긋나지 않게 맞춘다.
+    private static OffsetDateTime now() {
+        return OffsetDateTime.now().truncatedTo(ChronoUnit.MICROS);
+    }
+
+    private record ApprovalResult(
+            String aid,
+            String tid,
+            String cid,
+            String partnerOrderId,
+            String partnerUserId,
+            Long amountTotal,
+            String paymentMethodType,
+            OffsetDateTime approvedAt
+    ) {
+        // 금액·CID·TID·주문번호·사용자 식별자가 저장한 주문과 같아야 한다(6-2절 1번, 6-5절).
+        private boolean matches(Payment payment) {
+            return aid != null && !aid.isBlank()
+                    && payment.getAmount().equals(amountTotal)
+                    && payment.getCid().equals(cid)
+                    && payment.getTid().equals(tid)
+                    && payment.getId().toString().equals(partnerOrderId)
+                    && payment.getBuyer().getId().toString().equals(partnerUserId);
+        }
     }
 }

@@ -1,5 +1,0 @@
-CREATE TABLE user_memberships (
-    user_id UUID PRIMARY KEY REFERENCES users(id),
-    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-);
