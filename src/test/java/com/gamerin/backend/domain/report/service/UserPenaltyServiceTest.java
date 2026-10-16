@@ -100,6 +100,30 @@ class UserPenaltyServiceTest {
     }
 
     @Test
+    @DisplayName("경고 제재는 이력 전용으로 비활성 저장되고 계정 상태와 토큰은 유지된다")
+    void createPenalty_warning_savedInactive() {
+        // given
+        UserPenaltyCreateRequest request = new UserPenaltyCreateRequest(
+                PenaltyType.WARNING, "욕설", null, null
+        );
+
+        given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
+        given(userRepository.findActiveByIdForUpdate(targetUserId)).willReturn(Optional.of(targetUser));
+        given(userPenaltyRepository.save(any(UserPenalty.class))).willAnswer(invocation -> invocation.getArgument(0));
+
+        // when
+        UserPenaltyResponse response = userPenaltyService.createPenalty(adminId, targetUserId, request);
+
+        // then
+        assertThat(response.penaltyType()).isEqualTo(PenaltyType.WARNING);
+        assertThat(response.isActive()).isFalse();
+        assertThat(response.endAt()).isNull();
+        assertThat(targetUser.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(refreshTokenRepository, never()).findAllByUserIdAndRevokedAtIsNull(any());
+        verify(adminAuditLogRepository).save(any());
+    }
+
+    @Test
     @DisplayName("관리자 본인 계정에 제재를 부여하려고 하면 400 예외가 발생한다")
     void createPenalty_selfPenalty_throwsException() {
         // given
