@@ -9,16 +9,18 @@ public record SimpleUserProfileResponse(
         String handle,
         String nickname,
         String profileImageUrl,
-        boolean verifiedBadge
+        boolean verifiedBadge,
+        boolean membershipBadge
 ) {
-    public static SimpleUserProfileResponse from(User user) {
+    public static SimpleUserProfileResponse from(User user, boolean membershipBadge) {
         UserProfile profile = user.getProfile();
         return new SimpleUserProfileResponse(
                 user.getId(),
                 user.getHandle(),
                 user.getNickname(),
                 profile != null ? profile.getProfileImageUrl() : null,
-                profile != null && profile.isVerifiedBadge()
+                profile != null && profile.isVerifiedBadge(),
+                membershipBadge
         );
     }
 }

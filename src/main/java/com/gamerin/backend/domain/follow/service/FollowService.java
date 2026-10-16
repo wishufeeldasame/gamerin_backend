@@ -22,6 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 import com.gamerin.backend.domain.follow.dto.response.FollowUserResponse;
 import com.gamerin.backend.domain.follow.entity.Follow;
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
@@ -39,15 +40,18 @@ public class FollowService {
     private final UserRepository userRepository;
     private final FollowRepository followRepository;
     private final NotificationCommandService notificationCommandService;
+    private final MembershipService membershipService;
 
     public FollowService(
             UserRepository userRepository,
             FollowRepository followRepository,
-            NotificationCommandService notificationCommandService
+            NotificationCommandService notificationCommandService,
+            MembershipService membershipService
     ) {
         this.userRepository = userRepository;
         this.followRepository = followRepository;
         this.notificationCommandService = notificationCommandService;
+        this.membershipService = membershipService;
     }
 
     public void follow(CustomUserPrincipal principal, String handle) {
@@ -145,6 +149,10 @@ public class FollowService {
                 .map(listedUserExtractor)
                 .toList();
         Set<UUID> followingIds = findFollowingIds(viewerId, listedUsers);
+        Set<UUID> listedUserIds = listedUsers.stream().map(User::getId).collect(Collectors.toSet());
+        Set<UUID> activeMemberIds = listedUserIds.isEmpty()
+                ? Set.of()
+                : membershipService.findActiveUserIds(listedUserIds);
 
         List<FollowUserResponse> items = follows.stream()
                 .map(follow -> {
@@ -152,7 +160,8 @@ public class FollowService {
                     return toFollowUserResponse(
                             listedUser,
                             follow.getCreatedAt(),
-                            followingIds.contains(listedUser.getId())
+                            followingIds.contains(listedUser.getId()),
+                            activeMemberIds.contains(listedUser.getId())
                     );
                 })
                 .toList();
@@ -193,7 +202,9 @@ public class FollowService {
         return new HashSet<>(followRepository.findFolloweeIdsByFollowerIdAndFolloweeIdIn(viewerId, userIds));
     }
 
-    private FollowUserResponse toFollowUserResponse(User user, OffsetDateTime followedAt, boolean isFollowing) {
+    private FollowUserResponse toFollowUserResponse(
+            User user, OffsetDateTime followedAt, boolean isFollowing, boolean membershipBadge
+    ) {
         UserProfile profile = user.getProfile();
 
         return new FollowUserResponse(
@@ -203,6 +214,7 @@ public class FollowService {
                 profile != null ? profile.getBio() : null,
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
+                membershipBadge,
                 isFollowing,
                 followedAt
         );
