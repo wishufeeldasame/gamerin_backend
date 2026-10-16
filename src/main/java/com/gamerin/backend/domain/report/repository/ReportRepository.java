@@ -53,14 +53,13 @@ public interface ReportRepository extends
                         @Param("keyword") String keyword,
                         Pageable pageable);
 
-        // 대상 ID 목록의 신고 건수를 한 번에 집계 (N+1 방지용 일괄 조회)
-        @Query("SELECT r.targetId AS targetId, COUNT(r) AS cnt " +
-                        "FROM Report r " +
-                        "WHERE r.targetType = :targetType AND r.targetId IN :targetIds " +
-                        "GROUP BY r.targetId")
-        List<Object[]> countByTargetTypeAndTargetIdIn(
-                        @Param("targetType") ReportTargetType targetType,
-                        @Param("targetIds") List<UUID> targetIds);
+        // MENTORING 신고는 신청 ID로 접수되므로 신청의 프로그램 기준으로 일괄 집계 (N+1 방지용)
+        @Query("SELECT a.program.id AS programId, COUNT(r) AS cnt " +
+                        "FROM Report r JOIN MentoringApplication a ON a.id = r.targetId " +
+                        "WHERE r.targetType = com.gamerin.backend.domain.report.entity.ReportTargetType.MENTORING " +
+                        "AND a.program.id IN :programIds " +
+                        "GROUP BY a.program.id")
+        List<Object[]> countMentoringReportsByProgramIdIn(@Param("programIds") List<UUID> programIds);
 
         // 신고 원클릭 처리 동시성 제어용 비관적 쓰기 락 조회
         @Lock(LockModeType.PESSIMISTIC_WRITE)

@@ -172,8 +172,7 @@ public class AdminMentoringService {
 
                 // 신고 건수 일괄 조회 (쿼리 1번)
                 Map<UUID, Long> reportMap = new java.util.HashMap<>();
-                for (Object[] row : reportRepository.countByTargetTypeAndTargetIdIn(ReportTargetType.MENTORING,
-                                programIds)) {
+                for (Object[] row : reportRepository.countMentoringReportsByProgramIdIn(programIds)) {
                         reportMap.put((UUID) row[0], (Long) row[1]);
                 }
 
@@ -211,7 +210,7 @@ public class AdminMentoringService {
                                                 program.getTitle())));
 
                 long sessions = mentoringApplicationRepository.countByProgramId(saved.getId());
-                long reports = reportRepository.countByTargetTypeAndTargetId(ReportTargetType.MENTORING, saved.getId());
+                long reports = countProgramReports(saved.getId());
                 Double rating = (saved.getMentor().getRatingAvg() != null)
                                 ? saved.getMentor().getRatingAvg().doubleValue()
                                 : null;
@@ -243,7 +242,7 @@ public class AdminMentoringService {
                                 String.format("관리자 강제 숨김 처리 (제목: %s, 사유: %s)", program.getTitle(), reason)));
 
                 long sessions = mentoringApplicationRepository.countByProgramId(saved.getId());
-                long reports = reportRepository.countByTargetTypeAndTargetId(ReportTargetType.MENTORING, saved.getId());
+                long reports = countProgramReports(saved.getId());
                 Double rating = (saved.getMentor().getRatingAvg() != null)
                                 ? saved.getMentor().getRatingAvg().doubleValue()
                                 : null;
@@ -334,6 +333,12 @@ public class AdminMentoringService {
                                                 settlement.payoutAmount(), settlement.feeAmount(), reason)));
 
                 return MentoringApplicationResponse.from(application);
+        }
+
+        private long countProgramReports(UUID programId) {
+                return reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)).stream()
+                                .mapToLong(row -> (Long) row[1])
+                                .sum();
         }
 
         private User findAdmin(UUID adminId) {

@@ -24,8 +24,8 @@ public class MileageService {
     private final UserRepository userRepository;
 
     public MileageService(MileageWalletRepository walletRepository,
-                          MileageTransactionRepository transactionRepository,
-                          UserRepository userRepository) {
+            MileageTransactionRepository transactionRepository,
+            UserRepository userRepository) {
         this.walletRepository = walletRepository;
         this.transactionRepository = transactionRepository;
         this.userRepository = userRepository;
@@ -72,7 +72,7 @@ public class MileageService {
     }
 
     private void saveTransaction(User user, Long amount, Long balanceAfter,
-                                 TransactionType type, String description, UUID referenceId) {
+            TransactionType type, String description, UUID referenceId) {
         MileageTransaction transaction = MileageTransaction.builder()
                 .user(user)
                 .amount(amount)
@@ -86,7 +86,8 @@ public class MileageService {
 
     /**
      * 비관적 쓰기 락(SELECT FOR UPDATE)을 걸고 지갑 조회 (잔액 변경용)
-     * - 지갑 미존재 시 동시 생성 충돌(PK Unique Violation)을 방지하기 위해 User 락을 활용한 Double-Checked Locking 적용
+     * - 지갑 미존재 시 동시 생성 충돌(PK Unique Violation)을 방지하기 위해 User 락을 활용한 Double-Checked
+     * Locking 적용
      */
     public MileageWallet getOrCreateWalletForUpdate(User user) {
         return walletRepository.findByUserIdForUpdate(user.getId())
@@ -103,7 +104,7 @@ public class MileageService {
     }
 
     /**
-     * 기본 지갑 조회 및 미존재 시 생성 (단순 잔액 조회 등 읽기 전용 작업에서 재사용)
+     * 기본 지갑 조회 및 미존재 시 생성 (멘토 등록 등 쓰기 트랜잭션 환경에서 재사용)
      */
     public MileageWallet getOrCreateWallet(User user) {
         return walletRepository.findById(user.getId())
@@ -123,11 +124,17 @@ public class MileageService {
         return walletRepository.saveAndFlush(newWallet);
     }
 
-    // 잔액만 조회 (락 없이 빠른 읽기)
+    /**
+     * 잔액만 조회 (락 및 INSERT 없이 빠른 읽기)
+     * - 읽기 전용 트랜잭션(@Transactional(readOnly = true))에서 안전하게 동작하도록
+     * 지갑이 없더라도 지갑 생성(INSERT)이나 비관적 락(FOR UPDATE)을 시도하지 않고 0원을 반환합니다.
+     */
     @Transactional(readOnly = true)
     public MyMileageResponse getMyBalance(User user) {
-        MileageWallet wallet = getOrCreateWallet(user);
-        return new MyMileageResponse(wallet.getBalance());
+        Long balance = walletRepository.findById(user.getId())
+                .map(MileageWallet::getBalance)
+                .orElse(0L);
+        return new MyMileageResponse(balance);
     }
 
     // 트랜잭션 내역만 조회(페이징 적용)
