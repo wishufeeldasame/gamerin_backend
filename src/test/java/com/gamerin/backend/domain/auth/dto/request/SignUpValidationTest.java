@@ -13,7 +13,7 @@ class SignUpValidationTest {
     private final Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
 
     private SignUpRequest signUp(String handle) {
-        return new SignUpRequest(handle, "Tester", "user@example.com", "Password1!", "Password1!", true, true);
+        return new SignUpRequest(handle, "Tester", "user@example.com", "Password1!", "Password1!", true, true, "verify-token");
     }
 
     private SocialSignUpRequest social(String handle, String nickname) {
@@ -30,6 +30,14 @@ class SignUpValidationTest {
     @ValueSource(strings = {"abc", "user_01", "aaaaaaaaaaaaaaaaaaaa"})
     void signUpAcceptsValidHandle(String handle) {
         assertThat(validator.validate(signUp(handle))).isEmpty();
+    }
+
+    @Test
+    void signUpRequiresEmailVerificationToken() {
+        SignUpRequest request = new SignUpRequest("abc", "Tester", "user@example.com", "Password1!", "Password1!", true, true, " ");
+        assertThat(validator.validate(request))
+                .extracting(v -> v.getMessage())
+                .containsExactly("이메일 인증이 필요합니다.");
     }
 
     @Test

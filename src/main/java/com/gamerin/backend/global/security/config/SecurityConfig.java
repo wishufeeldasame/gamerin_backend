@@ -58,6 +58,8 @@ public class SecurityConfig {
             "/api/v1/auth/find-password",
             "/api/v1/auth/reset-password",
             "/api/v1/auth/availability/**",
+            "/api/v1/auth/email-verifications",
+            "/api/v1/auth/email-verifications/confirm",
             "/oauth2/**",
             "/login/oauth2/**",
             "/uploads/**"

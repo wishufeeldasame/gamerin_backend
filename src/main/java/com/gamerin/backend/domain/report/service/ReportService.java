@@ -311,9 +311,10 @@ public class ReportService {
         // 2. 콘텐츠 숨김 처리 (처리 완료이고 숨김 체크된 경우)
         if (request.decision() == ReportStatus.RESOLVED && request.hideTargetContent()
                 && isAutoHideSupported(report.getTargetType())) {
+            // 잠금 순서(report_counts → posts → post_comments)를 신고 접수·복구·정리와 맞춘다.
+            ReportCount reportCount = getOrCreateReportCount(report.getTargetType(), report.getTargetId());
             boolean hidden = hideTargetContent(report.getTargetType(), report.getTargetId());
             if (hidden) {
-                ReportCount reportCount = getOrCreateReportCount(report.getTargetType(), report.getTargetId());
                 reportCount.hide();
                 reportCountRepository.save(reportCount);
 
@@ -460,8 +461,9 @@ public class ReportService {
     private void validateTargetExists(UUID reporterId, ReportTargetType targetType, UUID targetId) {
         boolean exists = switch (targetType) {
             case POST -> postRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
+            // 댓글은 글을 따라간다: 숨김·삭제된 글의 댓글은 신고 대상이 아니다.
             case COMMENT -> postCommentRepository.findById(targetId)
-                    .map(comment -> comment.getDeletedAt() == null)
+                    .map(comment -> comment.getDeletedAt() == null && comment.getPost().getDeletedAt() == null)
                     .orElse(false);
             case USER -> userRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
             case MENTORING -> mentoringApplicationRepository.existsById(targetId);
@@ -560,12 +562,16 @@ public class ReportService {
                         return true;
                     }).orElse(false);
         } else if (targetType == ReportTargetType.COMMENT) {
+            // 글을 잠근 뒤 댓글을 다시 조회해 사용자 댓글 작성·삭제와 댓글 수 갱신이 겹치지 않게 한다.
             return postCommentRepository.findById(targetId)
-                    .filter(c -> c.getDeletedAt() == null)
-                    .map(comment -> {
-                        comment.softDelete();
-                        return true;
-                    }).orElse(false);
+                    .flatMap(comment -> postRepository.findActiveByIdForUpdate(comment.getPost().getId()))
+                    .flatMap(post -> postCommentRepository.findActiveByPostIdAndId(post.getId(), targetId)
+                            .map(comment -> {
+                                comment.softDelete();
+                                postRepository.decreaseCommentCount(post.getId());
+                                return true;
+                            }))
+                    .orElse(false);
         }
         return false;
     }
@@ -586,6 +592,7 @@ public class ReportService {
             return postCommentRepository.findById(targetId)
                     .map(comment -> {
                         if (comment.getDeletedAt() != null) {
+                            postRepository.increaseCommentCount(comment.getPost().getId());
                             comment.restore();
                         }
                         return true;

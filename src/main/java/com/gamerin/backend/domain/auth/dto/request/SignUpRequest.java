@@ -31,6 +31,9 @@ public record SignUpRequest(
         Boolean agreedToTerms,
 
         @AssertTrue(message = "개인정보 처리방침 동의가 필요합니다.")
-        Boolean agreedToPrivacy
+        Boolean agreedToPrivacy,
+
+        @NotBlank(message = "이메일 인증이 필요합니다.")
+        String emailVerificationToken
 ) {
 }

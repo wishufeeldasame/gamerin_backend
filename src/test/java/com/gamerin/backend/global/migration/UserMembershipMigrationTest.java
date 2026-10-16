@@ -24,10 +24,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 @EnabledIfEnvironmentVariable(named = "PAYMENT_POSTGRES_TEST_URL", matches = ".+")
 class UserMembershipMigrationTest {
 
-    @Test
-    void missingMembershipMigrationAfterPaymentMigrationRequiresExplicitOutOfOrder(@TempDir Path migrations)
+    @ParameterizedTest
+    @ValueSource(strings = {"35", "41"})
+    void missingMembershipMigrationAfterLaterMigrationsRequiresExplicitOutOfOrder(String appliedVersion,
+            @TempDir Path migrations)
             throws Exception {
-        // Reproduce the payment branch before #87: V35 exists, but V33 does not.
+        // Reproduce the shared branch before #87: later migrations exist, but V33 does not.
         try (var scripts = Files.list(Path.of("src/main/resources/db/migration"))) {
             for (Path script : scripts.filter(path -> path.getFileName().toString().endsWith(".sql"))
                     .filter(path -> !path.getFileName().toString().startsWith("V33__")).toList()) {
@@ -38,23 +40,29 @@ class UserMembershipMigrationTest {
         try (Fixture fixture = new Fixture()) {
             Flyway.configure().dataSource(fixture.url, fixture.username, fixture.password)
                     .schemas(fixture.schema).defaultSchema(fixture.schema)
-                    .locations("filesystem:" + migrations.toAbsolutePath()).target("35").load().migrate();
+                    .locations("filesystem:" + migrations.toAbsolutePath()).target(appliedVersion).load().migrate();
             UUID existingUser = fixture.addUser();
 
-            assertThatThrownBy(() -> fixture.flyway("35").migrate()).isInstanceOf(FlywayException.class);
+            assertThatThrownBy(() -> fixture.flyway(appliedVersion).migrate()).isInstanceOf(FlywayException.class);
             assertThat(fixture.membershipTableExists()).isFalse();
 
             Flyway catchUp = Flyway.configure().dataSource(fixture.url, fixture.username, fixture.password)
                     .schemas(fixture.schema).defaultSchema(fixture.schema)
-                    .target("35").outOfOrder(true).load();
+                    .target(appliedVersion).outOfOrder(true).load();
             assertThat(catchUp.migrate().migrationsExecuted).isEqualTo(1);
 
             assertThat(fixture.nickname(existingUser)).isEqualTo("Existing user");
             fixture.assertMembershipConstraints(existingUser);
-            Flyway normal = fixture.flyway("35");
+            Flyway normal = fixture.flyway(appliedVersion);
             assertThat(normal.validateWithResult().validationSuccessful).isTrue();
             assertThat(normal.migrate().migrationsExecuted).isZero();
-            assertThat(normal.info().current().getVersion().toString()).isEqualTo("35");
+            assertThat(normal.info().current().getVersion().toString()).isEqualTo(appliedVersion);
+
+            Flyway latest = fixture.flyway("41");
+            latest.migrate();
+            assertThat(latest.info().current().getVersion().toString()).isEqualTo("41");
+            assertThat(latest.validateWithResult().validationSuccessful).isTrue();
+            assertThat(latest.migrate().migrationsExecuted).isZero();
         }
     }
 
@@ -68,16 +76,48 @@ class UserMembershipMigrationTest {
                 existingUser = fixture.addUser();
             }
 
-            Flyway migration = fixture.flyway("33");
+            Flyway migration = fixture.flyway("41");
             migration.migrate();
 
-            assertThat(migration.info().current().getVersion().toString()).isEqualTo("33");
+            assertThat(migration.info().current().getVersion().toString()).isEqualTo("41");
             assertThat(migration.validateWithResult().validationSuccessful).isTrue();
             assertThat(migration.migrate().migrationsExecuted).isZero();
             if (existingUser != null) {
                 assertThat(fixture.nickname(existingUser)).isEqualTo("Existing user");
             }
             fixture.assertMembershipConstraints(existingUser == null ? fixture.addUser() : existingUser);
+        }
+    }
+
+    @Test
+    void appliedMembershipMigrationAndExistingPeriodArePreservedWhenUpgradingThroughV41() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            fixture.flyway("33").migrate();
+            UUID existingUser = fixture.addUser();
+            OffsetDateTime expiresAt = OffsetDateTime.parse("2027-01-01T09:00:00.123456+09:00");
+            OffsetDateTime updatedAt = OffsetDateTime.parse("2026-10-01T00:00:00.654321Z");
+            fixture.execute("insert into user_memberships(user_id, expires_at, updated_at) values (?, ?, ?)",
+                    existingUser, expiresAt, updatedAt);
+
+            fixture.flyway("35").migrate();
+            Flyway latest = fixture.flyway("41");
+            latest.migrate();
+
+            assertThat(fixture.nickname(existingUser)).isEqualTo("Existing user");
+            try (var statement = fixture.connection.prepareStatement(
+                    "select expires_at, updated_at from user_memberships where user_id = ?")) {
+                statement.setObject(1, existingUser);
+                try (var rows = statement.executeQuery()) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getObject("expires_at", OffsetDateTime.class).toInstant())
+                            .isEqualTo(expiresAt.toInstant());
+                    assertThat(rows.getObject("updated_at", OffsetDateTime.class).toInstant())
+                            .isEqualTo(updatedAt.toInstant());
+                }
+            }
+            assertThat(latest.info().current().getVersion().toString()).isEqualTo("41");
+            assertThat(latest.validateWithResult().validationSuccessful).isTrue();
+            assertThat(latest.migrate().migrationsExecuted).isZero();
         }
     }
 
