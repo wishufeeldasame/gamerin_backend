@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.OffsetDateTime;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +32,7 @@ import com.gamerin.backend.domain.mentoring.dto.response.MentoringApplicationRes
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramDetailResponse;
 import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
+import com.gamerin.backend.domain.mentoring.entity.MentorStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
 import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
@@ -228,6 +230,7 @@ class MentoringServiceTest {
 
                 MentorProfile mentorProfile = new MentorProfile();
                 mentorProfile.setUser(mentorUser);
+                mentorProfile.setStatus(MentorStatus.ACTIVE);
                 mentorProfile.setAbout("about");
 
                 MentoringProgram program = new MentoringProgram();
@@ -337,7 +340,8 @@ class MentoringServiceTest {
                                 CustomUserPrincipal.from(mentee),
                                 new MentoringApplicationRequest(UUID.randomUUID(), "message")))
                                 .isInstanceOf(ResponseStatusException.class)
-                                .satisfies(error -> assertThat(((ResponseStatusException) error).getStatusCode().value())
+                                .satisfies(error -> assertThat(
+                                                ((ResponseStatusException) error).getStatusCode().value())
                                                 .isEqualTo(HttpStatus.NOT_FOUND.value()));
 
                 verify(mentoringProgramRepository, never()).findByIdForUpdate(any());
@@ -379,6 +383,94 @@ class MentoringServiceTest {
                                         ResponseStatusException ex = (ResponseStatusException) error;
                                         assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.NOT_FOUND.value());
                                         assertThat(ex.getReason()).isEqualTo("프로그램을 찾을 수 없습니다.");
+                                });
+        }
+
+        @Test
+        @DisplayName("[이슈 #84] 관리자가 일시정지한 프로그램은 멘토가 다시 ACTIVE로 열 수 없다 (403 FORBIDDEN)")
+        void updateProgramRejectsReopeningAdminSuspendedProgram() {
+                UUID mentorId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication application = application(mentorId, UUID.randomUUID(), programId,
+                                UUID.randomUUID());
+                MentoringProgram program = application.getProgram();
+                program.getMentor().setStatus(MentorStatus.ACTIVE);
+                program.setStatus(ProgramStatus.CLOSED);
+                // 관리자가 일시정지한 상태 설정
+                program.setAdminSuspendedAt(OffsetDateTime.now());
+
+                when(mentoringProgramRepository.findByIdAndDeletedAtIsNull(programId)).thenReturn(Optional.of(program));
+
+                MentoringProgramUpdateRequest request = new MentoringProgramUpdateRequest(
+                                "수정 제목", "수정 내용", "시간 협의", 1000L, ProgramStatus.ACTIVE, List.of("태그"));
+
+                assertThatThrownBy(() -> mentoringService.updateProgram(
+                                CustomUserPrincipal.from(program.getMentor().getUser()),
+                                programId,
+                                request))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> {
+                                        ResponseStatusException ex = (ResponseStatusException) error;
+                                        assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.FORBIDDEN.value());
+                                        assertThat(ex.getReason()).isEqualTo("관리자가 일시정지한 프로그램은 멘토가 다시 열 수 없습니다.");
+                                });
+        }
+
+        @Test
+        @DisplayName("[이슈 #84] 비활성화된(INACTIVE) 멘토의 프로그램에는 신규 신청이 거부된다 (409 CONFLICT)")
+        void applyToProgramRejectsInactiveMentorProgram() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication application = application(mentorId, menteeId, programId, UUID.randomUUID());
+                MentoringProgram program = application.getProgram();
+                program.setStatus(ProgramStatus.ACTIVE);
+                // 멘토가 반려 또는 비활성화된 상태
+                program.getMentor().setStatus(MentorStatus.INACTIVE);
+
+                when(userRepository.findActiveByIdForUpdate(menteeId)).thenReturn(Optional.of(application.getMentee()));
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+
+                assertThatThrownBy(() -> mentoringService.applyToProgram(
+                                CustomUserPrincipal.from(application.getMentee()),
+                                new MentoringApplicationRequest(programId, "신청합니다")))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> {
+                                        ResponseStatusException ex = (ResponseStatusException) error;
+                                        assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.CONFLICT.value());
+                                        assertThat(ex.getReason()).isEqualTo("활동 중인 멘토의 프로그램만 신청할 수 있습니다.");
+                                });
+
+                // 마일리지 차감 및 신청 저장이 일어나지 않았는지 검증
+                verify(mileageService, never()).useMileage(any(), any(), any(), any(), any());
+                verify(mentoringApplicationRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("[이슈 #84] 비활성화된(INACTIVE) 멘토는 프로그램을 수정할 수 없다 (403 FORBIDDEN)")
+        void updateProgramRejectsInactiveMentor() {
+                UUID mentorId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication application = application(mentorId, UUID.randomUUID(), programId,
+                                UUID.randomUUID());
+                MentoringProgram program = application.getProgram();
+                // 멘토가 비활성화된 상태
+                program.getMentor().setStatus(MentorStatus.INACTIVE);
+
+                when(mentoringProgramRepository.findByIdAndDeletedAtIsNull(programId)).thenReturn(Optional.of(program));
+
+                MentoringProgramUpdateRequest request = new MentoringProgramUpdateRequest(
+                                "수정 제목", "수정 내용", "시간 협의", 1000L, ProgramStatus.CLOSED, List.of("태그"));
+
+                assertThatThrownBy(() -> mentoringService.updateProgram(
+                                CustomUserPrincipal.from(program.getMentor().getUser()),
+                                programId,
+                                request))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .satisfies(error -> {
+                                        ResponseStatusException ex = (ResponseStatusException) error;
+                                        assertThat(ex.getStatusCode().value()).isEqualTo(HttpStatus.FORBIDDEN.value());
+                                        assertThat(ex.getReason()).isEqualTo("활동 중인 멘토만 프로그램을 수정할 수 있습니다.");
                                 });
         }
 }
