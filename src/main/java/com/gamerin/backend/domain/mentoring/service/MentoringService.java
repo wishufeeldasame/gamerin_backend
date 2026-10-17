@@ -262,6 +262,11 @@ public class MentoringService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 진행 중인 신청 내역이 있습니다.");
         }
 
+        // [KP-C2 #91 F2] 신청 시점 멘토의 멤버십 유효 여부로 수수료 요율 스냅샷(500/1000) 결정
+        int feeRateBp = membershipService.isActive(program.getMentor().getId())
+                ? MentoringApplication.MEMBERSHIP_FEE_RATE_BP
+                : MentoringApplication.DEFAULT_FEE_RATE_BP;
+
         // 1. 신청 내역 먼저 저장하여 ID 획득 (KP-C1 #90 F2)
         MentoringApplication application = new MentoringApplication();
         application.setProgram(program);
@@ -269,7 +274,7 @@ public class MentoringService {
         application.setAppliedMileage(program.getPrice());
         application.setMessage(request.message());
         application.setPaymentStatus(PaymentStatus.ESCROW_HELD);
-        application.setFeeRateBp(MentoringApplication.DEFAULT_FEE_RATE_BP); // KP-C1 기본 요율 10%
+        application.setFeeRateBp(feeRateBp);
 
         MentoringApplication savedApplication = mentoringApplicationRepository.save(application);
 
@@ -286,7 +291,7 @@ public class MentoringService {
                 mentee,
                 program.getMentor().getUser());
 
-        return toApplicationResponse(savedApplication);
+        return toMenteeApplicationResponse(savedApplication);
     }
 
     // 멘토링 신청 취소
@@ -318,7 +323,7 @@ public class MentoringService {
                 "멘토링 신청 취소에 따른 환불",
                 application.getId());
 
-        return toApplicationResponse(application);
+        return toMenteeApplicationResponse(application);
     }
 
     // 멘티가 본인 신청 내역 확인하는거
@@ -326,7 +331,8 @@ public class MentoringService {
     public Page<MentoringApplicationResponse> getMyApplicationsAsMentee(CustomUserPrincipal principal,
             Pageable pageable) {
         return toApplicationResponsePage(
-                mentoringApplicationRepository.findByMenteeId(principal.getUserId(), pageable));
+                mentoringApplicationRepository.findByMenteeId(principal.getUserId(), pageable),
+                false);
     }
 
     // 멘토가 신청 내역 확인하는거
@@ -334,7 +340,8 @@ public class MentoringService {
     public Page<MentoringApplicationResponse> getMyApplicationsAsMentor(CustomUserPrincipal principal,
             Pageable pageable) {
         return toApplicationResponsePage(
-                mentoringApplicationRepository.findByProgramMentorId(principal.getUserId(), pageable));
+                mentoringApplicationRepository.findByProgramMentorId(principal.getUserId(), pageable),
+                true);
     }
 
     // 신청 수락
@@ -358,7 +365,7 @@ public class MentoringService {
                 application.getProgram().getMentor().getUser(),
                 application.getMentee());
 
-        return toApplicationResponse(application);
+        return toMentorApplicationResponse(application);
     }
 
     // 신청 거절
@@ -390,7 +397,7 @@ public class MentoringService {
                 "멘토링 거절에 따른 환불",
                 application.getId());
 
-        return toApplicationResponse(application);
+        return toMentorApplicationResponse(application);
     }
 
     // 멘토링 시작
@@ -414,7 +421,7 @@ public class MentoringService {
                 application.getProgram().getMentor().getUser(),
                 application.getMentee());
 
-        return toApplicationResponse(application);
+        return toMentorApplicationResponse(application);
     }
 
     // 멘토 완료 보고
@@ -438,7 +445,7 @@ public class MentoringService {
                 application.getProgram().getMentor().getUser(),
                 application.getMentee());
 
-        return toApplicationResponse(application);
+        return toMentorApplicationResponse(application);
     }
 
     // 멘토링 완료 확정 및 정산
@@ -483,7 +490,7 @@ public class MentoringService {
                 application.getMentee(),
                 mentorProfile.getUser());
 
-        return toApplicationResponse(application);
+        return toMenteeApplicationResponse(application);
     }
 
     // 자동 정산 대상 처리
@@ -549,20 +556,31 @@ public class MentoringService {
         return MentoringReviewResponse.from(savedReview, membershipService.isActive(savedReview.getMentee().getId()));
     }
 
-    private MentoringApplicationResponse toApplicationResponse(MentoringApplication application) {
+    private MentoringApplicationResponse toMenteeApplicationResponse(MentoringApplication application) {
+        return toApplicationResponse(application, false);
+    }
+
+    private MentoringApplicationResponse toMentorApplicationResponse(MentoringApplication application) {
+        return toApplicationResponse(application, true);
+    }
+
+    private MentoringApplicationResponse toApplicationResponse(MentoringApplication application, boolean mentorView) {
         UUID mentorId = application.getProgram().getMentor().getId();
         UUID menteeId = application.getMentee().getId();
         Set<UUID> activeUserIds = membershipService.findActiveUserIds(new HashSet<>(List.of(mentorId, menteeId)));
-        return MentoringApplicationResponse.from(
+        return toRoleResponse(
                 application,
                 mentoringReviewRepository.existsByApplicationId(application.getId()),
                 activeUserIds.contains(mentorId),
-                activeUserIds.contains(menteeId));
+                activeUserIds.contains(menteeId),
+                mentorView);
     }
 
-    private Page<MentoringApplicationResponse> toApplicationResponsePage(Page<MentoringApplication> applications) {
+    private Page<MentoringApplicationResponse> toApplicationResponsePage(
+            Page<MentoringApplication> applications,
+            boolean mentorView) {
         if (applications.getContent().isEmpty()) {
-            return applications.map(application -> MentoringApplicationResponse.from(application, false, false, false));
+            return applications.map(application -> toRoleResponse(application, false, false, false, mentorView));
         }
 
         List<UUID> applicationIds = applications.getContent().stream()
@@ -577,11 +595,32 @@ public class MentoringService {
         });
         Set<UUID> activeUserIds = membershipService.findActiveUserIds(participantIds);
 
-        return applications.map(application -> MentoringApplicationResponse.from(
+        return applications.map(application -> toRoleResponse(
                 application,
                 reviewedApplicationIds.contains(application.getId()),
                 activeUserIds.contains(application.getProgram().getMentor().getId()),
-                activeUserIds.contains(application.getMentee().getId())));
+                activeUserIds.contains(application.getMentee().getId()),
+                mentorView));
+    }
+
+    private MentoringApplicationResponse toRoleResponse(
+            MentoringApplication application,
+            boolean hasReview,
+            boolean mentorMembershipBadge,
+            boolean menteeMembershipBadge,
+            boolean mentorView) {
+        if (mentorView) {
+            return MentoringApplicationResponse.fromMentor(
+                    application,
+                    hasReview,
+                    mentorMembershipBadge,
+                    menteeMembershipBadge);
+        }
+        return MentoringApplicationResponse.fromMentee(
+                application,
+                hasReview,
+                mentorMembershipBadge,
+                menteeMembershipBadge);
     }
 
     // 멘토 평점 업데이트

@@ -52,6 +52,9 @@ public class MentoringApplication {
     /** 기본 수수료 요율 10% (1000bp). V31 마이그레이션의 컬럼 DEFAULT와 동일해야 한다. */
     public static final int DEFAULT_FEE_RATE_BP = 1000;
 
+    /** 멤버십 멘토 우대 수수료 요율 5% (500bp) (KP-C2 #91). */
+    public static final int MEMBERSHIP_FEE_RATE_BP = 500;
+
     @Column(name = "fee_rate_bp", nullable = false)
     private Integer feeRateBp = DEFAULT_FEE_RATE_BP;
 
@@ -87,7 +90,6 @@ public class MentoringApplication {
 
     public User getMentee() { return mentee; }
     public void setMentee(User mentee) { this.mentee = mentee; }
-
 
     public Long getAppliedMileage() { return appliedMileage; }
     public void setAppliedMileage(Long appliedMileage) { this.appliedMileage = appliedMileage; }

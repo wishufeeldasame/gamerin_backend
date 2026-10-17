@@ -481,4 +481,160 @@ class MentoringServiceTest {
                                 anyString(),
                                 eq(appId));
         }
+
+        @Test
+        @DisplayName("[KP-C2/F2] 멤버십 가입 멘토의 프로그램에 신청 시 feeRateBp가 500(5%)으로 스냅샷 저장된다")
+        void applyToProgramSnapshots500BpWhenMentorHasActiveMembership() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication app = application(mentorId, menteeId, programId, UUID.randomUUID());
+                MentoringProgram prog = app.getProgram();
+                prog.setStatus(ProgramStatus.ACTIVE);
+                prog.setPrice(20000L);
+
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(prog));
+                when(mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(any(), any(), any()))
+                                .thenReturn(false);
+                when(userRepository.findActiveByIdForUpdate(menteeId)).thenReturn(Optional.of(app.getMentee()));
+                when(membershipService.isActive(mentorId)).thenReturn(true);
+
+                final MentoringApplication[] captured = new MentoringApplication[1];
+                when(mentoringApplicationRepository.save(any(MentoringApplication.class))).thenAnswer(invocation -> {
+                        MentoringApplication a = invocation.getArgument(0);
+                        ReflectionTestUtils.setField(a, "id", UUID.randomUUID());
+                        captured[0] = a;
+                        return a;
+                });
+
+                MentoringApplicationResponse response = mentoringService.applyToProgram(
+                                CustomUserPrincipal.from(app.getMentee()),
+                                new MentoringApplicationRequest(programId, "신청합니다"));
+
+                assertThat(captured[0].getFeeRateBp()).isEqualTo(500);
+                // 멘티 응답이므로 수수료 상세는 노출되지 않고 가격은 그대로 유지됨 (F5)
+                assertThat(response.appliedMileage()).isEqualTo(20000L);
+                assertThat(response.feeRateBp()).isNull();
+                assertThat(response.feeAmount()).isNull();
+                assertThat(response.payoutAmount()).isNull();
+        }
+
+        @Test
+        @DisplayName("[KP-C2/F2] 멤버십 미가입 멘토의 프로그램에 신청 시 feeRateBp가 1000(10%)으로 스냅샷 저장된다")
+        void applyToProgramSnapshots1000BpWhenMentorHasNoMembership() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication app = application(mentorId, menteeId, programId, UUID.randomUUID());
+                MentoringProgram prog = app.getProgram();
+                prog.setStatus(ProgramStatus.ACTIVE);
+                prog.setPrice(20000L);
+
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(prog));
+                when(mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(any(), any(), any()))
+                                .thenReturn(false);
+                when(userRepository.findActiveByIdForUpdate(menteeId)).thenReturn(Optional.of(app.getMentee()));
+                when(membershipService.isActive(mentorId)).thenReturn(false);
+
+                final MentoringApplication[] captured = new MentoringApplication[1];
+                when(mentoringApplicationRepository.save(any(MentoringApplication.class))).thenAnswer(invocation -> {
+                        MentoringApplication a = invocation.getArgument(0);
+                        ReflectionTestUtils.setField(a, "id", UUID.randomUUID());
+                        captured[0] = a;
+                        return a;
+                });
+
+                mentoringService.applyToProgram(
+                                CustomUserPrincipal.from(app.getMentee()),
+                                new MentoringApplicationRequest(programId, "신청합니다"));
+
+                assertThat(captured[0].getFeeRateBp()).isEqualTo(1000);
+        }
+
+        @Test
+        @DisplayName("[KP-C2] 신청 시점 멤버십 활성(500bp) 후 정산 시점 만료되어도 5% 요율로 정산된다")
+        void completeMentoringUsesSnapshot500BpEvenAfterMembershipExpires() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                UUID appId = UUID.randomUUID();
+                MentoringApplication app = application(mentorId, menteeId, programId, appId);
+                app.setStatus(ApplicationStatus.ONGOING);
+                app.setAppliedMileage(20000L);
+                app.setFeeRateBp(500);
+
+                when(mentoringApplicationRepository.findByIdForUpdate(appId)).thenReturn(Optional.of(app));
+                when(mentorProfileRepository.findByIdForUpdate(mentorId))
+                                .thenReturn(Optional.of(app.getProgram().getMentor()));
+                when(membershipService.findActiveUserIds(any())).thenReturn(java.util.Set.of());
+
+                mentoringService.completeMentoring(CustomUserPrincipal.from(app.getMentee()), appId);
+
+                // 정산 시점에 membershipService.isActive를 재조회하지 않고 스냅샷(500bp)만 사용함을 검증
+                verify(membershipService, never()).isActive(any());
+                assertThat(app.getFeeAmount()).isEqualTo(1000L);
+                verify(mileageService, times(1)).addMileage(
+                                eq(app.getProgram().getMentor().getUser()),
+                                eq(19000L),
+                                eq(TransactionType.SETTLEMENT),
+                                anyString(),
+                                eq(appId));
+        }
+
+        @Test
+        @DisplayName("[KP-C2] 신청 시점 일반(1000bp) 후 진행 중 멤버십에 가입해도 10% 요율로 정산된다")
+        void completeMentoringUsesSnapshot1000BpEvenAfterMentorSubscribesDuringMentoring() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                UUID appId = UUID.randomUUID();
+                MentoringApplication app = application(mentorId, menteeId, programId, appId);
+                app.setStatus(ApplicationStatus.ONGOING);
+                app.setAppliedMileage(20000L);
+                app.setFeeRateBp(1000);
+
+                when(mentoringApplicationRepository.findByIdForUpdate(appId)).thenReturn(Optional.of(app));
+                when(mentorProfileRepository.findByIdForUpdate(mentorId))
+                                .thenReturn(Optional.of(app.getProgram().getMentor()));
+                when(membershipService.findActiveUserIds(any())).thenReturn(java.util.Set.of(mentorId));
+
+                mentoringService.completeMentoring(CustomUserPrincipal.from(app.getMentee()), appId);
+
+                verify(membershipService, never()).isActive(any());
+                assertThat(app.getFeeAmount()).isEqualTo(2000L);
+                verify(mileageService, times(1)).addMileage(
+                                eq(app.getProgram().getMentor().getUser()),
+                                eq(18000L),
+                                eq(TransactionType.SETTLEMENT),
+                                anyString(),
+                                eq(appId));
+        }
+
+        @Test
+        @DisplayName("[KP-C2/F5] 멘토 신청 목록 조회 시 요율, 수수료, 예상 수령액, 비가입 안내가 포함된다")
+        void getMyApplicationsAsMentorIncludesFeeAndPayoutDetails() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                UUID appId = UUID.randomUUID();
+                MentoringApplication app = application(mentorId, menteeId, programId, appId);
+                app.setAppliedMileage(20000L);
+                app.setFeeRateBp(1000);
+
+                when(mentoringApplicationRepository.findByProgramMentorId(eq(mentorId), any()))
+                                .thenReturn(new PageImpl<>(List.of(app)));
+                when(mentoringReviewRepository.findReviewedApplicationIds(anyList())).thenReturn(List.of());
+                when(membershipService.findActiveUserIds(any())).thenReturn(java.util.Set.of());
+
+                Page<MentoringApplicationResponse> page = mentoringService.getMyApplicationsAsMentor(
+                                CustomUserPrincipal.from(app.getProgram().getMentor().getUser()),
+                                PageRequest.of(0, 10));
+
+                MentoringApplicationResponse item = page.getContent().get(0);
+                assertThat(item.feeRateBp()).isEqualTo(1000);
+                assertThat(item.feeAmount()).isEqualTo(2000L);
+                assertThat(item.payoutAmount()).isEqualTo(18000L);
+                assertThat(item.nonMemberNotice()).isTrue();
+                assertThat(item.feeNotice()).isEqualTo(MentoringApplicationResponse.NON_MEMBER_NOTICE_MESSAGE);
+        }
 }
