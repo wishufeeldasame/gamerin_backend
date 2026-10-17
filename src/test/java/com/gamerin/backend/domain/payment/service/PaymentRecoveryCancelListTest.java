@@ -81,6 +81,7 @@ class PaymentRecoveryCancelListTest {
     @BeforeEach
     void setUp() {
         // 스케줄러는 모든 주문을 훑으므로 다른 테스트가 남긴 주문을 지운다(테스트 전용 H2).
+        jdbcTemplate.update("delete from membership_grants");
         jdbcTemplate.update("delete from payments");
         userId = createUser();
         when(kakaoPayClient.isConfigured()).thenReturn(true);
@@ -361,6 +362,96 @@ class PaymentRecoveryCancelListTest {
         assertThat(status(orderId)).isEqualTo(PaymentStatus.CANCELING);
     }
 
+    // ---- 이용권 결제 취소 ----
+
+    @Test
+    void membershipCancelRevokesOnlyLatestPurchaseAndKeepsEarlierPeriod() {
+        UUID first = approvedOrder("MEMBERSHIP_30D");
+        OffsetDateTime firstUntil = membershipExpiry();
+        UUID second = approvedOrder("MEMBERSHIP_30D");
+        when(kakaoPayClient.cancel(any())).thenAnswer(invocation -> {
+            KakaoPayClient.CancelRequest request = invocation.getArgument(0);
+            UUID orderId = request.tid().equals(tid(first)) ? first : second;
+            return cancelResponse(orderId, 4_900L);
+        });
+
+        // 후속 구매가 있는 이용권은 취소하지 않는다.
+        assertStatus(() -> paymentService.cancel(userId, first), HttpStatus.CONFLICT);
+        assertThat(status(first)).isEqualTo(PaymentStatus.APPROVED);
+        verify(kakaoPayClient, never()).cancel(any());
+
+        PaymentResponse canceled = paymentService.cancel(userId, second);
+        PaymentResponse replay = paymentService.cancel(userId, second);
+
+        assertThat(canceled.status()).isEqualTo(PaymentStatus.CANCELED);
+        assertThat(replay.status()).isEqualTo(PaymentStatus.CANCELED);
+        verify(kakaoPayClient, times(1)).cancel(any());
+        assertThat(membershipExpiry()).isEqualTo(firstUntil);
+        assertThat(grantStatus(first)).isEqualTo("GRANTED");
+        assertThat(grantStatus(second)).isEqualTo("REVOKED");
+        assertThat(balance()).isZero();
+
+        // 회수된 후속 구매가 있어도 이전 구매는 자동 취소하지 않는다(#89 revoke 정책).
+        assertStatus(() -> paymentService.cancel(userId, first), HttpStatus.CONFLICT);
+        assertThat(status(first)).isEqualTo(PaymentStatus.APPROVED);
+        assertThat(membershipExpiry()).isEqualTo(firstUntil);
+    }
+
+    @Test
+    void membershipCancelIsRejectedWhileAnotherMembershipOrderIsPending() {
+        UUID approved = approvedOrder("MEMBERSHIP_30D");
+        OffsetDateTime expiresAt = membershipExpiry();
+        UUID pending = readyOrder("MEMBERSHIP_30D");
+
+        assertStatus(() -> paymentService.cancel(userId, approved), HttpStatus.CONFLICT);
+        assertThat(status(approved)).isEqualTo(PaymentStatus.APPROVED);
+        assertThat(grantStatus(approved)).isEqualTo("GRANTED");
+        assertThat(membershipExpiry()).isEqualTo(expiresAt);
+        verify(kakaoPayClient, never()).cancel(any());
+
+        // 미완료 주문이 끝나면(만료) 취소할 수 있다. 진행 중인 충전 주문은 이용권 취소를 막지 않는다.
+        jdbcTemplate.update("update payments set status = 'EXPIRED' where id = ?", pending);
+        readyOrder("CHARGE_5000");
+        when(kakaoPayClient.cancel(any())).thenReturn(cancelResponse(approved, 4_900L));
+        assertThat(paymentService.cancel(userId, approved).status()).isEqualTo(PaymentStatus.CANCELED);
+    }
+
+    @Test
+    void membershipCancelResultUnknownBlocksNewMembershipReadyAndRevokesOnce() {
+        UUID orderId = approvedOrder("MEMBERSHIP_30D");
+        when(kakaoPayClient.cancel(any())).thenThrow(unknown("cancel"));
+
+        assertThat(paymentService.cancel(userId, orderId).status()).isEqualTo(PaymentStatus.CANCELING);
+        // 회수는 외부 취소 전에 선반영된다.
+        assertThat(grantStatus(orderId)).isEqualTo("REVOKED");
+        OffsetDateTime revokedExpiry = membershipExpiry();
+        assertThat(revokedExpiry).isBeforeOrEqualTo(OffsetDateTime.now());
+        UUID requestId = UUID.randomUUID();
+        assertStatus(() -> paymentService.ready(userId, new PaymentReadyRequest("MEMBERSHIP_30D", requestId)),
+                HttpStatus.CONFLICT);
+        assertThat(paymentRepository.findByBuyerIdAndRequestId(userId, requestId)).isEmpty();
+
+        when(kakaoPayClient.order(any())).thenReturn(order(orderId, "CANCEL_PAYMENT", 4_900L, 4_900L));
+        age(orderId);
+        assertThat(paymentService.getPayment(userId, orderId).status()).isEqualTo(PaymentStatus.CANCELED);
+        assertThat(membershipExpiry()).isEqualTo(revokedExpiry);
+        assertThat(grantStatus(orderId)).isEqualTo("REVOKED");
+        assertThat(readyOrder("MEMBERSHIP_30D")).isNotNull();
+    }
+
+    @Test
+    void membershipCancelRejectedAndStillPaidGoesToReviewWithoutRestoringPeriod() {
+        UUID orderId = approvedOrder("MEMBERSHIP_30D");
+        when(kakaoPayClient.cancel(any())).thenThrow(
+                new KakaoPayException("cancel", KakaoPayException.Kind.REJECTED, 400, -1, null));
+        when(kakaoPayClient.order(any())).thenReturn(order(orderId, "SUCCESS_PAYMENT", 4_900L, null));
+
+        assertThat(paymentService.cancel(userId, orderId).status()).isEqualTo(PaymentStatus.NEEDS_REVIEW);
+        // 회수를 자동으로 되돌리지 않고 수동 확인(08 문서 기준 재부여)에 맡긴다.
+        assertThat(grantStatus(orderId)).isEqualTo("REVOKED");
+        assertThat(membershipExpiry()).isBeforeOrEqualTo(OffsetDateTime.now());
+    }
+
     // ---- 결제 목록 ----
 
     @Test
@@ -464,6 +555,16 @@ class PaymentRecoveryCancelListTest {
 
     private void expireReady(UUID orderId) {
         jdbcTemplate.update("update payments set ready_at = ? where id = ?", OffsetDateTime.now().minusMinutes(16), orderId);
+    }
+
+    private OffsetDateTime membershipExpiry() {
+        return jdbcTemplate.queryForObject("select expires_at from user_memberships where user_id = ?",
+                OffsetDateTime.class, userId);
+    }
+
+    private String grantStatus(UUID paymentId) {
+        return jdbcTemplate.queryForObject("select status from membership_grants where payment_id = ?",
+                String.class, paymentId);
     }
 
     private long balance() {

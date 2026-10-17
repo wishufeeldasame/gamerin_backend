@@ -13,11 +13,16 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import com.gamerin.backend.domain.payment.entity.Payment;
+import com.gamerin.backend.domain.payment.entity.PaymentPurpose;
 import com.gamerin.backend.domain.payment.entity.PaymentStatus;
 
 public interface PaymentRepository extends JpaRepository<Payment, UUID> {
 
     Optional<Payment> findByBuyerIdAndRequestId(UUID buyerId, UUID requestId);
+
+    // 이용권 ready·취소 가드: User 행 잠금 아래에서 호출한다(04 문서 6-6절 결제 취소 2번).
+    boolean existsByBuyerIdAndPurposeAndStatusIn(UUID buyerId, PaymentPurpose purpose,
+                                                 Collection<PaymentStatus> statuses);
 
     /**
      * 처리권 확보·결과 반영용 조건부 전이 (04 문서 6-6절).

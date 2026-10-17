@@ -14,7 +14,6 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -55,7 +54,6 @@ import com.gamerin.backend.domain.payment.dto.response.PaymentReadyResponse;
 import com.gamerin.backend.domain.payment.dto.response.PaymentResponse;
 import com.gamerin.backend.domain.payment.entity.Payment;
 import com.gamerin.backend.domain.payment.entity.PaymentStatus;
-import com.gamerin.backend.domain.payment.model.PaymentProduct;
 import com.gamerin.backend.domain.payment.repository.PaymentRepository;
 import com.gamerin.backend.domain.payment.client.KakaoPayException;
 import com.gamerin.backend.domain.payment.scheduler.PaymentRecoveryScheduler;
@@ -277,6 +275,106 @@ class PaymentPostgresConcurrencyTest {
     }
 
     @Test
+    void membershipCancelAndNewMembershipReadiesAreSerializedByUserLock() throws Exception {
+        UUID orderId = readyMembershipOrder();
+        when(kakaoPayClient.approve(any())).thenReturn(new KakaoPayClient.ApproveResponse("A1", tid, CID,
+                orderId.toString(), userId.toString(), "MONEY", new KakaoPayClient.Amount(4_900L), "2026-10-10T12:01:00"));
+        assertThat(paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")).status())
+                .isEqualTo(PaymentStatus.APPROVED);
+        OffsetDateTime expiresAt = membershipExpiry();
+        when(kakaoPayClient.ready(any())).thenAnswer(invocation -> {
+            String readyTid = "T" + UUID.randomUUID().toString().replace("-", "").substring(0, 19);
+            return new KakaoPayClient.ReadyResponse(readyTid, "https://pc", "https://mobile", "2026-10-10T12:00:00");
+        });
+        // 외부 취소를 늦춰 동시 ready가 모두 CANCELING 구간 안에서 끝나게 한다.
+        when(kakaoPayClient.cancel(any())).thenAnswer(invocation -> {
+            Thread.sleep(1_000);
+            return new KakaoPayClient.CancelResponse("C1", tid, CID, "CANCEL_PAYMENT",
+                    new KakaoPayClient.Amount(4_900L), "2026-10-10T12:05:00");
+        });
+
+        List<Outcome<Object>> outcomes = runConcurrently(IntStream.range(0, CONCURRENT_REQUESTS)
+                .mapToObj(index -> (Supplier<Object>) () -> index == 0
+                        ? paymentService.cancel(userId, orderId)
+                        : paymentService.ready(userId, new PaymentReadyRequest("MEMBERSHIP_30D", UUID.randomUUID())))
+                .toList());
+
+        Outcome<Object> cancel = outcomes.get(0);
+        List<Outcome<Object>> readies = outcomes.subList(1, outcomes.size());
+        Long newOrders = jdbcTemplate.queryForObject(
+                "select count(*) from payments where buyer_id = ? and product_code = 'MEMBERSHIP_30D' and id <> ?",
+                Long.class, userId, orderId);
+        if (cancel.error() == null) {
+            // 취소가 먼저 잠금을 잡았다: 취소 중의 이용권 ready는 모두 409이고 기간은 한 번만 회수된다.
+            assertThat(((PaymentResponse) cancel.value()).status()).isEqualTo(PaymentStatus.CANCELED);
+            assertThat(readies).allSatisfy(outcome -> assertConflict(outcome.error()));
+            assertThat(newOrders).isZero();
+            assertThat(grantStatus(orderId)).isEqualTo("REVOKED");
+            assertThat(membershipExpiry()).isBefore(expiresAt);
+            verify(kakaoPayClient, times(1)).cancel(any());
+        } else {
+            // ready가 먼저 주문을 만들었다: 미완료 이용권 주문이 있으므로 취소는 409이고 기간은 그대로다.
+            assertConflict(cancel.error());
+            assertNoFailures(readies);
+            assertThat(newOrders).isEqualTo(CONCURRENT_REQUESTS - 1);
+            assertThat(paymentStatus(orderId)).isEqualTo("APPROVED");
+            assertThat(grantStatus(orderId)).isEqualTo("GRANTED");
+            assertThat(membershipExpiry()).isEqualTo(expiresAt);
+            verify(kakaoPayClient, times(0)).cancel(any());
+        }
+    }
+
+    @Test
+    void membershipReadiesDuringMembershipCancelAreRejected() throws Exception {
+        UUID orderId = readyMembershipOrder();
+        when(kakaoPayClient.approve(any())).thenReturn(new KakaoPayClient.ApproveResponse("A1", tid, CID,
+                orderId.toString(), userId.toString(), "MONEY", new KakaoPayClient.Amount(4_900L), "2026-10-10T12:01:00"));
+        assertThat(paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")).status())
+                .isEqualTo(PaymentStatus.APPROVED);
+        when(kakaoPayClient.ready(any())).thenAnswer(invocation -> {
+            String readyTid = "T" + UUID.randomUUID().toString().replace("-", "").substring(0, 19);
+            return new KakaoPayClient.ReadyResponse(readyTid, "https://pc", "https://mobile", "2026-10-10T12:00:00");
+        });
+        CountDownLatch releaseCancel = new CountDownLatch(1);
+        when(kakaoPayClient.cancel(any())).thenAnswer(invocation -> {
+            assertThat(releaseCancel.await(RESULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).isTrue();
+            return new KakaoPayClient.CancelResponse("C1", tid, CID, "CANCEL_PAYMENT",
+                    new KakaoPayClient.Amount(4_900L), "2026-10-10T12:05:00");
+        });
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<PaymentResponse> cancel = executor.submit(() -> paymentService.cancel(userId, orderId));
+            // 회수 선반영이 커밋돼 CANCELING이 보일 때까지 기다린다(외부 취소는 아직 대기 중).
+            long deadline = System.nanoTime() + RESULT_TIMEOUT.toNanos();
+            while (!"CANCELING".equals(paymentStatus(orderId))) {
+                assertThat(System.nanoTime()).isLessThan(deadline);
+                Thread.sleep(20);
+            }
+
+            List<Outcome<PaymentReadyResponse>> readies = runConcurrently(IntStream.range(0, CONCURRENT_REQUESTS)
+                    .mapToObj(ignored -> (Supplier<PaymentReadyResponse>) () ->
+                            paymentService.ready(userId, new PaymentReadyRequest("MEMBERSHIP_30D", UUID.randomUUID())))
+                    .toList());
+            releaseCancel.countDown();
+
+            assertThat(readies).allSatisfy(outcome -> assertConflict(outcome.error()));
+            assertThat(cancel.get(RESULT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).status())
+                    .isEqualTo(PaymentStatus.CANCELED);
+        } finally {
+            releaseCancel.countDown();
+            executor.shutdownNow();
+        }
+        Long newOrders = jdbcTemplate.queryForObject(
+                "select count(*) from payments where buyer_id = ? and product_code = 'MEMBERSHIP_30D' and id <> ?",
+                Long.class, userId, orderId);
+        assertThat(newOrders).isZero();
+        assertThat(grantStatus(orderId)).isEqualTo("REVOKED");
+        assertThat(membershipExpiry()).isBeforeOrEqualTo(OffsetDateTime.now());
+        // 취소가 끝나면 다시 이용권을 결제할 수 있다.
+        assertThat(readyMembershipOrder()).isNotNull();
+    }
+
+    @Test
     void concurrentReadiesWithSameRequestIdCreateOneOrder() throws Exception {
         UUID requestId = UUID.randomUUID();
 
@@ -323,18 +421,18 @@ class PaymentPostgresConcurrencyTest {
                 """, UUID.randomUUID(), userId, type, referenceId, OffsetDateTime.now());
     }
 
-    // Public ready stays blocked until #86 adds its pending-order and CANCELING guards.
     private UUID readyMembershipOrder() {
-        return transactionTemplate.execute(status -> {
-            OffsetDateTime now = OffsetDateTime.now().truncatedTo(ChronoUnit.MICROS);
-            Payment payment = paymentRepository.saveAndFlush(Payment.create(
-                    userRepository.getReferenceById(userId), UUID.randomUUID(), PaymentProduct.MEMBERSHIP_30D,
-                    CID, now));
-            paymentRepository.transition(payment.getId(), PaymentStatus.CREATED, now, PaymentStatus.READY, now);
-            paymentRepository.findById(payment.getId()).orElseThrow()
-                    .recordReady(tid, "https://pc", "https://mobile", now, now);
-            return payment.getId();
-        });
+        return paymentService.ready(userId, new PaymentReadyRequest("MEMBERSHIP_30D", UUID.randomUUID())).orderId();
+    }
+
+    private void assertConflict(Throwable error) {
+        assertThat(error).isInstanceOfSatisfying(ResponseStatusException.class,
+                e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    private String grantStatus(UUID paymentId) {
+        return jdbcTemplate.queryForObject("select status from membership_grants where payment_id = ?",
+                String.class, paymentId);
     }
 
     private OffsetDateTime membershipExpiry() {
