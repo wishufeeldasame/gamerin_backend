@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.mentoring.service;
 
+import org.springframework.stereotype.Service;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
@@ -11,9 +13,6 @@ import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.game.model.GameType;
 import com.gamerin.backend.domain.membership.service.MembershipService;
@@ -45,6 +44,9 @@ import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.domain.user.service.MileageService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class MentoringService {
@@ -104,7 +106,7 @@ public class MentoringService {
         MentorProfile profile = new MentorProfile();
         profile.setUser(user);
         profile.setAbout(request.about());
-        profile.setStatus(MentorStatus.PENDING_APPROVAL);
+        profile.setStatus(MentorStatus.PENDING_APPROVAL);// <- [추가] 승인 대기 상태로 등록
 
         MentorProfile savedProfile = mentorProfileRepository.save(profile);
         return MentorProfileResponse.from(savedProfile, membershipService.isActive(savedProfile.getUserId()));
@@ -136,7 +138,7 @@ public class MentoringService {
         MentorProfile mentor = mentorProfileRepository.findById(principal.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "멘토로 등록되지 않은 사용자입니다."));
 
-        // 관리자 승인이 완료된 멘토만 프로그램 등록 가능
+        // [추가] 관리자 승인이 완료된 멘토만 프로그램 등록 가능
         if (mentor.getStatus() != MentorStatus.ACTIVE) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 승인이 완료된 멘토만 프로그램을 등록할 수 있습니다.");
         }
@@ -157,14 +159,14 @@ public class MentoringService {
 
     @Transactional(readOnly = true)
     public Page<MentoringProgramResponse> getPrograms(GameType gameName, UUID mentorId, Pageable pageable) {
+
         Page<MentoringProgram> programs = mentoringProgramRepository
                 .findByFilters(gameName == null ? null : gameName.name(), mentorId, pageable);
 
         Set<UUID> mentorIds = new HashSet<>();
         programs.forEach(program -> mentorIds.add(program.getMentor().getId()));
         Set<UUID> activeUserIds = mentorIds.isEmpty() ? Set.of() : membershipService.findActiveUserIds(mentorIds);
-        return programs.map(program -> MentoringProgramResponse.from(
-                program,
+        return programs.map(program -> MentoringProgramResponse.from(program,
                 activeUserIds.contains(program.getMentor().getId())));
     }
 
@@ -202,16 +204,14 @@ public class MentoringService {
         program.setStatus(request.status());
         program.setTags(request.tags());
 
-        MentoringProgram savedProgram = mentoringProgramRepository.save(program);
-        // save() 호출 제거: 원본처럼 더티 체킹 + program 그대로 사용
         return MentoringProgramResponse.from(program, membershipService.isActive(program.getMentor().getId()));
     }
 
     @Transactional
     public void deleteProgram(CustomUserPrincipal principal, UUID programId) {
-        // 비관적 락으로 프로그램 조회하여 수정/삭제 판단 중 신규 신청이 들어오는 경합을 방지
-        // findByIdForUpdate 쿼리에 deletedAt IS NULL 조건이 포함되어 있으므로 이미 소프트 삭제된 프로그램이면
-        // NOT_FOUND(404) 반환
+        // 비관적 락으로 프로그램 조회 — 삭제 판단 중 신규 신청이 끼어드는 경합을 방지
+        // findByIdForUpdate 쿼리에 deletedAt IS NULL 조건이 포함되어 있으므로
+        // 이미 소프트 삭제된 프로그램이면 NOT_FOUND(404) 반환
         MentoringProgram program = mentoringProgramRepository.findByIdForUpdate(programId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
 
@@ -221,23 +221,24 @@ public class MentoringService {
         }
 
         // 활성 거래(에스크로) 차단 확인
-        // ESCROW_HELD 상태의 신청이 하나라도 있으면 멘티 마일리지 유실 위험이 있으므로 거부
+        // ESCROW_HELD 상태인 신청이 하나라도 있으면 멘티 마일리지 손실 위험이 있으므로 거부
         if (mentoringApplicationRepository.existsByProgramIdAndPaymentStatus(programId, PaymentStatus.ESCROW_HELD)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "진행 중인 멘토링 신청이 있어 삭제할 수 없습니다. 모든 거래를 완료하거나 취소한 뒤 시도해 주세요.");
         }
 
-        // 소프트 삭제 처리 (DB에서 행을 지우지 않고 deleted_at을 기록)
+        // 소프트 삭제 처리 — DB에서 행을 지우지 않고 deleted_at을 기록한다
+        // 완료·정산된 신청, 리뷰, 마일리지 원장은 DB에 그대로 보존됨
+        // @Transactional 범위 안에서 Dirty Checking이 UPDATE 쿼리를 자동 발행한다
         program.softDelete();
     }
 
-    // 멘토링 신청 (멘티가 호출)
+    // 신청
     @Transactional
-    public MentoringApplicationResponse applyToProgram(
-            CustomUserPrincipal principal,
+    public MentoringApplicationResponse applyToProgram(CustomUserPrincipal principal,
             MentoringApplicationRequest request) {
-        // 멘티 행을 먼저 잠가 동시에 진행되는 회원 탈퇴와 직렬화하고 탈퇴 계정은 거부한다
+        // 멘티 행을 먼저 잠가 동시에 진행되는 회원 탈퇴(사용자 → 프로그램 순 잠금)와 직렬화하고 탈퇴 계정은 거부한다
         User mentee = userRepository.findActiveByIdForUpdate(principal.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자 정보를 찾을 수 없습니다."));
 
@@ -261,7 +262,7 @@ public class MentoringService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 진행 중인 신청 내역이 있습니다.");
         }
 
-        // [KP-C2 #91 F2 뒷부분]: 신청 시점 멘토의 멤버십 유효 상태에 따라 요율 스냅샷(500/1000) 결정
+        // [KP-C2 #91 F2] 신청 시점 멘토의 멤버십 유효 여부로 수수료 요율 스냅샷(500/1000) 결정
         int feeRateBp = membershipService.isActive(program.getMentor().getId())
                 ? MentoringApplication.MEMBERSHIP_FEE_RATE_BP
                 : MentoringApplication.DEFAULT_FEE_RATE_BP;
@@ -290,11 +291,10 @@ public class MentoringService {
                 mentee,
                 program.getMentor().getUser());
 
-        // 멘티가 신청했으므로 멘티 관점 응답(수수료 정보 제외, 멘티 가격 유지) 반환
         return toMenteeApplicationResponse(savedApplication);
     }
 
-    // 멘토링 신청 취소 (멘티가 호출)
+    // 멘토링 신청 취소
     @Transactional
     public MentoringApplicationResponse cancelApplication(CustomUserPrincipal principal, UUID applicationId) {
         MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
@@ -328,25 +328,23 @@ public class MentoringService {
 
     // 멘티가 본인 신청 내역 확인하는거
     @Transactional(readOnly = true)
-    public Page<MentoringApplicationResponse> getMyApplicationsAsMentee(
-            CustomUserPrincipal principal,
+    public Page<MentoringApplicationResponse> getMyApplicationsAsMentee(CustomUserPrincipal principal,
             Pageable pageable) {
         return toApplicationResponsePage(
                 mentoringApplicationRepository.findByMenteeId(principal.getUserId(), pageable),
                 false);
     }
 
-    // 멘토가 신청 내역 확인하는거 (F5: 멘토 화면에 요율·수수료·수령액 표시)
+    // 멘토가 신청 내역 확인하는거
     @Transactional(readOnly = true)
-    public Page<MentoringApplicationResponse> getMyApplicationsAsMentor(
-            CustomUserPrincipal principal,
+    public Page<MentoringApplicationResponse> getMyApplicationsAsMentor(CustomUserPrincipal principal,
             Pageable pageable) {
         return toApplicationResponsePage(
                 mentoringApplicationRepository.findByProgramMentorId(principal.getUserId(), pageable),
                 true);
     }
 
-    // 신청 수락 (멘토가 호출)
+    // 신청 수락
     @Transactional
     public MentoringApplicationResponse acceptApplication(CustomUserPrincipal principal, UUID applicationId) {
         MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
@@ -370,7 +368,7 @@ public class MentoringService {
         return toMentorApplicationResponse(application);
     }
 
-    // 신청 거절 (멘토가 호출)
+    // 신청 거절
     @Transactional
     public MentoringApplicationResponse rejectApplication(CustomUserPrincipal principal, UUID applicationId) {
         MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
@@ -402,7 +400,7 @@ public class MentoringService {
         return toMentorApplicationResponse(application);
     }
 
-    // 멘토링 시작 (멘토가 호출)
+    // 멘토링 시작
     @Transactional
     public MentoringApplicationResponse startMentoring(CustomUserPrincipal principal, UUID applicationId) {
         MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
@@ -426,7 +424,7 @@ public class MentoringService {
         return toMentorApplicationResponse(application);
     }
 
-    // 멘토 완료 보고 (멘토가 호출)
+    // 멘토 완료 보고
     @Transactional
     public MentoringApplicationResponse finishMentoring(CustomUserPrincipal principal, UUID applicationId) {
         MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
@@ -450,7 +448,7 @@ public class MentoringService {
         return toMentorApplicationResponse(application);
     }
 
-    // 멘토링 완료 확정 및 정산 (멘티가 호출)
+    // 멘토링 완료 확정 및 정산
     @Transactional
     public MentoringApplicationResponse completeMentoring(CustomUserPrincipal principal, UUID applicationId) {
         MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
@@ -469,11 +467,12 @@ public class MentoringService {
         application.setPaymentStatus(PaymentStatus.SETTLED);
         application.setCompletedAt(java.time.OffsetDateTime.now());
 
+        // develop 신규 1: 멘토 프로필 조회 예외를 404로 변경
         MentorProfile mentorProfile = mentorProfileRepository
                 .findByIdForUpdate(application.getProgram().getMentor().getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "멘토 프로필을 찾을 수 없습니다."));
 
-        // [KP-C1 #90 F3]: 공통 계산기로 저장된 요율(500/1000) 기준 수수료 계산, fee_amount 저장 및 멘토 지급액 산출
+        // [KP-C1 #90 F3]: 공통 계산기로 수수료 계산, fee_amount 저장 및 멘토 지급액 산출
         MentoringSettlementCalculator.SettlementResult settlement = MentoringSettlementCalculator
                 .applySettlement(application);
 
@@ -491,13 +490,13 @@ public class MentoringService {
                 application.getMentee(),
                 mentorProfile.getUser());
 
-        // 멘티가 호출한 액션이므로 멘티 관점 응답 반환
         return toMenteeApplicationResponse(application);
     }
 
     // 자동 정산 대상 처리
     @Transactional(readOnly = true)
     public void processAutoSettlement() {
+
         OffsetDateTime threshold = OffsetDateTime.now().minusDays(7);
         List<UUID> targetIds = mentoringApplicationRepository.findIdsByStatusAndUpdatedAtBefore(
                 ApplicationStatus.FINISHED,
@@ -505,8 +504,11 @@ public class MentoringService {
 
         for (UUID applicationId : targetIds) {
             try {
+                // 개별 트랜잭션 호출
                 settlementProcessor.processSingleSettlement(applicationId, threshold);
+
             } catch (Exception e) {
+
                 System.err.println("자동 정산 실패 (ID: " + applicationId + "): " + e.getMessage());
             }
         }
@@ -539,6 +541,7 @@ public class MentoringService {
 
         MentoringReview savedReview = mentoringReviewRepository.save(review);
 
+        // develop 신규 2: 멘토 프로필 조회 예외를 404로 변경
         MentorProfile mentorProfile = mentorProfileRepository
                 .findByIdForUpdate(application.getProgram().getMentor().getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "멘토 프로필을 찾을 수 없습니다."));
@@ -561,28 +564,23 @@ public class MentoringService {
         return toApplicationResponse(application, true);
     }
 
-    private MentoringApplicationResponse toApplicationResponse(
-            MentoringApplication application,
-            boolean isMentorView) {
+    private MentoringApplicationResponse toApplicationResponse(MentoringApplication application, boolean mentorView) {
         UUID mentorId = application.getProgram().getMentor().getId();
         UUID menteeId = application.getMentee().getId();
         Set<UUID> activeUserIds = membershipService.findActiveUserIds(new HashSet<>(List.of(mentorId, menteeId)));
-        boolean reviewed = mentoringReviewRepository.existsByApplicationId(application.getId());
-        boolean mentorBadge = activeUserIds.contains(mentorId);
-        boolean menteeBadge = activeUserIds.contains(menteeId);
-
-        return isMentorView
-                ? MentoringApplicationResponse.fromMentor(application, reviewed, mentorBadge, menteeBadge)
-                : MentoringApplicationResponse.fromMentee(application, reviewed, mentorBadge, menteeBadge);
+        return toRoleResponse(
+                application,
+                mentoringReviewRepository.existsByApplicationId(application.getId()),
+                activeUserIds.contains(mentorId),
+                activeUserIds.contains(menteeId),
+                mentorView);
     }
 
     private Page<MentoringApplicationResponse> toApplicationResponsePage(
             Page<MentoringApplication> applications,
-            boolean isMentorView) {
+            boolean mentorView) {
         if (applications.getContent().isEmpty()) {
-            return applications.map(application -> isMentorView
-                    ? MentoringApplicationResponse.fromMentor(application, false, false, false)
-                    : MentoringApplicationResponse.fromMentee(application, false, false, false));
+            return applications.map(application -> toRoleResponse(application, false, false, false, mentorView));
         }
 
         List<UUID> applicationIds = applications.getContent().stream()
@@ -597,14 +595,32 @@ public class MentoringService {
         });
         Set<UUID> activeUserIds = membershipService.findActiveUserIds(participantIds);
 
-        return applications.map(application -> {
-            boolean reviewed = reviewedApplicationIds.contains(application.getId());
-            boolean mentorBadge = activeUserIds.contains(application.getProgram().getMentor().getId());
-            boolean menteeBadge = activeUserIds.contains(application.getMentee().getId());
-            return isMentorView
-                    ? MentoringApplicationResponse.fromMentor(application, reviewed, mentorBadge, menteeBadge)
-                    : MentoringApplicationResponse.fromMentee(application, reviewed, mentorBadge, menteeBadge);
-        });
+        return applications.map(application -> toRoleResponse(
+                application,
+                reviewedApplicationIds.contains(application.getId()),
+                activeUserIds.contains(application.getProgram().getMentor().getId()),
+                activeUserIds.contains(application.getMentee().getId()),
+                mentorView));
+    }
+
+    private MentoringApplicationResponse toRoleResponse(
+            MentoringApplication application,
+            boolean hasReview,
+            boolean mentorMembershipBadge,
+            boolean menteeMembershipBadge,
+            boolean mentorView) {
+        if (mentorView) {
+            return MentoringApplicationResponse.fromMentor(
+                    application,
+                    hasReview,
+                    mentorMembershipBadge,
+                    menteeMembershipBadge);
+        }
+        return MentoringApplicationResponse.fromMentee(
+                application,
+                hasReview,
+                mentorMembershipBadge,
+                menteeMembershipBadge);
     }
 
     // 멘토 평점 업데이트
@@ -613,6 +629,7 @@ public class MentoringService {
         BigDecimal oldAvg = mentor.getRatingAvg();
 
         int newCount = oldCount + 1;
+        // 새로운 평균 = (기존평균 * 기존갯수 + 신규점수) / 신규갯수
         BigDecimal newAvg = oldAvg.multiply(BigDecimal.valueOf(oldCount))
                 .add(BigDecimal.valueOf(newRating))
                 .divide(BigDecimal.valueOf(newCount), 2, RoundingMode.HALF_UP);
@@ -621,6 +638,7 @@ public class MentoringService {
         mentor.setRatingAvg(newAvg);
 
         mentorProfileRepository.save(mentor);
+
     }
 
     // 특정 멘토의 리뷰 목록 조회
@@ -630,8 +648,8 @@ public class MentoringService {
         Set<UUID> reviewerIds = new HashSet<>();
         reviews.forEach(review -> reviewerIds.add(review.getMentee().getId()));
         Set<UUID> activeUserIds = reviewerIds.isEmpty() ? Set.of() : membershipService.findActiveUserIds(reviewerIds);
-        return reviews.map(review -> MentoringReviewResponse.from(
-                review,
+        return reviews.map(review -> MentoringReviewResponse.from(review,
                 activeUserIds.contains(review.getMentee().getId())));
     }
+
 }

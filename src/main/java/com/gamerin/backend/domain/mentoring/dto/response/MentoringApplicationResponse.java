@@ -106,9 +106,12 @@ public record MentoringApplicationResponse(
                 ? application.getFeeRateBp()
                 : MentoringApplication.DEFAULT_FEE_RATE_BP;
 
-        long feeAmount;
-        long payoutAmount;
-        if (application.getFeeAmount() != null) {
+        Long feeAmount;
+        Long payoutAmount;
+        if (application.getPaymentStatus() == PaymentStatus.REFUNDED) {
+            feeAmount = null;
+            payoutAmount = null;
+        } else if (application.getFeeAmount() != null) {
             feeAmount = application.getFeeAmount();
             payoutAmount = application.getAppliedMileage() != null
                     ? application.getAppliedMileage() - feeAmount
@@ -123,9 +126,9 @@ public record MentoringApplicationResponse(
             payoutAmount = 0L;
         }
 
-        boolean isNonMember = feeRateBp == MentoringApplication.DEFAULT_FEE_RATE_BP;
-        Boolean nonMemberNotice = isNonMember ? Boolean.TRUE : null;
-        String feeNotice = isNonMember ? NON_MEMBER_NOTICE_MESSAGE : null;
+        boolean showNotice = !mentorMembershipBadge;
+        Boolean nonMemberNotice = showNotice ? Boolean.TRUE : null;
+        String feeNotice = showNotice ? NON_MEMBER_NOTICE_MESSAGE : null;
 
         return new MentoringApplicationResponse(
                 application.getId(),

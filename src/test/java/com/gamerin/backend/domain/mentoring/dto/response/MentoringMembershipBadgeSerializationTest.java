@@ -118,6 +118,28 @@ class MentoringMembershipBadgeSerializationTest {
         assertThat(json.get("appliedMileage").asLong()).isEqualTo(10000L);
     }
 
+    @Test
+    @DisplayName("[KP-C2/F5] 환불(REFUNDED) 상태인 신청 건은 멘토 응답에서 수수료 및 수령액을 직렬화하지 않는다")
+    void mentorApplicationResponseOmitsFeeAndPayoutWhenRefunded() {
+        MentoringApplication application = application();
+        application.setAppliedMileage(10000L);
+        application.setFeeRateBp(500);
+        application.setPaymentStatus(com.gamerin.backend.domain.mentoring.entity.PaymentStatus.REFUNDED);
+
+        MentoringApplicationResponse response = MentoringApplicationResponse.fromMentor(
+                application, false, false, false);
+        JsonNode json = mapper.valueToTree(response);
+
+        assertThat(json.has("feeRateBp")).isTrue();
+        assertThat(json.get("feeRateBp").asInt()).isEqualTo(500);
+        assertThat(json.has("feeAmount")).isFalse();
+        assertThat(json.has("payoutAmount")).isFalse();
+        // 신청 당시 500bp였더라도 현재 멤버십 만료(mentorMembershipBadge=false) 상태면 안내 문구 노출
+        assertThat(json.has("nonMemberNotice")).isTrue();
+        assertThat(json.get("nonMemberNotice").asBoolean()).isTrue();
+        assertThat(json.has("feeNotice")).isTrue();
+    }
+
     private MentoringApplication application() {
         User mentorUser = user("mentor");
         MentorProfile mentor = new MentorProfile();
