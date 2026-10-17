@@ -109,7 +109,6 @@ class MembershipGrantPostgresIntegrationTest {
         registry.add("spring.flyway.default-schema", postgresSchema::schema);
         registry.add("spring.flyway.create-schemas", () -> "false");
         registry.add("spring.flyway.baseline-on-migrate", () -> "false");
-        registry.add("spring.flyway.target", () -> "41");
     }
 
     @AfterAll
@@ -344,8 +343,9 @@ class MembershipGrantPostgresIntegrationTest {
     }
 
     @Test
-    void flywayMigratesThroughV41AndCanValidateAndRunAgainWithoutChanges() {
-        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("41");
+    void flywayMigratesToLatestAndCanValidateAndRunAgainWithoutChanges() {
+        // 새 migration이 추가될 때마다 깨지지 않도록 특정 버전 대신 대기 migration이 없는지만 본다.
+        assertThat(flyway.info().pending()).isEmpty();
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
     }
