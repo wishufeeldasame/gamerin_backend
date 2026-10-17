@@ -2,6 +2,7 @@ package com.gamerin.backend.domain.payment.service;
 
 import java.time.OffsetDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
 
 import org.slf4j.Logger;
@@ -19,6 +20,7 @@ import com.gamerin.backend.domain.payment.entity.PaymentStatus;
 import com.gamerin.backend.domain.payment.repository.PaymentRepository;
 import com.gamerin.backend.domain.user.entity.MileageWallet;
 import com.gamerin.backend.domain.user.entity.TransactionType;
+import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.domain.user.service.MileageService;
 
 /**
@@ -32,17 +34,23 @@ public class PaymentStateService {
 
     private static final String CHARGE_DESCRIPTION = "카카오페이 충전";
     private static final String CHARGE_CANCEL_DESCRIPTION = "카카오페이 충전 취소";
+    // 이용권 취소를 막는 미완료 이용권 주문 (6-6절 결제 취소 2번)
+    private static final List<PaymentStatus> PENDING_STATUSES = List.of(
+            PaymentStatus.CREATED, PaymentStatus.READY, PaymentStatus.APPROVING);
 
     private final PaymentRepository paymentRepository;
+    private final UserRepository userRepository;
     private final MileageService mileageService;
     private final MembershipService membershipService;
     private final TransactionTemplate transactionTemplate;
 
     public PaymentStateService(PaymentRepository paymentRepository,
+                               UserRepository userRepository,
                                MileageService mileageService,
                                MembershipService membershipService,
                                TransactionTemplate transactionTemplate) {
         this.paymentRepository = paymentRepository;
+        this.userRepository = userRepository;
         this.mileageService = mileageService;
         this.membershipService = membershipService;
         this.transactionTemplate = transactionTemplate;
@@ -153,8 +161,17 @@ public class PaymentStateService {
                     CHARGE_CANCEL_DESCRIPTION, payment.getId());
             return;
         }
-        // shortcut: 이용권 취소는 미완료 이용권 주문 검사와 MembershipService.revoke(#87·#89)가 들어온 뒤 연다.
-        throw new ResponseStatusException(HttpStatus.CONFLICT, "이용권 결제 취소는 아직 지원하지 않습니다.");
+        // 이용권: 이용권 ready와 같은 User 행 잠금 아래에서 미완료 이용권 주문이 있으면 거부한다.
+        // 마지막 GRANTED 확인·후속 구매 거부·기간 되돌리기는 revoke가 한다.
+        UUID buyerId = payment.getBuyer().getId();
+        userRepository.findByIdForUpdate(buyerId)
+                .orElseThrow(() -> new IllegalStateException("Payment buyer disappeared: " + payment.getId()));
+        if (paymentRepository.existsByBuyerIdAndPurposeAndStatusIn(buyerId, PaymentPurpose.MEMBERSHIP_PASS,
+                PENDING_STATUSES)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "진행 중인 이용권 결제가 있어 결제를 취소할 수 없습니다.");
+        }
+        membershipService.revoke(payment.getId());
     }
 
     public record ApprovalResult(

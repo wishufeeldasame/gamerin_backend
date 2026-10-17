@@ -109,10 +109,6 @@ public class PaymentService {
 
     public PaymentReadyResponse ready(UUID userId, PaymentReadyRequest request) {
         PaymentProduct product = PaymentProduct.fromCode(request.productCode());
-        if (product.getPurpose() != PaymentPurpose.MILEAGE_CHARGE) {
-            // shortcut: 이용권 결제는 MembershipService.grant(#87 스텁)·CANCELING 중 ready 거부가 들어온 뒤 연다.
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "허용하지 않은 상품 코드입니다.");
-        }
         if (!kakaoPayClient.isConfigured()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, NOT_CONFIGURED_MESSAGE);
         }
@@ -124,13 +120,18 @@ public class PaymentService {
 
         Payment payment;
         try {
-            payment = transactionTemplate.execute(status -> paymentRepository.saveAndFlush(Payment.create(
-                    userRepository.getReferenceById(userId),
-                    request.requestId(),
-                    product,
-                    kakaoPayClient.cid(),
-                    PaymentStateService.now()
-            )));
+            payment = transactionTemplate.execute(status -> {
+                if (product.getPurpose() == PaymentPurpose.MEMBERSHIP_PASS) {
+                    rejectWhileMembershipCanceling(userId);
+                }
+                return paymentRepository.saveAndFlush(Payment.create(
+                        userRepository.getReferenceById(userId),
+                        request.requestId(),
+                        product,
+                        kakaoPayClient.cid(),
+                        PaymentStateService.now()
+                ));
+            });
         } catch (DataIntegrityViolationException e) {
             // 같은 requestId의 동시 요청: 먼저 저장된 주문으로 재응답한다.
             return paymentRepository.findByBuyerIdAndRequestId(userId, request.requestId())
@@ -258,6 +259,16 @@ public class PaymentService {
             return null;
         });
         return PaymentResponse.from(stateService.reload(payment.getId()));
+    }
+
+    // 이용권 취소 시작과 같은 User 행 잠금으로 직렬화해 취소 진행 중에는 새 이용권 주문을 만들지 않는다(6-6절 결제 취소 2번).
+    private void rejectWhileMembershipCanceling(UUID userId) {
+        userRepository.findByIdForUpdate(userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
+        if (paymentRepository.existsByBuyerIdAndPurposeAndStatusIn(userId, PaymentPurpose.MEMBERSHIP_PASS,
+                List.of(PaymentStatus.CANCELING))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "취소 중인 이용권 결제가 있어 새로 결제할 수 없습니다.");
+        }
     }
 
     private PaymentReadyResponse replayReady(Payment payment, PaymentProduct product) {

@@ -11,7 +11,6 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
@@ -37,7 +36,6 @@ import com.gamerin.backend.domain.payment.dto.response.PaymentReadyResponse;
 import com.gamerin.backend.domain.payment.dto.response.PaymentResponse;
 import com.gamerin.backend.domain.payment.entity.Payment;
 import com.gamerin.backend.domain.payment.entity.PaymentStatus;
-import com.gamerin.backend.domain.payment.model.PaymentProduct;
 import com.gamerin.backend.domain.payment.repository.PaymentRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
@@ -130,15 +128,37 @@ class PaymentServiceTest {
     }
 
     @Test
-    void membershipReadyRemainsBlockedUntilPendingOrderAndCancelingGuardsAreAvailable() {
+    void membershipReadyUsesServerPrice() {
+        PaymentReadyResponse response = paymentService.ready(userId,
+                new PaymentReadyRequest("MEMBERSHIP_30D", UUID.randomUUID()));
+
+        assertThat(response.status()).isEqualTo(PaymentStatus.READY);
+        ArgumentCaptor<KakaoPayClient.ReadyRequest> captor = ArgumentCaptor.forClass(KakaoPayClient.ReadyRequest.class);
+        verify(kakaoPayClient).ready(captor.capture());
+        assertThat(captor.getValue().totalAmount()).isEqualTo(4_900L);
+        assertThat(captor.getValue().itemCode()).isEqualTo("MEMBERSHIP_30D");
+        verifyNoInteractions(membershipService);
+    }
+
+    @Test
+    void membershipReadyIsRejectedOnlyWhileMembershipCancelIsInProgress() {
+        UUID canceling = readyMembershipOrder();
+        jdbcTemplate.update("update payments set status = 'CANCELING' where id = ?", canceling);
         UUID requestId = UUID.randomUUID();
 
         assertStatus(() -> paymentService.ready(userId, new PaymentReadyRequest("MEMBERSHIP_30D", requestId)),
-                HttpStatus.BAD_REQUEST);
-
+                HttpStatus.CONFLICT);
         assertThat(paymentRepository.findByBuyerIdAndRequestId(userId, requestId)).isEmpty();
-        verify(kakaoPayClient, never()).ready(any());
-        verifyNoInteractions(membershipService);
+        verify(kakaoPayClient, times(1)).ready(any());
+        // 충전은 이용권 취소와 무관하다.
+        restubReady();
+        assertThat(paymentService.ready(userId, new PaymentReadyRequest("CHARGE_5000", UUID.randomUUID())).status())
+                .isEqualTo(PaymentStatus.READY);
+
+        jdbcTemplate.update("update payments set status = 'CANCELED' where id = ?", canceling);
+        restubReady();
+        assertThat(paymentService.ready(userId, new PaymentReadyRequest("MEMBERSHIP_30D", requestId)).status())
+                .isEqualTo(PaymentStatus.READY);
     }
 
     @Test
@@ -411,18 +431,15 @@ class PaymentServiceTest {
         return response.orderId();
     }
 
-    // ready stays blocked publicly; approval must support already prepared membership orders for #86.
     private UUID readyMembershipOrder() {
-        return transactionTemplate.execute(status -> {
-            OffsetDateTime now = OffsetDateTime.now().truncatedTo(ChronoUnit.MICROS);
-            Payment payment = paymentRepository.saveAndFlush(Payment.create(
-                    userRepository.getReferenceById(userId), UUID.randomUUID(), PaymentProduct.MEMBERSHIP_30D,
-                    CID, now));
-            paymentRepository.transition(payment.getId(), PaymentStatus.CREATED, now, PaymentStatus.READY, now);
-            paymentRepository.findById(payment.getId()).orElseThrow()
-                    .recordReady(tid, "https://pc", "https://mobile", now, now);
-            return payment.getId();
-        });
+        return readyOrder("MEMBERSHIP_30D");
+    }
+
+    // TID는 UNIQUE라서 같은 테스트에서 다시 ready하려면 새 TID를 돌려준다.
+    private void restubReady() {
+        String nextTid = "T" + UUID.randomUUID().toString().replace("-", "").substring(0, 19);
+        when(kakaoPayClient.ready(any())).thenReturn(new KakaoPayClient.ReadyResponse(
+                nextTid, "https://pc.example/" + nextTid, "https://mobile.example/" + nextTid, "2026-10-10T12:00:00"));
     }
 
     private KakaoPayClient.ApproveResponse approveResponse(UUID orderId, long total) {
