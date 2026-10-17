@@ -59,21 +59,31 @@ import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 @ExtendWith(MockitoExtension.class)
 class MentoringMembershipBadgeTest {
 
-    @Mock private MentorProfileRepository mentorProfileRepository;
-    @Mock private UserRepository userRepository;
-    @Mock private MentoringProgramRepository mentoringProgramRepository;
-    @Mock private MentoringApplicationRepository mentoringApplicationRepository;
-    @Mock private MentoringReviewRepository mentoringReviewRepository;
-    @Mock private MileageService mileageService;
-    @Mock private SettlementProcessor settlementProcessor;
-    @Mock private NotificationCommandService notificationCommandService;
-    @Mock private MembershipService membershipService;
-    @InjectMocks private MentoringService service;
+    @Mock
+    private MentorProfileRepository mentorProfileRepository;
+    @Mock
+    private UserRepository userRepository;
+    @Mock
+    private MentoringProgramRepository mentoringProgramRepository;
+    @Mock
+    private MentoringApplicationRepository mentoringApplicationRepository;
+    @Mock
+    private MentoringReviewRepository mentoringReviewRepository;
+    @Mock
+    private MileageService mileageService;
+    @Mock
+    private SettlementProcessor settlementProcessor;
+    @Mock
+    private NotificationCommandService notificationCommandService;
+    @Mock
+    private MembershipService membershipService;
+    @InjectMocks
+    private MentoringService service;
 
     private final PageRequest pageable = PageRequest.of(0, 20);
 
     @ParameterizedTest
-    @ValueSource(booleans = {true, false})
+    @ValueSource(booleans = { true, false })
     void publicAndOwnMentorProfilesUseMentorsMembership(boolean active) {
         MentorProfile mentor = application().getProgram().getMentor();
         when(mentorProfileRepository.findById(mentor.getId())).thenReturn(Optional.of(mentor));
@@ -148,7 +158,8 @@ class MentoringMembershipBadgeTest {
         when(membershipService.isActive(mentorId)).thenReturn(true);
 
         assertThat(service.getProgramDetail(program.getId()).membershipBadge()).isTrue();
-        MentoringProgramResponse updated = service.updateProgram(CustomUserPrincipal.from(program.getMentor().getUser()),
+        MentoringProgramResponse updated = service.updateProgram(
+                CustomUserPrincipal.from(program.getMentor().getUser()),
                 program.getId(), new MentoringProgramUpdateRequest("updated", "content", "evenings", 2000L,
                         ProgramStatus.ACTIVE, List.of("tag")));
 
@@ -172,7 +183,7 @@ class MentoringMembershipBadgeTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {true, false})
+    @ValueSource(booleans = { true, false })
     void applicationListsBatchBothRolesAndKeepTheirBadgesIndependent(boolean asMentor) {
         MentoringApplication first = application();
         MentoringApplication second = application();
@@ -183,9 +194,11 @@ class MentoringMembershipBadgeTest {
         }
         Page<MentoringApplication> page = new PageImpl<>(List.of(first, second), pageable, 2);
         CustomUserPrincipal principal = CustomUserPrincipal.from(asMentor
-                ? first.getProgram().getMentor().getUser() : first.getMentee());
+                ? first.getProgram().getMentor().getUser()
+                : first.getMentee());
         if (asMentor) {
-            when(mentoringApplicationRepository.findByProgramMentorId(principal.getUserId(), pageable)).thenReturn(page);
+            when(mentoringApplicationRepository.findByProgramMentorId(principal.getUserId(), pageable))
+                    .thenReturn(page);
         } else {
             when(mentoringApplicationRepository.findByMenteeId(principal.getUserId(), pageable)).thenReturn(page);
         }
@@ -194,7 +207,8 @@ class MentoringMembershipBadgeTest {
         UUID mentorId = first.getProgram().getMentor().getId();
         Set<UUID> participants = new HashSet<>(List.of(mentorId, second.getProgram().getMentor().getId(),
                 first.getMentee().getId(), second.getMentee().getId()));
-        when(membershipService.findActiveUserIds(participants)).thenReturn(Set.of(mentorId, second.getMentee().getId()));
+        when(membershipService.findActiveUserIds(participants))
+                .thenReturn(Set.of(mentorId, second.getMentee().getId()));
 
         Page<MentoringApplicationResponse> response = asMentor
                 ? service.getMyApplicationsAsMentor(principal, pageable)
@@ -204,13 +218,14 @@ class MentoringMembershipBadgeTest {
                 .containsExactly(true, asMentor);
         assertThat(response.getContent()).extracting(MentoringApplicationResponse::menteeMembershipBadge)
                 .containsExactly(!asMentor, true);
-        assertThat(response.getContent()).extracting(MentoringApplicationResponse::reviewed).containsExactly(true, false);
+        assertThat(response.getContent()).extracting(MentoringApplicationResponse::reviewed).containsExactly(true,
+                false);
         verify(membershipService).findActiveUserIds(participants);
         verifyNoMoreInteractions(membershipService);
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {true, false})
+    @ValueSource(booleans = { true, false })
     void emptyApplicationListsSkipMembershipAndReviewQueries(boolean asMentor) {
         CustomUserPrincipal principal = CustomUserPrincipal.from(user("empty"));
         if (asMentor) {
@@ -227,7 +242,7 @@ class MentoringMembershipBadgeTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"apply", "cancel", "accept", "reject", "start", "finish", "complete"})
+    @ValueSource(strings = { "apply", "cancel", "accept", "reject", "start", "finish", "complete" })
     void applicationMutationResponsesIncludeBothParticipantBadges(String action) {
         MentoringApplication application = application();
         MentorProfile mentor = application.getProgram().getMentor();
@@ -269,6 +284,10 @@ class MentoringMembershipBadgeTest {
         assertThat(response.mentorMembershipBadge()).isFalse();
         assertThat(response.menteeMembershipBadge()).isTrue();
         verify(membershipService).findActiveUserIds(participants);
+        if (action.equals("apply")) {
+            // KP-C2 #91: 신청 시점에 멘토 멤버십을 판정해 수수료 요율을 저장하므로 isActive가 1회 호출된다
+            verify(membershipService).isActive(mentor.getId());
+        }
         verifyNoMoreInteractions(membershipService);
     }
 
@@ -305,7 +324,8 @@ class MentoringMembershipBadgeTest {
         MentoringApplication application = application();
         application.setStatus(ApplicationStatus.COMPLETED);
         MentorProfile mentor = application.getProgram().getMentor();
-        when(mentoringApplicationRepository.findByIdForUpdate(application.getId())).thenReturn(Optional.of(application));
+        when(mentoringApplicationRepository.findByIdForUpdate(application.getId()))
+                .thenReturn(Optional.of(application));
         when(mentorProfileRepository.findByIdForUpdate(mentor.getId())).thenReturn(Optional.of(mentor));
         when(mentoringReviewRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(membershipService.isActive(application.getMentee().getId())).thenReturn(true);
@@ -327,7 +347,8 @@ class MentoringMembershipBadgeTest {
         assertThatThrownBy(() -> service.cancelApplication(CustomUserPrincipal.from(user("stranger")),
                 application.getId()))
                 .isInstanceOf(ResponseStatusException.class)
-                .satisfies(error -> assertThat(((ResponseStatusException) error).getStatusCode().value()).isEqualTo(403));
+                .satisfies(
+                        error -> assertThat(((ResponseStatusException) error).getStatusCode().value()).isEqualTo(403));
 
         assertThat(application.getStatus()).isEqualTo(ApplicationStatus.APPLIED);
         verifyNoInteractions(membershipService, mileageService, notificationCommandService);

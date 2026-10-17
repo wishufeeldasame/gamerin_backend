@@ -199,11 +199,12 @@ public class MentoringService {
         program.setContent(request.content());
         program.setAvailableTimeDesc(request.availableTimeDesc());
         program.setPrice(request.price());
+        program.setStatus(request.status());
         program.setTags(request.tags());
 
         MentoringProgram savedProgram = mentoringProgramRepository.save(program);
-        return MentoringProgramResponse.from(savedProgram,
-                membershipService.isActive(savedProgram.getMentor().getId()));
+        // save() 호출 제거: 원본처럼 더티 체킹 + program 그대로 사용
+        return MentoringProgramResponse.from(program, membershipService.isActive(program.getMentor().getId()));
     }
 
     @Transactional
