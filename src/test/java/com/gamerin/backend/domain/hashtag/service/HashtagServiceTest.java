@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.hashtag.service;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -38,8 +39,7 @@ class HashtagServiceTest {
         Post post = savedPost(postId, "#PUBG #ranked");
         when(hashtagParser.parse(post.getContent())).thenReturn(List.of(
                 new ParsedHashtag("PUBG", "PUBG"),
-                new ParsedHashtag("ranked", "ranked")
-        ));
+                new ParsedHashtag("ranked", "ranked")));
         when(hashtagCommandRepository.findOrCreate("PUBG", "PUBG")).thenReturn(pubgId);
         when(hashtagCommandRepository.findOrCreate("ranked", "ranked")).thenReturn(rankedId);
 
@@ -59,8 +59,8 @@ class HashtagServiceTest {
 
         new HashtagService(hashtagParser, hashtagCommandRepository).attachToPost(post);
 
-        verify(hashtagCommandRepository, never()).findOrCreate(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
-        verify(hashtagCommandRepository, never()).attachToPost(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        verify(hashtagCommandRepository, never()).findOrCreate(any(), any());
+        verify(hashtagCommandRepository, never()).attachToPost(any(), any());
     }
 
     @Test
@@ -69,13 +69,32 @@ class HashtagServiceTest {
                 "test@example.com",
                 "tester",
                 "Tester",
-                "password"
-        ), "#tag");
+                "password"), "#tag");
 
         assertThatThrownBy(() -> new HashtagService(hashtagParser, hashtagCommandRepository).attachToPost(post))
                 .isInstanceOf(IllegalArgumentException.class);
 
-        verify(hashtagCommandRepository, never()).findOrCreate(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        verify(hashtagCommandRepository, never()).findOrCreate(any(), any());
+    }
+
+    /**
+     * KP-C3 (#92): 게시물 수정 시 기존 post_hashtags 삭제 후 새 해시태그를 연결하는지 검증한다.
+     */
+    @Test
+    void syncForPostDeletesExistingRelationsBeforeReattachingParsedHashtags() {
+        UUID postId = UUID.randomUUID();
+        UUID valorantId = UUID.randomUUID();
+        Post post = savedPost(postId, "#Valorant");
+        when(hashtagParser.parse(post.getContent())).thenReturn(List.of(
+                new ParsedHashtag("Valorant", "valorant")));
+        when(hashtagCommandRepository.findOrCreate("Valorant", "valorant")).thenReturn(valorantId);
+
+        new HashtagService(hashtagParser, hashtagCommandRepository).syncForPost(post);
+
+        InOrder order = inOrder(hashtagCommandRepository);
+        order.verify(hashtagCommandRepository).deleteByPostId(postId);
+        order.verify(hashtagCommandRepository).findOrCreate("Valorant", "valorant");
+        order.verify(hashtagCommandRepository).attachToPost(postId, valorantId);
     }
 
     private Post savedPost(UUID postId, String content) {

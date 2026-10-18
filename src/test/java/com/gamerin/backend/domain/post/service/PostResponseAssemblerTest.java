@@ -34,12 +34,24 @@ import com.gamerin.backend.domain.user.entity.UserProfile;
 
 @ExtendWith(MockitoExtension.class)
 class PostResponseAssemblerTest {
-    @Mock private PostMediaRepository mediaRepository;
-    @Mock private PostLikeRepository likeRepository;
-    @Mock private PostBookmarkRepository bookmarkRepository;
-    @Mock private RepostQueryRepository repostRepository;
-    @Mock private MembershipService membershipService;
-    @InjectMocks private PostResponseAssembler assembler;
+
+    @Mock
+    private PostMediaRepository mediaRepository;
+
+    @Mock
+    private PostLikeRepository likeRepository;
+
+    @Mock
+    private PostBookmarkRepository bookmarkRepository;
+
+    @Mock
+    private RepostQueryRepository repostRepository;
+
+    @Mock
+    private MembershipService membershipService;
+
+    @InjectMocks
+    private PostResponseAssembler assembler;
 
     @Test
     void timelineBatchesAuthorsAndRepostersAndKeepsVerifiedBadgeIndependent() {
@@ -52,7 +64,8 @@ class PostResponseAssemblerTest {
         when(membershipService.findActiveUserIds(anyCollection())).thenReturn(Set.of(reposterId));
 
         var responses = assembler.toTimelinePostCards(List.of(
-                new PostTimelineItem(first, new ReposterInfoResponse(reposterId, "Reposter", repostedAt, false), repostedAt),
+                new PostTimelineItem(first, new ReposterInfoResponse(reposterId, "Reposter", repostedAt, false),
+                        repostedAt),
                 new PostTimelineItem(second, null, repostedAt)), author.getId());
 
         assertThat(responses).extracting(response -> response.authorMembershipBadge()).containsExactly(false, false);
@@ -72,7 +85,8 @@ class PostResponseAssemblerTest {
 
         var responses = assembler.toPostCards(List.of(post(active), post(inactive), post(active)), null);
 
-        assertThat(responses).extracting(response -> response.authorMembershipBadge()).containsExactly(true, false, true);
+        assertThat(responses).extracting(response -> response.authorMembershipBadge()).containsExactly(true, false,
+                true);
         verify(membershipService).findActiveUserIds(Set.of(active.getId(), inactive.getId()));
         verifyNoMoreInteractions(membershipService);
     }
@@ -85,10 +99,12 @@ class PostResponseAssemblerTest {
         when(membershipService.findActiveUserIds(anyCollection())).thenReturn(Set.of(active.getId()));
 
         var responses = assembler.toCommentResponses(List.of(
-                PostComment.create(post, active, "first"), PostComment.create(post, inactive, "second"),
+                PostComment.create(post, active, "first"),
+                PostComment.create(post, inactive, "second"),
                 PostComment.create(post, active, "third")), active.getId());
 
-        assertThat(responses).extracting(response -> response.authorMembershipBadge()).containsExactly(true, false, true);
+        assertThat(responses).extracting(response -> response.authorMembershipBadge()).containsExactly(true, false,
+                true);
         assertThat(responses).extracting(response -> response.mine()).containsExactly(true, false, true);
         assertThat(responses.get(1).authorVerifiedBadge()).isTrue();
         verify(membershipService).findActiveUserIds(Set.of(active.getId(), inactive.getId()));
@@ -123,6 +139,37 @@ class PostResponseAssemblerTest {
         assertThat(assembler.toTimelinePostCards(List.of(), null)).isEmpty();
         assertThat(assembler.toCommentResponses(List.of(), null)).isEmpty();
         verifyNoInteractions(membershipService);
+    }
+
+    /**
+     * KP-C3 (#92): 작성자 본인 조회 시에만 editableUntil, editCount를 노출하고 타인 조회 시에는 null을
+     * 반환한다 (E8).
+     */
+    @Test
+    void editableUntilAndEditCountAreIncludedOnlyForPostAuthor() {
+        User author = user("author", false);
+        User other = user("other", false);
+        Post post = post(author);
+        OffsetDateTime createdAt = OffsetDateTime.parse("2026-10-18T08:00:00Z");
+        ReflectionTestUtils.setField(post, "createdAt", createdAt);
+        post.editContent("edited content");
+        when(membershipService.isActive(author.getId())).thenReturn(true);
+        when(membershipService.findActiveUserIds(anyCollection())).thenReturn(Set.of(author.getId()));
+
+        var authorDetail = assembler.toPostDetail(post, author.getId());
+        var otherDetail = assembler.toPostDetail(post, other.getId());
+        var authorCard = assembler.toPostCards(List.of(post), author.getId()).getFirst();
+        var otherCard = assembler.toPostCards(List.of(post), other.getId()).getFirst();
+
+        assertThat(authorDetail.editableUntil()).isEqualTo(createdAt.plusHours(1));
+        assertThat(authorDetail.editCount()).isEqualTo(1);
+        assertThat(otherDetail.editableUntil()).isNull();
+        assertThat(otherDetail.editCount()).isNull();
+
+        assertThat(authorCard.editableUntil()).isEqualTo(createdAt.plusHours(1));
+        assertThat(authorCard.editCount()).isEqualTo(1);
+        assertThat(otherCard.editableUntil()).isNull();
+        assertThat(otherCard.editCount()).isNull();
     }
 
     private User user(String handle, boolean verified) {

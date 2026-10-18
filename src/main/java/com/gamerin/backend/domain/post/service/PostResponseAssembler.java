@@ -43,8 +43,7 @@ public class PostResponseAssembler {
             PostLikeRepository postLikeRepository,
             PostBookmarkRepository postBookmarkRepository,
             RepostQueryRepository repostQueryRepository,
-            MembershipService membershipService
-    ) {
+            MembershipService membershipService) {
         this.postMediaRepository = postMediaRepository;
         this.postLikeRepository = postLikeRepository;
         this.postBookmarkRepository = postBookmarkRepository;
@@ -56,10 +55,13 @@ public class PostResponseAssembler {
         return toPostCards(posts, viewerId, Map.of());
     }
 
+    public List<PostTimelineItem> toTimelineItems(List<PostTimelineItem> items) {
+        return items;
+    }
+
     public List<PostCardResponse> toTimelinePostCards(
             List<PostTimelineItem> timelineItems,
-            UUID viewerId
-    ) {
+            UUID viewerId) {
         Map<UUID, ReposterInfoResponse> reposterInfoByPostId = new HashMap<>();
         List<Post> posts = new ArrayList<>();
         for (PostTimelineItem item : timelineItems) {
@@ -74,8 +76,7 @@ public class PostResponseAssembler {
     private List<PostCardResponse> toPostCards(
             List<Post> posts,
             UUID viewerId,
-            Map<UUID, ReposterInfoResponse> reposterInfoByPostId
-    ) {
+            Map<UUID, ReposterInfoResponse> reposterInfoByPostId) {
         if (posts.isEmpty()) {
             return List.of();
         }
@@ -85,6 +86,7 @@ public class PostResponseAssembler {
         Set<UUID> likedPostIds = buildLikedPostIds(viewerId, postIds);
         Set<UUID> bookmarkedPostIds = buildBookmarkedPostIds(viewerId, postIds);
         Map<UUID, RepostMetrics> repostMetrics = repostQueryRepository.findMetrics(viewerId, postIds);
+
         Set<UUID> displayedUserIds = new HashSet<>();
         posts.forEach(post -> displayedUserIds.add(post.getAuthor().getId()));
         reposterInfoByPostId.values().forEach(reposter -> displayedUserIds.add(reposter.userId()));
@@ -100,8 +102,7 @@ public class PostResponseAssembler {
                     repostMetrics.getOrDefault(post.getId(), new RepostMetrics(0L, false)),
                     withMembershipBadge(reposterInfoByPostId.get(post.getId()), activeUserIds),
                     viewerId,
-                    activeUserIds.contains(post.getAuthor().getId())
-            ));
+                    activeUserIds.contains(post.getAuthor().getId())));
         }
         return responses;
     }
@@ -113,7 +114,8 @@ public class PostResponseAssembler {
                 .toList();
 
         boolean likedByMe = viewerId != null && postLikeRepository.existsByPostIdAndUserId(post.getId(), viewerId);
-        boolean bookmarkedByMe = viewerId != null && postBookmarkRepository.existsByPostIdAndUserId(post.getId(), viewerId);
+        boolean bookmarkedByMe = viewerId != null
+                && postBookmarkRepository.existsByPostIdAndUserId(post.getId(), viewerId);
         RepostMetrics repostMetrics = repostQueryRepository.findMetrics(viewerId, List.of(post.getId()))
                 .getOrDefault(post.getId(), new RepostMetrics(0L, false));
         boolean mine = viewerId != null && post.getAuthor().getId().equals(viewerId);
@@ -137,8 +139,10 @@ public class PostResponseAssembler {
                 likedByMe,
                 bookmarkedByMe,
                 mine,
-                post.getCreatedAt()
-        );
+                post.getCreatedAt(),
+                // KP-C3 (#92): 작성자 본인 응답에만 editableUntil, editCount 노출
+                mine ? post.editableUntil() : null,
+                mine ? post.getEditCount() : null);
     }
 
     public CommentResponse toCommentResponse(PostComment comment, UUID viewerId) {
@@ -153,7 +157,8 @@ public class PostResponseAssembler {
         comments.forEach(comment -> userIds.add(comment.getAuthor().getId()));
         Set<UUID> activeUserIds = membershipService.findActiveUserIds(userIds);
         return comments.stream()
-                .map(comment -> toCommentResponse(comment, viewerId, activeUserIds.contains(comment.getAuthor().getId())))
+                .map(comment -> toCommentResponse(comment, viewerId,
+                        activeUserIds.contains(comment.getAuthor().getId())))
                 .toList();
     }
 
@@ -168,8 +173,7 @@ public class PostResponseAssembler {
                 membershipBadge,
                 comment.getContent(),
                 comment.getCreatedAt(),
-                viewerId != null && comment.getAuthor().getId().equals(viewerId)
-        );
+                viewerId != null && comment.getAuthor().getId().equals(viewerId));
     }
 
     public List<ProfileMediaItemResponse> toProfileMediaItems(List<PostMedia> mediaList) {
@@ -181,8 +185,7 @@ public class PostResponseAssembler {
                         media.getMediaType(),
                         media.getMediaUrl(),
                         media.getThumbnailUrl(),
-                        media.getPost().getCreatedAt()
-                ))
+                        media.getPost().getCreatedAt()))
                 .toList();
     }
 
@@ -194,8 +197,8 @@ public class PostResponseAssembler {
             RepostMetrics repostMetrics,
             ReposterInfoResponse reposterInfo,
             UUID viewerId,
-            boolean membershipBadge
-    ) {
+            boolean membershipBadge) {
+        boolean mine = viewerId != null && post.getAuthor().getId().equals(viewerId);
         UserProfile profile = post.getAuthor().getProfile();
         return new PostCardResponse(
                 post.getId(),
@@ -214,16 +217,21 @@ public class PostResponseAssembler {
                 reposterInfo,
                 likedByMe,
                 bookmarkedByMe,
-                viewerId != null && post.getAuthor().getId().equals(viewerId),
-                post.getCreatedAt()
-        );
+                mine,
+                post.getCreatedAt(),
+                // KP-C3 (#92): 작성자 본인 응답에만 editableUntil, editCount 노출
+                mine ? post.editableUntil() : null,
+                mine ? post.getEditCount() : null);
     }
 
     private ReposterInfoResponse withMembershipBadge(ReposterInfoResponse reposter, Set<UUID> activeUserIds) {
         if (reposter == null) {
             return null;
         }
-        return new ReposterInfoResponse(reposter.userId(), reposter.nickname(), reposter.repostedAt(),
+        return new ReposterInfoResponse(
+                reposter.userId(),
+                reposter.nickname(),
+                reposter.repostedAt(),
                 activeUserIds.contains(reposter.userId()));
     }
 
@@ -266,7 +274,6 @@ public class PostResponseAssembler {
                 media.getMediaType(),
                 media.getMediaUrl(),
                 media.getThumbnailUrl(),
-                media.getSortOrder()
-        );
+                media.getSortOrder());
     }
 }
