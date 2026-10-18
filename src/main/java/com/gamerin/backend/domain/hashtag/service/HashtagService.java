@@ -18,8 +18,7 @@ public class HashtagService {
 
     public HashtagService(
             HashtagParser hashtagParser,
-            HashtagCommandRepository hashtagCommandRepository
-    ) {
+            HashtagCommandRepository hashtagCommandRepository) {
         this.hashtagParser = hashtagParser;
         this.hashtagCommandRepository = hashtagCommandRepository;
     }
@@ -32,9 +31,20 @@ public class HashtagService {
         for (ParsedHashtag parsed : hashtagParser.parse(post.getContent())) {
             UUID hashtagId = hashtagCommandRepository.findOrCreate(
                     parsed.displayName(),
-                    parsed.normalizedName()
-            );
+                    parsed.normalizedName());
             hashtagCommandRepository.attachToPost(post.getId(), hashtagId);
         }
+    }
+
+    /**
+     * KP-C3 (#92): 게시물 수정 시 기존 해시태그 매핑을 제거하고 최신 본문 기준으로 해시태그를 재파싱·연결한다.
+     */
+    public void syncForPost(Post post) {
+        if (post == null || post.getId() == null) {
+            throw new IllegalArgumentException("A saved post is required for hashtag synchronization.");
+        }
+
+        hashtagCommandRepository.deleteByPostId(post.getId());
+        attachToPost(post);
     }
 }
