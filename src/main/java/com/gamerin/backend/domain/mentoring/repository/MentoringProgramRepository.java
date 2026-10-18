@@ -38,16 +38,17 @@ public interface MentoringProgramRepository extends JpaRepository<MentoringProgr
 
         long countByStatusAndDeletedAtIsNull(ProgramStatus status);
 
+        // :keyword = '' 비교가 있어야 Hibernate가 파라미터를 문자열로 추론한다 (없으면 PostgreSQL에서 null이 bytea로 바인딩되어 lower(bytea) 오류)
         @Query(value = "SELECT DISTINCT p FROM MentoringProgram p " +
                         "JOIN FETCH p.mentor m " +
                         "JOIN FETCH m.user " +
                         "WHERE (:status IS NULL OR p.status = :status) " +
-                        "AND (:keyword IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR LOWER(m.user.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')))",
+                        "AND (:keyword IS NULL OR :keyword = '' OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR LOWER(m.user.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')))",
                         countQuery = "SELECT COUNT(DISTINCT p) FROM MentoringProgram p " +
                         "JOIN p.mentor m " +
                         "JOIN m.user u " +
                         "WHERE (:status IS NULL OR p.status = :status) " +
-                        "AND (:keyword IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR LOWER(u.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')))")
+                        "AND (:keyword IS NULL OR :keyword = '' OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR LOWER(u.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')))")
 
         Page<MentoringProgram> searchProgramsForAdmin(
                         @Param("status") ProgramStatus status,
