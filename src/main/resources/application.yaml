@@ -66,6 +66,16 @@ app:
     password-reset:
       expiration-minutes: 30
 
+pubg:
+  api:
+    connect-timeout: ${PUBG_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${PUBG_API_READ_TIMEOUT:10s}
+
+riot:
+  api:
+    connect-timeout: ${RIOT_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${RIOT_API_READ_TIMEOUT:10s}
+
 r6:
   api:
     key: ${R6DATA_API_KEY:}

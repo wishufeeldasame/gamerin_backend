@@ -12,9 +12,15 @@ import com.gamerin.backend.domain.pubg.dto.external.PubgRankedStatsResponse.Rank
 import com.gamerin.backend.domain.pubg.dto.external.PubgRankedStatsResponse.RankedData;
 import com.gamerin.backend.domain.pubg.dto.external.RankedGameModeStats;
 import com.gamerin.backend.domain.pubg.exception.NoRankedRecordException;
+import com.sun.net.httpserver.HttpServer;
+import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -25,7 +31,40 @@ import org.springframework.web.server.ResponseStatusException;
 
 class PubgApiClientTest {
 
-    private final PubgApiClient pubgApiClient = new PubgApiClient("test-api-key");
+    private final PubgApiClient pubgApiClient = new PubgApiClient("test-api-key", "https://api.pubg.com", Duration.ofSeconds(3), Duration.ofSeconds(10));
+
+    @Test
+    void findAccountIdMapsReadTimeoutTo502() throws IOException {
+        CountDownLatch releaseResponse = new CountDownLatch(1);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            try {
+                releaseResponse.await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            PubgApiClient client = new PubgApiClient(
+                    "test-api-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                    Duration.ofSeconds(1),
+                    Duration.ofMillis(50)
+            );
+
+            assertThatThrownBy(() -> client.findAccountId("player"))
+                    .isInstanceOfSatisfying(ResponseStatusException.class, exception -> {
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+                        assertThat(exception.getReason()).isEqualTo("Failed to fetch PUBG player information.");
+                    });
+        } finally {
+            releaseResponse.countDown();
+            server.stop(0);
+        }
+    }
 
     @Test
     void resolveRankedKdUsesKillsAndDeathsAndIgnoresKdaKdrAndAssists() {
@@ -236,7 +275,7 @@ class PubgApiClientTest {
                 .body(PubgRankedStatsResponse.class))
                 .thenReturn(response);
 
-        PubgApiClient client = new PubgApiClient("test-api-key");
+        PubgApiClient client = new PubgApiClient("test-api-key", "https://api.pubg.com", Duration.ofSeconds(3), Duration.ofSeconds(10));
         ReflectionTestUtils.setField(client, "restClient", restClient);
         return client;
     }
@@ -250,7 +289,7 @@ class PubgApiClientTest {
                 .body(PubgRankedStatsResponse.class))
                 .thenThrow(failure);
 
-        PubgApiClient client = new PubgApiClient("test-api-key");
+        PubgApiClient client = new PubgApiClient("test-api-key", "https://api.pubg.com", Duration.ofSeconds(3), Duration.ofSeconds(10));
         ReflectionTestUtils.setField(client, "restClient", restClient);
         return client;
     }

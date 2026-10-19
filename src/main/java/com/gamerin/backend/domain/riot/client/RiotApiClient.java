@@ -1,11 +1,14 @@
 package com.gamerin.backend.domain.riot.client;
 
+import java.time.Duration;
 import java.util.List;
 
 import com.gamerin.backend.domain.riot.dto.external.LeagueEntryResponse;
 import com.gamerin.backend.domain.riot.dto.external.MatchResponse;
 import com.gamerin.backend.domain.riot.dto.external.RiotAccountResponse;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
+import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -17,15 +20,26 @@ import org.springframework.web.server.ResponseStatusException;
 @Component
 public class RiotApiClient {
 
-    private static final String ASIA_BASE_URL = "https://asia.api.riotgames.com";
-    private static final String KR_BASE_URL = "https://kr.api.riotgames.com";
-
+    private final String asiaBaseUrl;
+    private final String krBaseUrl;
     private final RestClient restClient;
     private final boolean apiKeyConfigured;
 
-    public RiotApiClient(@Value("${riot.api.key:}") String apiKey) {
+    public RiotApiClient(
+            @Value("${riot.api.key:}") String apiKey,
+            @Value("${riot.api.asia-base-url:https://asia.api.riotgames.com}") String asiaBaseUrl,
+            @Value("${riot.api.kr-base-url:https://kr.api.riotgames.com}") String krBaseUrl,
+            @Value("${riot.api.connect-timeout:3s}") Duration connectTimeout,
+            @Value("${riot.api.read-timeout:10s}") Duration readTimeout
+    ) {
         this.apiKeyConfigured = apiKey != null && !apiKey.isBlank();
+        this.asiaBaseUrl = asiaBaseUrl;
+        this.krBaseUrl = krBaseUrl;
+        ClientHttpRequestFactorySettings requestFactorySettings = ClientHttpRequestFactorySettings.defaults()
+                .withConnectTimeout(connectTimeout)
+                .withReadTimeout(readTimeout);
         this.restClient = RestClient.builder()
+                .requestFactory(ClientHttpRequestFactoryBuilder.detect().build(requestFactorySettings))
                 .defaultHeader("X-Riot-Token", apiKey)
                 .build();
     }
@@ -35,7 +49,7 @@ public class RiotApiClient {
             validateApiKeyConfigured();
             try {
                 return restClient.get()
-                        .uri(ASIA_BASE_URL + "/riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}", gameName, tagLine)
+                        .uri(asiaBaseUrl + "/riot/account/v1/accounts/by-riot-id/{gameName}/{tagLine}", gameName, tagLine)
                         .retrieve()
                         .body(RiotAccountResponse.class);
             } catch (HttpClientErrorException.NotFound e) {
@@ -54,7 +68,7 @@ public class RiotApiClient {
             validateApiKeyConfigured();
             try {
                 return restClient.get()
-                        .uri(KR_BASE_URL + "/lol/league/v4/entries/by-puuid/{puuid}",
+                        .uri(krBaseUrl + "/lol/league/v4/entries/by-puuid/{puuid}",
   puuid)
                         .retrieve()
                         .body(new
@@ -70,7 +84,7 @@ public class RiotApiClient {
             validateApiKeyConfigured();
             try {
                 return restClient.get()
-                        .uri(ASIA_BASE_URL + "/lol/match/v5/matches/by-puuid/{puuid}/ids?start=0&count={count}", puuid, count)
+                        .uri(asiaBaseUrl + "/lol/match/v5/matches/by-puuid/{puuid}/ids?start=0&count={count}", puuid, count)
                         .retrieve()
                         .body(new ParameterizedTypeReference<List<String>>() {});
             } catch (RestClientException e) {
@@ -83,7 +97,7 @@ public class RiotApiClient {
             validateApiKeyConfigured();
             try {
                 return restClient.get()
-                        .uri(ASIA_BASE_URL + "/lol/match/v5/matches/{matchId}", matchId)
+                        .uri(asiaBaseUrl + "/lol/match/v5/matches/{matchId}", matchId)
                         .retrieve()
                         .body(MatchResponse.class);
             } catch (RestClientException e) {
