@@ -3,7 +3,9 @@ package com.gamerin.backend.domain.payment.integration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -188,7 +190,7 @@ class PaymentPostgresConcurrencyTest {
     }
 
     @Test
-    void membershipGrantFailureRollsBackPaymentPeriodAndGrantHistoryTogether() {
+    void membershipGrantFailureRollsBackPaymentPeriodAndGrantHistoryThenGoesToReview() {
         UUID orderId = readyMembershipOrder();
         when(kakaoPayClient.approve(any())).thenReturn(new KakaoPayClient.ApproveResponse(
                 "A1", tid, CID, orderId.toString(), userId.toString(), "MONEY",
@@ -198,17 +200,41 @@ class PaymentPostgresConcurrencyTest {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Failure after membership grant.");
         }).when(membershipService).grant(userId, orderId);
 
-        assertThatThrownBy(() -> paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")))
-                .isInstanceOfSatisfying(ResponseStatusException.class,
-                        error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")).status())
+                .isEqualTo(PaymentStatus.NEEDS_REVIEW);
 
         Payment payment = paymentRepository.findById(orderId).orElseThrow();
-        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.APPROVING);
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.NEEDS_REVIEW);
         assertThat(payment.getApprovedAt()).isNull();
         assertThat(payment.getApprovedAid()).isNull();
         assertThat(grantRows(orderId)).isZero();
         assertThat(jdbcTemplate.queryForObject("select count(*) from user_memberships where user_id = ?",
                 Long.class, userId)).isZero();
+    }
+
+    @Test
+    void ledgerUniqueViolationRollsBackApprovalAndGoesToReviewWithoutRetry() {
+        UUID orderId = paymentService.ready(userId, new PaymentReadyRequest("CHARGE_5000", UUID.randomUUID())).orderId();
+        // 어긋난 데이터: 승인 전에 같은 결제의 CHARGE 원장이 이미 있다.
+        insertLedger("CHARGE", orderId);
+        when(kakaoPayClient.approve(any())).thenReturn(new KakaoPayClient.ApproveResponse(
+                "A1", tid, CID, orderId.toString(), userId.toString(), "MONEY",
+                new KakaoPayClient.Amount(5_000L), "2026-10-10T12:01:00"));
+
+        assertThat(paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")).status())
+                .isEqualTo(PaymentStatus.NEEDS_REVIEW);
+        jdbcTemplate.update("update payments set status_changed_at = status_changed_at - interval '2 minutes' where id = ?",
+                orderId);
+        recoveryScheduler.recoverStalePayments();
+
+        Payment payment = paymentRepository.findById(orderId).orElseThrow();
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.NEEDS_REVIEW);
+        assertThat(payment.getApprovedAid()).isNull();
+        // 스케줄러가 다른 테스트의 주문을 볼 수 있으므로 이 주문의 TID로만 확인한다.
+        verify(kakaoPayClient, never()).order(argThat(request -> tid.equals(request.tid())));
+        // 기존 원장은 보존하고 잔액은 롤백된다.
+        assertThat(chargeRows(orderId)).isEqualTo(1);
+        assertThat(balance()).isZero();
     }
 
     @Test
