@@ -118,4 +118,5 @@ openai:
   moderation:
     enabled: ${OPENAI_MODERATION_ENABLED:true}
     model: ${OPENAI_MODERATION_MODEL:omni-moderation-latest}
+    max-parallel-requests: ${OPENAI_MODERATION_MAX_PARALLEL_REQUESTS:4}
     ffmpeg-path: ${OPENAI_MODERATION_FFMPEG_PATH:ffmpeg}
