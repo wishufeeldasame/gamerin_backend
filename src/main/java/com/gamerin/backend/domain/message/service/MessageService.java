@@ -11,10 +11,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.data.domain.PageRequest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -70,6 +72,7 @@ public class MessageService {
     private static final long MAX_IMAGE_ATTACHMENT_SIZE_BYTES = 20L * 1024L * 1024L;
     private static final long MAX_VIDEO_ATTACHMENT_SIZE_BYTES = 100L * 1024L * 1024L;
     private static final double MAX_VIDEO_ATTACHMENT_DURATION_SECONDS = 120.0;
+    private static final String CLIENT_MESSAGE_ID_UNIQUE_INDEX = "uk_direct_messages_sender_client_message_id";
 
     private final UserRepository userRepository;
     private final PostRepository postRepository;
@@ -215,6 +218,11 @@ public class MessageService {
         User viewer = getCurrentUser(principal);
         MessageConversation conversation = getActiveConversationForUpdate(conversationId);
         MessageParticipant viewerParticipant = getParticipant(conversationId, viewer.getId());
+        Optional<DirectMessage> sentMessage =
+                findSentMessage(viewer.getId(), conversationId, request.clientMessageId());
+        if (sentMessage.isPresent()) {
+            return toMessageResponse(sentMessage.get(), viewer.getId());
+        }
 
         String content = normalizeContent(request.content());
         Post sharedPost = getSharedPost(request.sharedPostId());
@@ -227,7 +235,8 @@ public class MessageService {
                 conversation,
                 viewer,
                 content != null ? content : "",
-                sharedPost
+                sharedPost,
+                request.clientMessageId()
         );
         markParticipantRead(viewerParticipant);
         publishMessageCreated(savedMessage);
@@ -243,6 +252,11 @@ public class MessageService {
         User viewer = getCurrentUser(principal);
         MessageConversation conversation = getActiveConversation(conversationId);
         MessageParticipant viewerParticipant = getParticipant(conversationId, viewer.getId());
+        UUID clientMessageId = request.getClientMessageId();
+        Optional<DirectMessage> alreadySentMessage = findSentMessage(viewer.getId(), conversationId, clientMessageId);
+        if (alreadySentMessage.isPresent()) {
+            return toMessageResponse(alreadySentMessage.get(), viewer.getId());
+        }
 
         String content = normalizeContent(request.getContent());
         Post sharedPost = getSharedPost(request.getSharedPostId());
@@ -260,11 +274,18 @@ public class MessageService {
 
         List<MessageAttachmentStorageService.StoredFile> storedFiles = new ArrayList<>();
         try {
+            // 검열 중에 같은 키 요청이 먼저 저장됐을 수 있어 대화 잠금 뒤 다시 확인한다.
+            Optional<DirectMessage> sentMessage = findSentMessage(viewer.getId(), conversationId, clientMessageId);
+            if (sentMessage.isPresent()) {
+                return toMessageResponse(sentMessage.get(), viewer.getId());
+            }
+
             DirectMessage savedMessage = saveMessage(
                     conversation,
                     viewer,
                     content != null ? content : "",
-                    sharedPost
+                    sharedPost,
+                    clientMessageId
             );
 
             List<DirectMessageAttachment> messageAttachments = new ArrayList<>();
@@ -396,7 +417,7 @@ public class MessageService {
         for (User recipient : lockOrderedRecipients) {
             MessageConversation conversation = getOrCreateDirectConversation(viewer, recipient);
             MessageParticipant viewerParticipant = getOrCreateParticipant(conversation, viewer);
-            DirectMessage savedMessage = saveMessage(conversation, viewer, content != null ? content : "", sharedPost);
+            DirectMessage savedMessage = saveMessage(conversation, viewer, content != null ? content : "", sharedPost, null);
             markParticipantRead(viewerParticipant);
             publishMessageCreated(savedMessage);
             responsesByRecipient.put(
@@ -460,15 +481,20 @@ public class MessageService {
             MessageConversation conversation,
             User sender,
             String content,
-            Post sharedPost
+            Post sharedPost,
+            UUID clientMessageId
     ) {
         List<MessageParticipant> recipients = reactivateRecipientsForIncomingMessage(conversation, sender.getId());
         DirectMessage savedMessage = directMessageRepository.save(DirectMessage.create(
                 conversation,
                 sender,
                 content,
-                sharedPost
+                sharedPost,
+                clientMessageId
         ));
+        if (clientMessageId != null) {
+            flushClientMessageId();
+        }
         conversation.updateLastMessage(savedMessage.getId());
         for (MessageParticipant recipient : recipients) {
             notificationCommandService.createOrRefreshDirectMessage(
@@ -479,6 +505,38 @@ public class MessageService {
             );
         }
         return savedMessage;
+    }
+
+    /**
+     * 응답 유실 후 같은 키로 재시도하면 검열·알림 없이 처음 저장한 메시지를 돌려준다.
+     * 호출부가 대화 행을 잠근 뒤 조회하므로 같은 대화의 동시 재시도는 순서대로 이 조회에 걸린다.
+     * PostgreSQL은 유니크 위반 뒤 같은 트랜잭션에서 재조회할 수 없어, 다른 대화 간 동시 충돌만 유니크 인덱스로 막고 409로 응답한다.
+     */
+    private Optional<DirectMessage> findSentMessage(UUID senderId, UUID conversationId, UUID clientMessageId) {
+        if (clientMessageId == null) {
+            return Optional.empty();
+        }
+        Optional<DirectMessage> sentMessage =
+                directMessageRepository.findBySenderIdAndClientMessageId(senderId, clientMessageId);
+        if (sentMessage.isPresent()
+                && (sentMessage.get().getDeletedAt() != null
+                || !sentMessage.get().getConversation().getId().equals(conversationId))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Client message id is already used.");
+        }
+        return sentMessage;
+    }
+
+    // 다른 대화에 같은 키를 동시에 보내면 대화 잠금이 달라 조회를 통과하므로, 유니크 위반을 즉시 확인해 409로 바꾼다.
+    private void flushClientMessageId() {
+        try {
+            directMessageRepository.flush();
+        } catch (DataIntegrityViolationException ex) {
+            String cause = String.valueOf(ex.getMostSpecificCause().getMessage());
+            if (cause.contains(CLIENT_MESSAGE_ID_UNIQUE_INDEX)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Client message id is already used.", ex);
+            }
+            throw ex;
+        }
     }
 
     private List<MessageParticipant> reactivateRecipientsForIncomingMessage(

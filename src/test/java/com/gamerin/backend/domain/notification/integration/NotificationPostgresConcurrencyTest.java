@@ -965,6 +965,70 @@ class NotificationPostgresConcurrencyTest {
     }
 
     @Test
+    void concurrentRetriesWithSameClientMessageIdStoreOneMessage() throws Exception {
+        MessageFixture fixture = createMessageFixture();
+        UUID clientMessageId = UUID.randomUUID();
+        List<Supplier<UUID>> sends = IntStream.range(0, CONCURRENT_REQUESTS)
+                .mapToObj(index -> (Supplier<UUID>) () -> messageService.sendMessage(
+                        fixture.senderPrincipal(),
+                        fixture.conversationId(),
+                        new SendMessageRequest("retried-message", null, clientMessageId)
+                ).id())
+                .toList();
+
+        List<Outcome<UUID>> outcomes = runConcurrently(sends);
+
+        assertNoFailures(outcomes, "direct message retries");
+        UUID storedMessageId = singleUuid(
+                "select id from direct_messages where sender_id = ? and client_message_id = ?",
+                fixture.senderId(),
+                clientMessageId
+        );
+        assertThat(outcomes).extracting(Outcome::value).containsOnly(storedMessageId);
+        assertThat(count(
+                "select count(*) from direct_messages where conversation_id = ?",
+                fixture.conversationId()
+        )).isEqualTo(1L);
+    }
+
+    @Test
+    void concurrentSameClientMessageIdInDifferentConversationsStoresOneAndRejectsOthers() throws Exception {
+        MessageFixture first = createMessageFixture();
+        UUID secondConversationId = transactionTemplate.execute(status -> {
+            User sender = userRepository.findById(first.senderId()).orElseThrow();
+            User recipient = saveUser("message-second-recipient");
+            MessageConversation conversation = messageConversationRepository.saveAndFlush(
+                    MessageConversation.createDirect(sender.getId() + ":" + recipient.getId())
+            );
+            messageParticipantRepository.save(MessageParticipant.create(conversation, sender));
+            messageParticipantRepository.save(MessageParticipant.create(conversation, recipient));
+            messageParticipantRepository.flush();
+            return conversation.getId();
+        });
+        UUID clientMessageId = UUID.randomUUID();
+        List<Supplier<UUID>> sends = List.of(first.conversationId(), secondConversationId).stream()
+                .map(conversationId -> (Supplier<UUID>) () -> messageService.sendMessage(
+                        first.senderPrincipal(),
+                        conversationId,
+                        new SendMessageRequest("same-key", null, clientMessageId)
+                ).id())
+                .toList();
+
+        List<Outcome<UUID>> outcomes = runConcurrently(sends);
+
+        assertThat(outcomes).filteredOn(outcome -> outcome.error() == null).hasSize(1);
+        assertThat(outcomes).filteredOn(outcome -> outcome.error() != null)
+                .singleElement()
+                .extracting(outcome -> ((ResponseStatusException) outcome.error()).getStatusCode().value())
+                .isEqualTo(409);
+        assertThat(count(
+                "select count(*) from direct_messages where sender_id = ? and client_message_id = ?",
+                first.senderId(),
+                clientMessageId
+        )).isEqualTo(1L);
+    }
+
+    @Test
     void concurrentMessagesAndReadKeepOneConversationNotificationConsistent() throws Exception {
         MessageFixture fixture = createMessageFixture();
         List<Supplier<Void>> sends = IntStream.range(0, CONCURRENT_REQUESTS)

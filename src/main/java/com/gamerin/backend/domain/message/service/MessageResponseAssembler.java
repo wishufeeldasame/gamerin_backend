@@ -68,7 +68,9 @@ public class MessageResponseAssembler {
                 attachments.stream()
                         .map(this::toAttachment)
                         .toList(),
-                toSharedPost(message.getSharedPost())
+                toSharedPost(message.getSharedPost()),
+                // 재시도 키는 보낸 사람 화면의 임시 메시지 대조에만 쓰므로 상대에게 노출하지 않는다.
+                mine ? message.getClientMessageId() : null
         );
     }
 

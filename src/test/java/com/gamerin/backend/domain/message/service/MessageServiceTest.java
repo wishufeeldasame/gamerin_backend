@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -17,6 +18,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,6 +26,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -503,6 +506,8 @@ class MessageServiceTest {
             ArgumentCaptor<DirectMessage> messageCaptor = ArgumentCaptor.forClass(DirectMessage.class);
             verify(directMessageRepository).save(messageCaptor.capture());
             assertThat(messageCaptor.getValue().getContent()).isEqualTo("");
+            assertThat(messageCaptor.getValue().getClientMessageId()).isNull();
+            verify(directMessageRepository, never()).findBySenderIdAndClientMessageId(any(), any());
             verify(messageRealtimeService, never()).publish(any(), any());
 
             List<TransactionSynchronization> synchronizations =
@@ -546,6 +551,177 @@ class MessageServiceTest {
 
         verify(textSecurityService).assertTextSafe("bad message");
         verify(directMessageRepository, never()).save(any(DirectMessage.class));
+    }
+
+    @Test
+    void sendMessageRetryWithSameClientMessageIdReturnsSavedMessageAndModeratesOnce() {
+        User viewer = user("viewer");
+        User recipient = user("recipient");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        MessageParticipant recipientParticipant = participant(conversation, recipient);
+        UUID clientMessageId = UUID.randomUUID();
+        AtomicReference<DirectMessage> savedMessage = new AtomicReference<>();
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(directMessageRepository.findBySenderIdAndClientMessageId(viewer.getId(), clientMessageId))
+                .thenAnswer(invocation -> Optional.ofNullable(savedMessage.get()));
+        when(messageParticipantRepository.findByConversationId(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant, recipientParticipant));
+        when(directMessageRepository.save(any(DirectMessage.class)))
+                .thenAnswer(invocation -> {
+                    DirectMessage message = invocation.getArgument(0);
+                    ReflectionTestUtils.setField(message, "id", UUID.randomUUID());
+                    ReflectionTestUtils.setField(message, "createdAt", OffsetDateTime.now());
+                    savedMessage.set(message);
+                    return message;
+                });
+        when(messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant, recipientParticipant));
+        when(directMessageAttachmentRepository.findByMessageIds(any())).thenReturn(List.of());
+
+        SendMessageRequest request = new SendMessageRequest(" hello ", null, clientMessageId);
+        var first = messageService.sendMessage(CustomUserPrincipal.from(viewer), conversation.getId(), request);
+        var retried = messageService.sendMessage(CustomUserPrincipal.from(viewer), conversation.getId(), request);
+
+        assertThat(retried.id()).isEqualTo(first.id());
+        assertThat(first.clientMessageId()).isEqualTo(clientMessageId);
+        assertThat(retried.clientMessageId()).isEqualTo(clientMessageId);
+        verify(directMessageRepository).save(any(DirectMessage.class));
+        verify(textSecurityService).assertTextSafe("hello");
+        verify(contentModerationService).assertTextAllowed("hello");
+        verify(notificationCommandService).createOrRefreshDirectMessage(any(), any(), any(), any());
+        verify(messageRealtimeService, times(2)).publish(any(), any());
+    }
+
+    @Test
+    void sendMessageRejectsClientMessageIdUsedInAnotherConversation() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        UUID clientMessageId = UUID.randomUUID();
+        DirectMessage otherConversationMessage = DirectMessage.create(conversation(), viewer, "hello", null, clientMessageId);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(directMessageRepository.findBySenderIdAndClientMessageId(viewer.getId(), clientMessageId))
+                .thenReturn(Optional.of(otherConversationMessage));
+
+        assertThatThrownBy(() -> messageService.sendMessage(
+                CustomUserPrincipal.from(viewer),
+                conversation.getId(),
+                new SendMessageRequest("hello", null, clientMessageId)
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.CONFLICT.value());
+
+        verifyNoInteractions(contentModerationService);
+        verify(directMessageRepository, never()).save(any(DirectMessage.class));
+    }
+
+    @Test
+    void sendMessageMapsConcurrentClientMessageIdCollisionToConflict() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        UUID clientMessageId = UUID.randomUUID();
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(messageParticipantRepository.findByConversationId(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant));
+        when(directMessageRepository.save(any(DirectMessage.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        doThrow(new DataIntegrityViolationException(
+                "duplicate key value violates unique constraint \"uk_direct_messages_sender_client_message_id\""
+        )).when(directMessageRepository).flush();
+
+        assertThatThrownBy(() -> messageService.sendMessage(
+                CustomUserPrincipal.from(viewer),
+                conversation.getId(),
+                new SendMessageRequest("hello", null, clientMessageId)
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.CONFLICT.value());
+        verify(notificationCommandService, never()).createOrRefreshDirectMessage(any(), any(), any(), any());
+    }
+
+    @Test
+    void sendMultipartMessageRetryWithSameClientMessageIdSkipsValidationAndStorage() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        UUID clientMessageId = UUID.randomUUID();
+        DirectMessage sentMessage = DirectMessage.create(conversation, viewer, "screenshot", null, clientMessageId);
+        ReflectionTestUtils.setField(sentMessage, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(sentMessage, "createdAt", OffsetDateTime.now());
+        MockMultipartFile imageFile = new MockMultipartFile(
+                "attachments",
+                "screenshot.png",
+                "image/png",
+                "image".getBytes()
+        );
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(directMessageRepository.findBySenderIdAndClientMessageId(viewer.getId(), clientMessageId))
+                .thenReturn(Optional.of(sentMessage));
+        when(messageParticipantRepository.findByConversationId(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant));
+        when(directMessageAttachmentRepository.findByMessageIds(List.of(sentMessage.getId()))).thenReturn(List.of());
+
+        SendMultipartMessageRequest request = new SendMultipartMessageRequest();
+        request.setContent("screenshot");
+        request.setAttachments(List.of(imageFile));
+        request.setClientMessageId(clientMessageId);
+
+        var response = messageService.sendMultipartMessage(CustomUserPrincipal.from(viewer), conversation.getId(), request);
+
+        assertThat(response.id()).isEqualTo(sentMessage.getId());
+        assertThat(response.clientMessageId()).isEqualTo(clientMessageId);
+        verifyNoInteractions(contentModerationService, mediaUploadSecurityService, messageAttachmentStorageService);
+        verify(messageConversationRepository, never()).findActiveByIdForUpdate(any());
+        verify(directMessageRepository, never()).save(any(DirectMessage.class));
+    }
+
+    @Test
+    void messageResponseExposesClientMessageIdOnlyToSender() {
+        User sender = user("sender");
+        User recipient = user("recipient");
+        MessageConversation conversation = conversation();
+        List<MessageParticipant> participants = List.of(participant(conversation, sender), participant(conversation, recipient));
+        UUID clientMessageId = UUID.randomUUID();
+        DirectMessage message = DirectMessage.create(conversation, sender, "hello", null, clientMessageId);
+        ReflectionTestUtils.setField(message, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(message, "createdAt", OffsetDateTime.now());
+        MessageResponseAssembler assembler = new MessageResponseAssembler();
+
+        assertThat(assembler.toMessage(message, sender.getId(), List.of(), participants).clientMessageId())
+                .isEqualTo(clientMessageId);
+        assertThat(assembler.toMessage(message, recipient.getId(), List.of(), participants).clientMessageId())
+                .isNull();
     }
 
     @Test
