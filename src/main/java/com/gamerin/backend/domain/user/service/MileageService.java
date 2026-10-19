@@ -143,18 +143,4 @@ public class MileageService {
         return transactionRepository.findAllByUserOrderByCreatedAtDesc(user, pageable)
                 .map(MileageTransactionResponse::from);
     }
-
-    // 마일리지 충전 (비관적 락으로 안전하게 잔액 증액)
-    @Transactional
-    public MyMileageResponse chargeMileage(User user, Long amount) {
-        if (amount <= 0) {
-            throw new IllegalArgumentException("충전 금액은 0원보다 커야 합니다.");
-        }
-
-        // 마일리지 추가 및 트랜잭션 기록
-        addMileage(user, amount, TransactionType.CHARGE, "테스트용 가상 충전", null);
-
-        // 변경된 잔액 정보 반환
-        return getMyBalance(user);
-    }
 }

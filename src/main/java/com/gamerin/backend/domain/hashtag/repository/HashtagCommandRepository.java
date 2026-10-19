@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.hashtag.repository;
 
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.UUID;
 
 import org.hibernate.Session;
@@ -41,6 +42,7 @@ public class HashtagCommandRepository {
                 """)
                 .setParameter("normalizedName", normalizedName)
                 .getSingleResult();
+
         return toUuid(id);
     }
 
@@ -61,6 +63,18 @@ public class HashtagCommandRepository {
                 .executeUpdate();
     }
 
+    /**
+     * KP-C3 (#92): 게시물 본문 수정 시 해시태그 재파싱 전에 기존 post_hashtags 연결을 삭제한다.
+     */
+    public void deleteByPostId(UUID postId) {
+        entityManager.createNativeQuery("""
+                delete from post_hashtags
+                where post_id = :postId
+                """)
+                .setParameter("postId", postId)
+                .executeUpdate();
+    }
+
     private UUID findOrCreateForH2(String displayName, String normalizedName) {
         UUID existingId = findId(normalizedName);
         if (existingId != null) {
@@ -76,6 +90,7 @@ public class HashtagCommandRepository {
                 .setParameter("displayName", displayName)
                 .setParameter("normalizedName", normalizedName)
                 .executeUpdate();
+
         return candidateId;
     }
 
@@ -88,6 +103,7 @@ public class HashtagCommandRepository {
                 .setParameter("postId", postId)
                 .setParameter("hashtagId", hashtagId)
                 .getSingleResult();
+
         if (count.longValue() > 0) {
             return;
         }
@@ -103,13 +119,14 @@ public class HashtagCommandRepository {
     }
 
     private UUID findId(String normalizedName) {
-        java.util.List<?> ids = entityManager.createNativeQuery("""
+        List<?> ids = entityManager.createNativeQuery("""
                 select id
                 from hashtags
                 where normalized_name = :normalizedName
                 """)
                 .setParameter("normalizedName", normalizedName)
                 .getResultList();
+
         return ids.isEmpty() ? null : toUuid(ids.getFirst());
     }
 
@@ -119,9 +136,8 @@ public class HashtagCommandRepository {
             return cached;
         }
 
-        boolean detected = entityManager.unwrap(Session.class).doReturningWork(connection ->
-                "H2".equalsIgnoreCase(connection.getMetaData().getDatabaseProductName())
-        );
+        boolean detected = entityManager.unwrap(Session.class).doReturningWork(
+                connection -> "H2".equalsIgnoreCase(connection.getMetaData().getDatabaseProductName()));
         h2Database = detected;
         return detected;
     }

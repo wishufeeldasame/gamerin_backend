@@ -9,6 +9,7 @@ public record CommentResponse(
         String authorHandle,
         String authorProfileImageUrl,
         boolean authorVerifiedBadge,
+        boolean authorMembershipBadge,
         String content,
         OffsetDateTime createdAt,
         boolean mine

@@ -2,6 +2,7 @@ package com.gamerin.backend.domain.user.entity;
 
 public enum TransactionType {
     CHARGE(" + 충전"),
+    CHARGE_CANCEL(" - 충전 취소"),
     MENTORING_PAY(" - 멘토링 결제"),
     MENTORING_REFUND(" + 멘토링 환불"),
     SETTLEMENT(" + 멘토링 정산 수입"),

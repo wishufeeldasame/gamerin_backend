@@ -50,7 +50,7 @@ class MileagePostgresReadOnlyBalanceIntegrationTest {
     @DynamicPropertySource
     static void configurePostgres(DynamicPropertyRegistry registry) {
         postgresSchema = PostgresSchema.create();
-        
+
         registry.add("spring.datasource.url", postgresSchema::url);
         registry.add("spring.datasource.username", postgresSchema::username);
         registry.add("spring.datasource.password", postgresSchema::password);

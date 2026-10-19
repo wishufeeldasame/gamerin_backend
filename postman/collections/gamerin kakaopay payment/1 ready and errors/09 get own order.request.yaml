@@ -1,0 +1,23 @@
+$kind: http-request
+method: GET
+url: '{{baseUrl}}/api/v1/payments/{{orderId}}'
+order: 11000
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{userAToken}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('HTTP 200', () => pm.response.to.have.status(200));
+
+      pm.test('READY · 서버 가격 10,000 · 민감 필드 미노출', () => {
+        const data = pm.response.json().data;
+        pm.expect(data.status).to.eql('READY');
+        pm.expect(data.purpose).to.eql('MILEAGE_CHARGE');
+        pm.expect(data.productCode).to.eql('CHARGE_10000');
+        pm.expect(data.amount).to.eql(10000);
+        ['tid', 'aid', 'cid', 'pcUrl', 'nextRedirectPcUrl'].forEach(k => pm.expect(data).to.not.have.property(k));
+      });

@@ -12,7 +12,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -29,10 +32,15 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.hashtag.service.HashtagService;
+import com.gamerin.backend.domain.membership.service.MembershipService;
+import com.gamerin.backend.domain.mention.service.MentionService;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
+import com.gamerin.backend.domain.post.dto.request.UpdatePostRequest;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
 import com.gamerin.backend.domain.post.entity.Post;
@@ -48,17 +56,17 @@ import com.gamerin.backend.domain.post.repository.PostLikeRepository;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.post.repository.PostShareRepository;
+import com.gamerin.backend.domain.report.entity.ReportTargetType;
+import com.gamerin.backend.domain.report.repository.ReportCountRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
-import com.gamerin.backend.domain.hashtag.service.HashtagService;
-import com.gamerin.backend.domain.mention.service.MentionService;
-import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 
 @ExtendWith(MockitoExtension.class)
 class PostServiceTest {
 
     private static final long TEST_MAX_VIDEO_FILE_SIZE_BYTES = 500L * 1024L * 1024L;
+    private static final OffsetDateTime FIXED_NOW = OffsetDateTime.parse("2026-10-18T08:30:00Z");
 
     @Mock
     private UserRepository userRepository;
@@ -114,10 +122,19 @@ class PostServiceTest {
     @Mock
     private VideoOptimizationService videoOptimizationService;
 
+    @Mock
+    private MembershipService membershipService;
+
+    @Mock
+    private ReportCountRepository reportCountRepository;
+
+    private Clock clock;
+
     private PostService postService;
 
     @BeforeEach
     void setUp() {
+        clock = Clock.fixed(FIXED_NOW.toInstant(), ZoneOffset.UTC);
         postService = new PostService(
                 userRepository,
                 postRepository,
@@ -137,8 +154,10 @@ class PostServiceTest {
                 lightweightSecurityScanService,
                 textSecurityService,
                 videoOptimizationService,
-                TEST_MAX_VIDEO_FILE_SIZE_BYTES
-        );
+                membershipService,
+                reportCountRepository,
+                clock,
+                TEST_MAX_VIDEO_FILE_SIZE_BYTES);
     }
 
     @Test
@@ -162,8 +181,7 @@ class PostServiceTest {
                 lightweightSecurityScanService,
                 textSecurityService,
                 videoOptimizationService,
-                0
-        ))
+                0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("max file size");
     }
@@ -185,8 +203,7 @@ class PostServiceTest {
 
         PostDetailResponse result = postService.create(
                 CustomUserPrincipal.from(user),
-                new CreatePostRequest("#PUBG ranked")
-        );
+                new CreatePostRequest("#PUBG ranked"));
 
         assertThat(result).isSameAs(response);
         ArgumentCaptor<Post> postCaptor = ArgumentCaptor.forClass(Post.class);
@@ -205,8 +222,7 @@ class PostServiceTest {
 
         assertThatThrownBy(() -> postService.create(
                 CustomUserPrincipal.from(user),
-                new CreatePostRequest("   ")
-        ))
+                new CreatePostRequest("   ")))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
                 .isEqualTo(HttpStatus.BAD_REQUEST.value());
@@ -222,14 +238,14 @@ class PostServiceTest {
         User user = savedUser(userId, "tester", "Tester");
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: violence"))
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Content violates moderation policy: violence"))
                 .when(contentModerationService)
                 .assertTextAllowed("bad post");
 
         assertThatThrownBy(() -> postService.create(
                 CustomUserPrincipal.from(user),
-                new CreatePostRequest(" bad post ")
-        ))
+                new CreatePostRequest(" bad post ")))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
@@ -259,8 +275,7 @@ class PostServiceTest {
         when(mediaStorageService.storePostMedia(any(MediaStorageService.PreparedMediaPath.class)))
                 .thenReturn(new MediaStorageService.StoredFile(
                         Path.of("uploads/post-media/video.mp4"),
-                        "http://localhost:8080/uploads/post-media/video.mp4"
-                ));
+                        "http://localhost:8080/uploads/post-media/video.mp4"));
 
         CreateMultipartPostRequest request = new CreateMultipartPostRequest();
         request.setMediaFiles(List.of(videoFile()));
@@ -407,7 +422,8 @@ class PostServiceTest {
         User user = savedUser(userId, "tester", "Tester");
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: sexual"))
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Content violates moderation policy: sexual"))
                 .when(contentModerationService)
                 .assertPostAllowed(eq("image post"), anyList());
 
@@ -444,8 +460,10 @@ class PostServiceTest {
                 .thenReturn(preparedImage())
                 .thenReturn(preparedImage());
         when(mediaStorageService.storePostMedia(any(MediaStorageService.PreparedMediaFile.class)))
-                .thenReturn(new MediaStorageService.StoredFile(Path.of("uploads/post-media/a.jpg"), "http://localhost:8080/uploads/post-media/a.jpg"))
-                .thenReturn(new MediaStorageService.StoredFile(Path.of("uploads/post-media/b.jpg"), "http://localhost:8080/uploads/post-media/b.jpg"));
+                .thenReturn(new MediaStorageService.StoredFile(Path.of("uploads/post-media/a.jpg"),
+                        "http://localhost:8080/uploads/post-media/a.jpg"))
+                .thenReturn(new MediaStorageService.StoredFile(Path.of("uploads/post-media/b.jpg"),
+                        "http://localhost:8080/uploads/post-media/b.jpg"));
 
         CreateMultipartPostRequest request = new CreateMultipartPostRequest();
         request.setContent("image post");
@@ -475,10 +493,9 @@ class PostServiceTest {
                 "mediaFiles",
                 "animation.gif",
                 "image/gif",
-                "GIF89a".getBytes()
-        );
-        MediaStorageService.PreparedMediaFile preparedGif =
-                new MediaStorageService.PreparedMediaFile("sanitized-animation".getBytes(), ".gif");
+                "GIF89a".getBytes());
+        MediaStorageService.PreparedMediaFile preparedGif = new MediaStorageService.PreparedMediaFile(
+                "sanitized-animation".getBytes(), ".gif");
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
         when(postRepository.save(any(Post.class))).thenAnswer(invocation -> {
@@ -490,8 +507,7 @@ class PostServiceTest {
         when(mediaUploadSecurityService.prepareImage(gif)).thenReturn(preparedGif);
         when(mediaStorageService.storePostMedia(preparedGif)).thenReturn(new MediaStorageService.StoredFile(
                 Path.of("uploads/post-media/animation.gif"),
-                "http://localhost:8080/uploads/post-media/animation.gif"
-        ));
+                "http://localhost:8080/uploads/post-media/animation.gif"));
 
         CreateMultipartPostRequest request = new CreateMultipartPostRequest();
         request.setContent("animated gif post");
@@ -655,15 +671,15 @@ class PostServiceTest {
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
         when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
-        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: harassment"))
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Content violates moderation policy: harassment"))
                 .when(contentModerationService)
                 .assertTextAllowed("bad comment");
 
         assertThatThrownBy(() -> postService.createComment(
                 CustomUserPrincipal.from(user),
                 postId,
-                new CreateCommentRequest(" bad comment ")
-        ))
+                new CreateCommentRequest(" bad comment ")))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
@@ -686,10 +702,10 @@ class PostServiceTest {
                 "actor",
                 null,
                 false,
+                false,
                 "hello",
                 OffsetDateTime.now(),
-                true
-        );
+                true);
 
         when(userRepository.findByIdAndDeletedAtIsNull(actorId)).thenReturn(Optional.of(actor));
         when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
@@ -699,8 +715,7 @@ class PostServiceTest {
         CommentResponse actual = postService.createComment(
                 CustomUserPrincipal.from(actor),
                 postId,
-                new CreateCommentRequest(" hello ")
-        );
+                new CreateCommentRequest(" hello "));
 
         ArgumentCaptor<PostComment> commentCaptor = ArgumentCaptor.forClass(PostComment.class);
         verify(postCommentRepository).save(commentCaptor.capture());
@@ -724,15 +739,15 @@ class PostServiceTest {
                 "tester",
                 null,
                 false,
+                false,
                 "hello",
                 OffsetDateTime.now(),
-                true
-        );
+                true);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
         when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
         when(postCommentRepository.findActiveByPostId(postId)).thenReturn(List.of(comment));
-        when(postResponseAssembler.toCommentResponse(comment, userId)).thenReturn(response);
+        when(postResponseAssembler.toCommentResponses(List.of(comment), userId)).thenReturn(List.of(response));
 
         List<CommentResponse> comments = postService.getComments(CustomUserPrincipal.from(user), postId);
 
@@ -785,12 +800,230 @@ class PostServiceTest {
         verify(notificationCommandService, never()).removeComment(any());
     }
 
+    @Test
+    void updateEditsContentIncrementsEditCountAndResyncsHashtagsAndMentions() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "old #pubg @friend1", FIXED_NOW.minusMinutes(30));
+        PostDetailResponse response = postDetailResponse(postId);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(true);
+        when(postResponseAssembler.toPostDetail(post, userId)).thenReturn(response);
+
+        PostDetailResponse actual = postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("  new #valorant @friend2  "));
+
+        assertThat(actual).isSameAs(response);
+        assertThat(post.getContent()).isEqualTo("new #valorant @friend2");
+        assertThat(post.getEditCount()).isEqualTo(1);
+        verify(textSecurityService).assertTextSafe("new #valorant @friend2");
+        verify(contentModerationService).assertTextAllowed("new #valorant @friend2");
+        verify(hashtagService).syncForPost(post);
+        verify(mentionService).attachToPost(post);
+    }
+
+    @Test
+    void updateDoesNotDeductEditCountOrRunModerationWhenNormalizedContentIsUnchanged() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "same content", FIXED_NOW.minusMinutes(10));
+        PostDetailResponse response = postDetailResponse(postId);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(true);
+        when(postResponseAssembler.toPostDetail(post, userId)).thenReturn(response);
+
+        PostDetailResponse actual = postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("   same content   "));
+
+        assertThat(actual).isSameAs(response);
+        assertThat(post.getEditCount()).isZero();
+        verify(textSecurityService, never()).assertTextSafe(any());
+        verify(contentModerationService, never()).assertTextAllowed(any());
+        verify(hashtagService, never()).syncForPost(any());
+        verify(mentionService, never()).attachToPost(any());
+    }
+
+    @Test
+    void updateRejectsWhenUserIsNotAuthor() {
+        UUID userId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User otherUser = savedUser(userId, "other", "Other");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(10));
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(otherUser));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(otherUser),
+                postId,
+                new UpdatePostRequest("edited")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.FORBIDDEN.value());
+
+        assertThat(post.getEditCount()).isZero();
+    }
+
+    @Test
+    void updateRejectsWhenMembershipIsInactive() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(10));
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(false);
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("edited")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.FORBIDDEN.value());
+
+        assertThat(post.getEditCount()).isZero();
+    }
+
+    @Test
+    void updateRejectsWhenPostIsHiddenByReports() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(10));
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(true);
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("edited")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.NOT_FOUND.value());
+
+        assertThat(post.getEditCount()).isZero();
+    }
+
+    @Test
+    void updateRejectsWhenOneHourEditWindowHasExpired() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusHours(1).minusSeconds(1));
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(true);
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("edited")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.CONFLICT.value());
+
+        assertThat(post.getEditCount()).isZero();
+    }
+
+    @Test
+    void updateRejectsWhenPostWasAlreadyEditedOnce() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(15));
+        post.editContent("first edit");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(true);
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("second edit")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.CONFLICT.value());
+
+        assertThat(post.getContent()).isEqualTo("first edit");
+        assertThat(post.getEditCount()).isEqualTo(1);
+    }
+
+    @Test
+    void updateDoesNotDeductEditCountWhenModerationFails() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(15));
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(true);
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Content violates moderation policy: violence"))
+                .when(contentModerationService)
+                .assertTextAllowed("flagged content");
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("flagged content")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
+
+        assertThat(post.getContent()).isEqualTo("original");
+        assertThat(post.getEditCount()).isZero();
+        verify(hashtagService, never()).syncForPost(any());
+        verify(mentionService, never()).attachToPost(any());
+    }
+
+    private Post savedEditablePost(UUID id, User author, String content, OffsetDateTime createdAt) {
+        Post post = Post.create(author, content);
+        ReflectionTestUtils.setField(post, "id", id);
+        ReflectionTestUtils.setField(post, "createdAt", createdAt);
+        return post;
+    }
+
     private PostDetailResponse postDetailResponse(UUID postId) {
         return new PostDetailResponse(
                 postId,
                 "Tester",
                 "tester",
                 null,
+                false,
                 false,
                 null,
                 List.of(),
@@ -803,8 +1036,7 @@ class PostServiceTest {
                 false,
                 false,
                 true,
-                null
-        );
+                null);
     }
 
     private User savedUser(UUID id, String handle, String nickname) {
