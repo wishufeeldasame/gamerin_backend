@@ -100,10 +100,14 @@ app:
 pubg:
   api:
     key: ${PUBG_API_KEY:}
+    connect-timeout: ${PUBG_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${PUBG_API_READ_TIMEOUT:10s}
 
 riot:
   api:
     key: ${RIOT_API_KEY:}
+    connect-timeout: ${RIOT_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${RIOT_API_READ_TIMEOUT:10s}
 
 r6:
   api:

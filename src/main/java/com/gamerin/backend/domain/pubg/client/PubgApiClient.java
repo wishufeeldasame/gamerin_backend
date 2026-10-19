@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.pubg.client;
 
+import java.time.Duration;
+
 import com.gamerin.backend.domain.pubg.dto.external.PubgPlayerLookupResponse;
 import com.gamerin.backend.domain.pubg.dto.external.PubgNormalStatsResponse;
 import com.gamerin.backend.domain.pubg.dto.external.PubgRankedStatsResponse;
@@ -11,6 +13,8 @@ import com.gamerin.backend.domain.pubg.exception.NoRankedRecordException;
 import com.gamerin.backend.domain.pubg.model.NormalStats;
 import com.gamerin.backend.domain.pubg.model.RankedStats;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
+import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
@@ -22,15 +26,23 @@ import org.springframework.web.server.ResponseStatusException;
 public class PubgApiClient {
 
     private static final String PLATFORM = "steam";
-    private static final String BASE_URL = "https://api.pubg.com";
 
     private final RestClient restClient;
     private final boolean apiKeyConfigured;
 
-    public PubgApiClient(@Value("${pubg.api.key:}") String apiKey) {
+    public PubgApiClient(
+            @Value("${pubg.api.key:}") String apiKey,
+            @Value("${pubg.api.base-url:https://api.pubg.com}") String baseUrl,
+            @Value("${pubg.api.connect-timeout:3s}") Duration connectTimeout,
+            @Value("${pubg.api.read-timeout:10s}") Duration readTimeout
+    ) {
         this.apiKeyConfigured = apiKey != null && !apiKey.isBlank();
+        ClientHttpRequestFactorySettings requestFactorySettings = ClientHttpRequestFactorySettings.defaults()
+                .withConnectTimeout(connectTimeout)
+                .withReadTimeout(readTimeout);
         this.restClient = RestClient.builder()
-                .baseUrl(BASE_URL)
+                .requestFactory(ClientHttpRequestFactoryBuilder.detect().build(requestFactorySettings))
+                .baseUrl(baseUrl)
                 .defaultHeader("Authorization", "Bearer " + apiKey)
                 .defaultHeader("Accept", "application/vnd.api+json")
                 .build();
