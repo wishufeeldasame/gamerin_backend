@@ -102,4 +102,7 @@ openai:
     enabled: true
     ffmpeg-timeout-ms: ${OPENAI_MODERATION_FFMPEG_TIMEOUT_MS:15000}
     model: omni-moderation-latest
+    max-parallel-requests: ${OPENAI_MODERATION_MAX_PARALLEL_REQUESTS:4}
+    connect-timeout: ${OPENAI_MODERATION_CONNECT_TIMEOUT:3s}
+    read-timeout: ${OPENAI_MODERATION_READ_TIMEOUT:10s}
     ffmpeg-path: ffmpeg
