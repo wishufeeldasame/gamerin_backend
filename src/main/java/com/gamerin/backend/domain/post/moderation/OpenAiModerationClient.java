@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.post.moderation;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -12,7 +13,10 @@ import java.util.concurrent.Executors;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
+import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
@@ -40,9 +44,18 @@ public class OpenAiModerationClient {
             @Value("${openai.api.key:}") String apiKey,
             @Value("${openai.moderation.enabled:true}") boolean enabled,
             @Value("${openai.moderation.model:" + DEFAULT_MODEL + "}") String model,
-            @Value("${openai.moderation.max-parallel-requests:4}") int maxParallelRequests
+            @Value("${openai.moderation.max-parallel-requests:4}") int maxParallelRequests,
+            @Value("${openai.moderation.connect-timeout:3s}") Duration connectTimeout,
+            @Value("${openai.moderation.read-timeout:10s}") Duration readTimeout
     ) {
-        this(apiKey, enabled, model, maxParallelRequests, RestClient.builder());
+        this(apiKey, enabled, model, maxParallelRequests,
+                RestClient.builder().requestFactory(requestFactory(connectTimeout, readTimeout)));
+    }
+
+    static ClientHttpRequestFactory requestFactory(Duration connectTimeout, Duration readTimeout) {
+        return ClientHttpRequestFactoryBuilder.detect().build(ClientHttpRequestFactorySettings.defaults()
+                .withConnectTimeout(connectTimeout)
+                .withReadTimeout(readTimeout));
     }
 
     OpenAiModerationClient(

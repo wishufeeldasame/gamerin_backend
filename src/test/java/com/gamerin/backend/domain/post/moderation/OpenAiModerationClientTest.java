@@ -12,6 +12,10 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withTooManyRequests;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -25,6 +29,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.ClientHttpRequest;
+import org.springframework.http.client.support.HttpRequestWrapper;
 import org.springframework.mock.http.client.MockClientHttpRequest;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.client.ResponseCreator;
@@ -32,6 +37,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.post.moderation.OpenAiModerationClient.ModerationDecision;
+import com.sun.net.httpserver.HttpServer;
 import com.gamerin.backend.domain.post.moderation.OpenAiModerationClient.ModerationInput;
 
 class OpenAiModerationClientTest {
@@ -175,6 +181,47 @@ class OpenAiModerationClientTest {
         assertThat(enabled.client().moderate(null).flagged()).isFalse();
         assertThat(enabled.client().moderate(Arrays.asList((ModerationInput) null)).flagged()).isFalse();
         enabled.server().verify();
+    }
+
+    @Test
+    void moderateMapsReadTimeoutToBadGateway() throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            try {
+                Thread.sleep(2_000);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+            // 제때 왔다면 허용으로 끝나는 정상 응답이라, 502는 timeout에서만 나온다.
+            byte[] bytes = ALLOWED_RESPONSE.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(bytes);
+            }
+        });
+        server.start();
+        try {
+            URI localServer = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/moderations");
+            RestClient.Builder builder = RestClient.builder()
+                    .requestFactory(OpenAiModerationClient.requestFactory(Duration.ofSeconds(1), Duration.ofMillis(200)))
+                    // OpenAI 주소 대신 지연 응답하는 로컬 서버로 보낸다.
+                    .requestInterceptor((request, body, execution) -> execution.execute(new HttpRequestWrapper(request) {
+                        @Override
+                        public URI getURI() {
+                            return localServer;
+                        }
+                    }, body));
+            OpenAiModerationClient client = new OpenAiModerationClient("test-key", true, null, 4, builder);
+
+            long startedAt = System.nanoTime();
+            assertThatThrownBy(() -> client.moderate(inputs("image post", "only")))
+                    .isInstanceOfSatisfying(ResponseStatusException.class,
+                            ex -> assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY));
+            assertThat(Duration.ofNanos(System.nanoTime() - startedAt)).isLessThan(Duration.ofMillis(1_500));
+        } finally {
+            server.stop(0);
+        }
     }
 
     private static void assertSplitFailureStatus(ResponseCreator failure, HttpStatus expectedStatus) {
