@@ -14,6 +14,8 @@ import com.gamerin.backend.domain.message.entity.DirectMessage;
 public interface DirectMessageRepository extends JpaRepository<DirectMessage, UUID> {
 
     Optional<DirectMessage> findByIdAndConversationIdAndDeletedAtIsNull(UUID id, UUID conversationId);
+
+    Optional<DirectMessage> findBySenderIdAndClientMessageId(UUID senderId, UUID clientMessageId);
     // 삭제되지 않은 유효 메시지 존재 여부 확인 (신고 대상 검증용)
     boolean existsByIdAndDeletedAtIsNull(UUID id);
 

@@ -6,6 +6,10 @@ import jakarta.validation.constraints.Size;
 
 public record SendMessageRequest(
         @Size(max = 2000) String content,
-        UUID sharedPostId
+        UUID sharedPostId,
+        UUID clientMessageId
 ) {
+    public SendMessageRequest(String content, UUID sharedPostId) {
+        this(content, sharedPostId, null);
+    }
 }
