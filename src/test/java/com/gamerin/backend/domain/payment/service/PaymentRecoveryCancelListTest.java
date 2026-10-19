@@ -21,12 +21,16 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -132,14 +136,28 @@ class PaymentRecoveryCancelListTest {
     }
 
     @Test
-    void dbFailureAfterApprovalIsRecoveredByOrderLookup() {
+    void transientDbFailureAfterApprovalIsRecoveredByOrderLookup() {
+        assertApproveStaysApprovingAndRecovers(new QueryTimeoutException("lock timeout"));
+    }
+
+    @Test
+    void dbConnectionFailureAfterApprovalIsRecoveredByOrderLookup() {
+        assertApproveStaysApprovingAndRecovers(new DataAccessResourceFailureException("connection lost"));
+    }
+
+    @Test
+    void transactionFailureAfterApprovalIsRecoveredByOrderLookup() {
+        assertApproveStaysApprovingAndRecovers(new CannotCreateTransactionException("pool exhausted"));
+    }
+
+    private void assertApproveStaysApprovingAndRecovers(RuntimeException failure) {
         UUID orderId = readyOrder("CHARGE_5000");
         when(kakaoPayClient.approve(any())).thenReturn(approveResponse(orderId, 5_000L));
-        doThrow(new IllegalStateException("db down")).doCallRealMethod()
+        doThrow(failure).doCallRealMethod()
                 .when(mileageService).addMileage(any(), any(), any(), any(), any());
 
-        assertThatThrownBy(() -> paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")))
-                .isInstanceOf(IllegalStateException.class);
+        assertThat(paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")).status())
+                .isEqualTo(PaymentStatus.APPROVING);
         assertThat(status(orderId)).isEqualTo(PaymentStatus.APPROVING);
         assertThat(balance()).isZero();
 
@@ -148,6 +166,34 @@ class PaymentRecoveryCancelListTest {
         assertThat(paymentService.getPayment(userId, orderId).status()).isEqualTo(PaymentStatus.APPROVED);
         assertThat(balance()).isEqualTo(5_000L);
         assertThat(ledgerRows(orderId, TransactionType.CHARGE)).isEqualTo(1);
+    }
+
+    @Test
+    void benefitFailureAfterApprovalGoesToReview() {
+        assertApproveGoesToReview(new IllegalStateException("user not found"));
+    }
+
+    @Test
+    void ledgerUniqueViolationAfterApprovalGoesToReview() {
+        assertApproveGoesToReview(new DataIntegrityViolationException("duplicate charge"));
+    }
+
+    @Test
+    void staleApprovingWithBenefitFailureGoesToReviewAndIsNotRetried() {
+        UUID orderId = approvingAfterTimeout("CHARGE_5000");
+        when(kakaoPayClient.order(any())).thenReturn(order(orderId, "SUCCESS_PAYMENT", 5_000L, null));
+        doThrow(new IllegalStateException("user not found"))
+                .when(mileageService).addMileage(any(), any(), any(), any(), any());
+        age(orderId);
+
+        assertThat(paymentService.getPayment(userId, orderId).status()).isEqualTo(PaymentStatus.NEEDS_REVIEW);
+        recoveryScheduler.recoverStalePayments();
+        assertThat(paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")).status())
+                .isEqualTo(PaymentStatus.NEEDS_REVIEW);
+
+        verify(kakaoPayClient, times(1)).order(any());
+        verify(mileageService, times(1)).addMileage(any(), any(), any(), any(), any());
+        assertThat(balance()).isZero();
     }
 
     @Test
@@ -503,6 +549,23 @@ class PaymentRecoveryCancelListTest {
         assertThat(paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")).status())
                 .isEqualTo(PaymentStatus.APPROVED);
         return orderId;
+    }
+
+    // 승인은 확정됐지만 혜택 반영이 실패하면 롤백 후 NEEDS_REVIEW로 끝나고 재호출해도 반복하지 않는다.
+    private void assertApproveGoesToReview(RuntimeException failure) {
+        UUID orderId = readyOrder("CHARGE_5000");
+        when(kakaoPayClient.approve(any())).thenReturn(approveResponse(orderId, 5_000L));
+        doThrow(failure).when(mileageService).addMileage(any(), any(), any(), any(), any());
+
+        PaymentResponse response = paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token"));
+        PaymentResponse replay = paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token"));
+
+        assertThat(response.status()).isEqualTo(PaymentStatus.NEEDS_REVIEW);
+        assertThat(replay.status()).isEqualTo(PaymentStatus.NEEDS_REVIEW);
+        verify(kakaoPayClient, times(1)).approve(any());
+        verify(mileageService, times(1)).addMileage(any(), any(), any(), any(), any());
+        assertThat(balance()).isZero();
+        assertThat(ledgerRows(orderId, TransactionType.CHARGE)).isZero();
     }
 
     // 승인 응답 유실(타임아웃)로 APPROVING에 남은 주문

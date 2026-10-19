@@ -7,9 +7,12 @@ import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.RecoverableDataAccessException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -102,9 +105,17 @@ public class PaymentStateService {
                 approved.recordApproval(result.aid(), result.approvedAt(), result.paymentMethodType());
                 grantBenefit(approved);
             });
-        } catch (DataIntegrityViolationException e) {
-            // 원장 (type, reference_id) 부분 UNIQUE가 중복 적립을 막았다. 주문은 APPROVING으로 남아 복구 대상이 된다.
-            log.error("Payment benefit already reflected: orderId={}", payment.getId());
+        } catch (TransientDataAccessException | RecoverableDataAccessException | DataAccessResourceFailureException
+                 | TransactionException e) {
+            // 일시적 DB·연결·트랜잭션 오류(락 타임아웃, 연결 끊김, 커밋 실패 등)는 APPROVING으로 남겨 복구에서 다시 시도한다(6-2절 5번).
+            log.warn("Payment benefit reflection failed temporarily: orderId={}, error={}",
+                    payment.getId(), e.getClass().getSimpleName());
+        } catch (RuntimeException e) {
+            // 결제는 승인됐지만 혜택을 자동 반영할 수 없다(원장 UNIQUE 위반, 회수된 이용권 등).
+            // 재시도해도 같은 실패가 반복되므로 롤백 후 별도 트랜잭션에서 수동 확인 대상으로 둔다(6-2절 6번).
+            log.error("Payment benefit reflection failed, needs review: orderId={}, error={}",
+                    payment.getId(), e.getClass().getSimpleName());
+            transition(payment.getId(), PaymentStatus.APPROVING, claimedAt, PaymentStatus.NEEDS_REVIEW);
         }
     }
 

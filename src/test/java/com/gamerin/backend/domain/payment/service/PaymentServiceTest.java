@@ -263,17 +263,21 @@ class PaymentServiceTest {
     }
 
     @Test
-    void membershipGrantFailureRollsBackApprovedTransitionAndApprovalDetails() {
+    void membershipGrantFailureRollsBackApprovalDetailsAndGoesToReview() {
         UUID orderId = readyMembershipOrder();
         when(kakaoPayClient.approve(any())).thenReturn(approveResponse(orderId, 4_900L));
-        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "Membership grant rejected."))
+        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "회수된 결제는 자동으로 다시 부여할 수 없습니다."))
                 .when(membershipService).grant(userId, orderId);
 
-        assertStatus(() -> paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token")),
-                HttpStatus.CONFLICT);
+        PaymentResponse response = paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token"));
+        PaymentResponse replay = paymentService.approve(userId, new PaymentApproveRequest(orderId, "pg-token"));
 
+        assertThat(response.status()).isEqualTo(PaymentStatus.NEEDS_REVIEW);
+        assertThat(replay.status()).isEqualTo(PaymentStatus.NEEDS_REVIEW);
+        verify(kakaoPayClient, times(1)).approve(any());
+        verify(membershipService, times(1)).grant(userId, orderId);
         Payment payment = paymentRepository.findById(orderId).orElseThrow();
-        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.APPROVING);
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.NEEDS_REVIEW);
         assertThat(payment.getApprovedAid()).isNull();
         assertThat(payment.getApprovedAt()).isNull();
         assertThat(payment.getPaymentMethodType()).isNull();
