@@ -151,7 +151,8 @@ public class VideoOptimizationService {
                 "-map",
                 "0:v:0",
                 "-map",
-                "0:a?",
+                // 아이폰 공간 음향(APAC)처럼 FFmpeg이 모르는 추가 오디오 트랙이 있으면 실패하므로 첫 오디오 트랙만 쓴다.
+                "0:a:0?",
                 "-c",
                 "copy",
                 "-movflags",
@@ -176,7 +177,8 @@ public class VideoOptimizationService {
                 "-map",
                 "0:v:0",
                 "-map",
-                "0:a?",
+                // 아이폰 공간 음향(APAC)처럼 FFmpeg이 모르는 추가 오디오 트랙이 있으면 실패하므로 첫 오디오 트랙만 쓴다.
+                "0:a:0?",
                 "-vf",
                 "scale=w=1920:h=1080:force_original_aspect_ratio=decrease:force_divisible_by=2",
                 "-c:v",
