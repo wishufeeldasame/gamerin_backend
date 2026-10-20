@@ -209,6 +209,52 @@ class VideoOptimizationServiceTest {
     }
 
     @Test
+    void remuxAndTranscodeMapOnlyFirstAudioTrack() throws Exception {
+        java.util.List<java.util.List<String>> commands = new java.util.ArrayList<>();
+        FfmpegProcessRunner recordingRunner = new FfmpegProcessRunner() {
+            @Override
+            public Result run(java.util.List<String> command, long timeoutMillis) {
+                commands.add(command);
+                if (commands.size() == 1) {
+                    throw new FfmpegProcessException(
+                            FailureType.COMMAND_FAILED,
+                            1,
+                            "Could not find tag for codec none",
+                            null
+                    );
+                }
+                try {
+                    Files.writeString(Path.of(command.getLast()), "transcoded-video");
+                } catch (Exception ex) {
+                    throw new AssertionError(ex);
+                }
+                return new Result(0, "");
+            }
+        };
+        VideoOptimizationService videoOptimizationService = service(
+                true,
+                "ffmpeg",
+                1,
+                1_000,
+                1_000,
+                recordingRunner
+        );
+
+        MediaStorageService.PreparedMediaPath prepared = videoOptimizationService.prepareVideo(videoFile());
+        try {
+            assertThat(commands).hasSize(2);
+            for (java.util.List<String> command : commands) {
+                int audioMapIndex = command.indexOf("0:a:0?");
+                assertThat(audioMapIndex).isPositive();
+                assertThat(command.get(audioMapIndex - 1)).isEqualTo("-map");
+                assertThat(command).doesNotContain("0:a?");
+            }
+        } finally {
+            Files.deleteIfExists(prepared.path());
+        }
+    }
+
+    @Test
     void interruptedConcurrencyWaitPreservesInterruptAndDoesNotReleaseUnownedPermit() {
         VideoOptimizationService videoOptimizationService = service(true, "ffmpeg", 1, 5000);
         Semaphore processingSlots = processingSlots(videoOptimizationService);

@@ -14,6 +14,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 
+import com.gamerin.backend.domain.game.model.GameType;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
@@ -26,6 +28,7 @@ import com.gamerin.backend.domain.mentoring.dto.response.MentoringProgramRespons
 import com.gamerin.backend.domain.mentoring.dto.response.MentoringReviewResponse;
 import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
+import com.gamerin.backend.domain.mentoring.entity.MentorStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
 import com.gamerin.backend.domain.mentoring.entity.MentoringReview;
@@ -35,6 +38,7 @@ import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringReviewRepository;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -51,8 +55,7 @@ public class MentoringService {
             ApplicationStatus.APPLIED,
             ApplicationStatus.ACCEPTED,
             ApplicationStatus.ONGOING,
-            ApplicationStatus.FINISHED
-    );
+            ApplicationStatus.FINISHED);
 
     private final MentorProfileRepository mentorProfileRepository;
     private final UserRepository userRepository;
@@ -61,15 +64,19 @@ public class MentoringService {
     private final MentoringReviewRepository mentoringReviewRepository;
     private final MileageService mileageService;
     private final SettlementProcessor settlementProcessor;
+    private final NotificationCommandService notificationCommandService;
+    private final MembershipService membershipService;
 
     public MentoringService(
             MentorProfileRepository mentorProfileRepository,
-            UserRepository userRepository, 
+            UserRepository userRepository,
             MentoringProgramRepository mentoringProgramRepository,
             MentoringApplicationRepository mentoringApplicationRepository,
             MentoringReviewRepository mentoringReviewRepository,
             MileageService mileageService,
-            SettlementProcessor settlementProcessor ) {
+            SettlementProcessor settlementProcessor,
+            NotificationCommandService notificationCommandService,
+            MembershipService membershipService) {
         this.mentorProfileRepository = mentorProfileRepository;
         this.userRepository = userRepository;
         this.mentoringProgramRepository = mentoringProgramRepository;
@@ -77,40 +84,39 @@ public class MentoringService {
         this.mentoringReviewRepository = mentoringReviewRepository;
         this.mileageService = mileageService;
         this.settlementProcessor = settlementProcessor;
+        this.notificationCommandService = notificationCommandService;
+        this.membershipService = membershipService;
     }
 
     @Transactional
     public MentorProfileResponse registerMentor(CustomUserPrincipal principal, MentorRegistrationRequest request) {
         // 멘토 등록 확인
         if (mentorProfileRepository.existsById(principal.getUserId())) {
-            throw new RuntimeException("이미 멘토로 등록된 사용자입니다.");
-        } 
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 멘토로 등록된 사용자입니다.");
+        }
 
         // 유저 엔티티 조회
         User user = userRepository.findById(principal.getUserId())
-                .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
-        
         // 멘토 등록 시 마일리지 지갑 생성 확인
         mileageService.getOrCreateWallet(user);
-        
 
         // 멘토 프로필 생성 및 저장
         MentorProfile profile = new MentorProfile();
         profile.setUser(user);
         profile.setAbout(request.about());
+        profile.setStatus(MentorStatus.PENDING_APPROVAL);// <- [추가] 승인 대기 상태로 등록
 
         MentorProfile savedProfile = mentorProfileRepository.save(profile);
-
-        return MentorProfileResponse.from(savedProfile);
-
+        return MentorProfileResponse.from(savedProfile, membershipService.isActive(savedProfile.getUserId()));
     }
 
     // 멘토 프로필 조회
     @Transactional(readOnly = true)
     public MentorProfileResponse getMyMentorProfile(CustomUserPrincipal principal) {
         return mentorProfileRepository.findById(principal.getUserId())
-                .map(MentorProfileResponse::from)
+                .map(profile -> MentorProfileResponse.from(profile, membershipService.isActive(profile.getUserId())))
                 .orElse(null);
     }
 
@@ -119,352 +125,429 @@ public class MentoringService {
         MentorProfile mentorProfile = mentorProfileRepository.findById(mentorId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "해당 멘토를 찾을 수 없습니다."));
 
-        return MentorProfileResponse.from(mentorProfile);
+        return MentorProfileResponse.from(mentorProfile, membershipService.isActive(mentorProfile.getUserId()));
     }
 
     @Transactional
     public MentoringProgramResponse registerProgram(CustomUserPrincipal principal, MentoringProgramRequest request) {
-        
+        if (request.price() == null || request.price() < 0) {
+            throw new IllegalArgumentException("가격은 0원 이상이어야 합니다.");
+        }
+
         // 현재 사용자의 멘토 프로필 조회 (멘토 등록 여부 확인)
         MentorProfile mentor = mentorProfileRepository.findById(principal.getUserId())
-                .orElseThrow(() -> new RuntimeException("멘토로 등록되지 않은 사용자입니다."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "멘토로 등록되지 않은 사용자입니다."));
 
-        // 프로그램 엔티티 생성 및 필드 설정
+        // [추가] 관리자 승인이 완료된 멘토만 프로그램 등록 가능
+        if (mentor.getStatus() != MentorStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 승인이 완료된 멘토만 프로그램을 등록할 수 있습니다.");
+        }
+
         MentoringProgram program = new MentoringProgram();
         program.setMentor(mentor);
-        program.setGameName(request.gameName());
+        program.setGameName(request.gameName().name());
         program.setTitle(request.title());
         program.setContent(request.content());
         program.setAvailableTimeDesc(request.availableTimeDesc());
         program.setPrice(request.price());
-
-        // List<String> -> JSON String 변환
         program.setTags(request.tags());
 
-        // 저장 및 응답 변환
         MentoringProgram savedProgram = mentoringProgramRepository.save(program);
-        return MentoringProgramResponse.from(savedProgram);
+        return MentoringProgramResponse.from(savedProgram,
+                membershipService.isActive(savedProgram.getMentor().getId()));
     }
 
     @Transactional(readOnly = true)
-    public Page<MentoringProgramResponse> getPrograms(String gameName, UUID mentorId, Pageable pageable) {
-        
-        Page<MentoringProgram> programs = mentoringProgramRepository.findByFilters(gameName, mentorId, pageable);
-    
-        return programs.map(MentoringProgramResponse::from);
+    public Page<MentoringProgramResponse> getPrograms(GameType gameName, UUID mentorId, Pageable pageable) {
+
+        Page<MentoringProgram> programs = mentoringProgramRepository
+                .findByFilters(gameName == null ? null : gameName.name(), mentorId, pageable);
+
+        Set<UUID> mentorIds = new HashSet<>();
+        programs.forEach(program -> mentorIds.add(program.getMentor().getId()));
+        Set<UUID> activeUserIds = mentorIds.isEmpty() ? Set.of() : membershipService.findActiveUserIds(mentorIds);
+        return programs.map(program -> MentoringProgramResponse.from(program,
+                activeUserIds.contains(program.getMentor().getId())));
     }
 
     @Transactional(readOnly = true)
     public MentoringProgramDetailResponse getProgramDetail(UUID id) {
-        MentoringProgram program = mentoringProgramRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("프로그램을 찾을 수 없습니다."));
-        return MentoringProgramDetailResponse.from(program);
+        MentoringProgram program = mentoringProgramRepository.findByIdAndDeletedAtIsNull(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
+
+        return MentoringProgramDetailResponse.from(program, membershipService.isActive(program.getMentor().getId()));
     }
 
     @Transactional
-    public MentoringProgramResponse updateProgram(CustomUserPrincipal principal, UUID programId, MentoringProgramUpdateRequest request) {
-        // 프로그램 존재 여부 확인
-        MentoringProgram program = mentoringProgramRepository.findById(programId)
-                .orElseThrow(() -> new RuntimeException("프로그램을 찾을 수 없습니다."));
+    public MentoringProgramResponse updateProgram(
+            CustomUserPrincipal principal,
+            UUID programId,
+            MentoringProgramUpdateRequest request) {
+        // 프로그램 존재 여부 확인 (소프트 삭제된 프로그램은 404)
+        MentoringProgram program = mentoringProgramRepository.findByIdAndDeletedAtIsNull(programId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
 
         // 권한 확인 (프로그램의 멘토 ID와 현재 접속 유저 ID 비교)
         if (!program.getMentor().getId().equals(principal.getUserId())) {
-            throw new RuntimeException("해당 프로그램을 수정할 권한이 없습니다.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "해당 프로그램을 수정할 권한이 없습니다.");
+        }
+
+        // [추가] 멘토 활동 상태 확인 (비활성화/반려된 멘토는 프로그램 수정 불가)
+        if (program.getMentor().getStatus() != MentorStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "활동 중인 멘토만 프로그램을 수정할 수 있습니다.");
+        }
+
+        // [추가] 관리자에 의해 일시정지된 프로그램은 멘토가 다시 ACTIVE로 열 수 없음
+        if (program.isAdminSuspended() && request.status() == ProgramStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자가 일시정지한 프로그램은 멘토가 다시 열 수 없습니다.");
+        }
+
+        if (request.price() == null || request.price() < 0) {
+            throw new IllegalArgumentException("가격은 0원 이상이어야 합니다.");
         }
 
         // 필드 업데이트
         program.setTitle(request.title());
         program.setContent(request.content());
-        program.setAvailableTimeDesc(request.availableTimeDesc());    
+        program.setAvailableTimeDesc(request.availableTimeDesc());
         program.setPrice(request.price());
         program.setStatus(request.status());
         program.setTags(request.tags());
 
-        return MentoringProgramResponse.from(program);
-
+        return MentoringProgramResponse.from(program, membershipService.isActive(program.getMentor().getId()));
     }
 
     @Transactional
     public void deleteProgram(CustomUserPrincipal principal, UUID programId) {
-        // 프로그램 존재 여부 확인
-        MentoringProgram program = mentoringProgramRepository.findById(programId)
-                .orElseThrow(() -> new RuntimeException("프로그램을 찾을 수 없습니다."));
+        // 비관적 락으로 프로그램 조회 — 삭제 판단 중 신규 신청이 끼어드는 경합을 방지
+        // findByIdForUpdate 쿼리에 deletedAt IS NULL 조건이 포함되어 있으므로
+        // 이미 소프트 삭제된 프로그램이면 NOT_FOUND(404) 반환
+        MentoringProgram program = mentoringProgramRepository.findByIdForUpdate(programId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
 
-        // 권한 확인
+        // 권한 확인 (소유자만 삭제 가능)
         if (!program.getMentor().getId().equals(principal.getUserId())) {
-            throw new RuntimeException("해당 프로그램을 삭제할 권한이 없습니다.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "해당 프로그램을 삭제할 권한이 없습니다.");
         }
 
-        // 삭제 처리
-        mentoringProgramRepository.delete(program);
+        // 활성 거래(에스크로) 차단 확인
+        // ESCROW_HELD 상태인 신청이 하나라도 있으면 멘티 마일리지 손실 위험이 있으므로 거부
+        if (mentoringApplicationRepository.existsByProgramIdAndPaymentStatus(programId, PaymentStatus.ESCROW_HELD)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "진행 중인 멘토링 신청이 있어 삭제할 수 없습니다. 모든 거래를 완료하거나 취소한 뒤 시도해 주세요.");
+        }
+
+        // 소프트 삭제 처리 — DB에서 행을 지우지 않고 deleted_at을 기록한다
+        // 완료·정산된 신청, 리뷰, 마일리지 원장은 DB에 그대로 보존됨
+        // @Transactional 범위 안에서 Dirty Checking이 UPDATE 쿼리를 자동 발행한다
+        program.softDelete();
     }
 
     // 신청
     @Transactional
-    public MentoringApplicationResponse applyToProgram(CustomUserPrincipal principal, MentoringApplicationRequest request) {
+    public MentoringApplicationResponse applyToProgram(CustomUserPrincipal principal,
+            MentoringApplicationRequest request) {
+        // 멘티 행을 먼저 잠가 동시에 진행되는 회원 탈퇴(사용자 → 프로그램 순 잠금)와 직렬화하고 탈퇴 계정은 거부한다
+        User mentee = userRepository.findActiveByIdForUpdate(principal.getUserId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자 정보를 찾을 수 없습니다."));
+
         // 프로그램 존재 여부 확인
         MentoringProgram program = mentoringProgramRepository.findByIdForUpdate(request.programId())
-                .orElseThrow(() -> new RuntimeException("신청하려는 프로그램을 찾을 수 없습니다."));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신청하려는 프로그램을 찾을 수 없습니다."));
 
         // 본인의 프로그램인지 확인 (자신에게 신청 불가)
         if (program.getMentor().getId().equals(principal.getUserId())) {
-            throw new RuntimeException("자신이 등록한 프로그램에는 신청할 수 없습니다.");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "자신이 등록한 프로그램에는 신청할 수 없습니다.");
         }
 
+        // 프로그램 마감 여부 확인
         if (program.getStatus() != ProgramStatus.ACTIVE) {
-            throw new RuntimeException("마감된 프로그램에는 신청할 수 없습니다.");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "마감된 프로그램에는 신청할 수 없습니다.");
+        }
+
+        // [추가] 멘토 활동 상태 확인 (반려/비활성 상태인 멘토의 프로그램에는 신청 불가)
+        if (program.getMentor().getStatus() != MentorStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "활동 중인 멘토의 프로그램만 신청할 수 있습니다.");
         }
 
         if (mentoringApplicationRepository.existsByMenteeIdAndProgramIdAndStatusIn(
                 principal.getUserId(),
                 program.getId(),
-                REAPPLY_BLOCKING_STATUSES
-        )) {
-            throw new RuntimeException("이미 진행 중인 신청 내역이 있습니다.");
+                REAPPLY_BLOCKING_STATUSES)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 진행 중인 신청 내역이 있습니다.");
         }
 
-        // 멘티 유저 정보 조회
-        User mentee = userRepository.findById(principal.getUserId())
-                .orElseThrow(() -> new RuntimeException("사용자 정보를 찾을 수 없습니다."));
+        // [KP-C2 #91 F2] 신청 시점 멘토의 멤버십 유효 여부로 수수료 요율 스냅샷(500/1000) 결정
+        int feeRateBp = membershipService.isActive(program.getMentor().getId())
+                ? MentoringApplication.MEMBERSHIP_FEE_RATE_BP
+                : MentoringApplication.DEFAULT_FEE_RATE_BP;
 
+        // 1. 신청 내역 먼저 저장하여 ID 획득 (KP-C1 #90 F2)
+        MentoringApplication application = new MentoringApplication();
+        application.setProgram(program);
+        application.setMentee(mentee);
+        application.setAppliedMileage(program.getPrice());
+        application.setMessage(request.message());
+        application.setPaymentStatus(PaymentStatus.ESCROW_HELD);
+        application.setFeeRateBp(feeRateBp);
 
-        // 마일리지 차감 및 트랜잭션 기록
+        MentoringApplication savedApplication = mentoringApplicationRepository.save(application);
+
+        // 2. 마일리지 차감 및 원장 기록에 생성된 신청 ID(referenceId) 연결
         mileageService.useMileage(
                 mentee,
                 program.getPrice(),
                 TransactionType.MENTORING_PAY,
-                "멘토링 신청 결제: " + program.getTitle(), 
-                null // 아직 application 엔티티가 저장되기 전이므로 null 처리
-        );
+                "멘토링 신청 결제: " + program.getTitle(),
+                savedApplication.getId());
 
-        // 신청 엔티티 생성 및 저장
-        MentoringApplication application = new MentoringApplication();
-        application.setProgram(program);
-        application.setMentee(mentee);
-        application.setAppliedMileage(program.getPrice()); // 프로그램 가격만큼 마일리지 적용 (추후 마일리지 검증 로직 추가 가능)
-        application.setMessage(request.message());
-        application.setPaymentStatus(PaymentStatus.ESCROW_HELD);
+        notificationCommandService.createMentoringApplication(
+                savedApplication,
+                mentee,
+                program.getMentor().getUser());
 
-        MentoringApplication savedApplication = mentoringApplicationRepository.save(application);
-
-        return toApplicationResponse(savedApplication);
+        return toMenteeApplicationResponse(savedApplication);
     }
 
-    //멘토링 신청 취소
+    // 멘토링 신청 취소
     @Transactional
     public MentoringApplicationResponse cancelApplication(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
-                        .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신청 내역을 찾을 수 없습니다."));
 
-        // 권한 확인: 신청한 멘티 본인인지 확인
         if (!application.getMentee().getId().equals(principal.getUserId())) {
-            throw new RuntimeException("해당 신청을 취소할 권한이 없습니다.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "해당 신청을 취소할 권한이 없습니다.");
         }
 
-        // 상태 확인: 신청 상태(APPLIED)인 경우에만 취소 가능
         if (application.getStatus() != ApplicationStatus.APPLIED) {
-            throw new RuntimeException("수락 전인 신청 건만 취소할 수 있습니다.");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "수락 전인 신청 건만 취소할 수 있습니다.");
         }
 
-        // 상태 변경
         application.setStatus(ApplicationStatus.CANCELLED);
         application.setPaymentStatus(PaymentStatus.REFUNDED);
 
-        // 마일리지 환불 및 트랜잭션 기록
-        mileageService.addMileage(
-            application.getMentee(),
-            application.getAppliedMileage(),
-            TransactionType.MENTORING_REFUND,
-            "멘토링 신청 취소에 따른 환불",
-            application.getId()
-        );
+        notificationCommandService.createMentoringCancelled(
+                application,
+                application.getMentee(),
+                application.getProgram().getMentor().getUser());
 
-        return toApplicationResponse(application);
+        mileageService.addMileage(
+                application.getMentee(),
+                application.getAppliedMileage(),
+                TransactionType.MENTORING_REFUND,
+                "멘토링 신청 취소에 따른 환불",
+                application.getId());
+
+        return toMenteeApplicationResponse(application);
     }
 
     // 멘티가 본인 신청 내역 확인하는거
     @Transactional(readOnly = true)
-    public Page<MentoringApplicationResponse> getMyApplicationsAsMentee(CustomUserPrincipal principal, Pageable pageable) {
-        return toApplicationResponsePage(mentoringApplicationRepository.findByMenteeId(principal.getUserId(), pageable));
+    public Page<MentoringApplicationResponse> getMyApplicationsAsMentee(CustomUserPrincipal principal,
+            Pageable pageable) {
+        return toApplicationResponsePage(
+                mentoringApplicationRepository.findByMenteeId(principal.getUserId(), pageable),
+                false);
     }
 
     // 멘토가 신청 내역 확인하는거
     @Transactional(readOnly = true)
-    public Page<MentoringApplicationResponse> getMyApplicationsAsMentor(CustomUserPrincipal principal, Pageable pageable) {
-        return toApplicationResponsePage(mentoringApplicationRepository.findByProgramMentorId(principal.getUserId(), pageable));
+    public Page<MentoringApplicationResponse> getMyApplicationsAsMentor(CustomUserPrincipal principal,
+            Pageable pageable) {
+        return toApplicationResponsePage(
+                mentoringApplicationRepository.findByProgramMentorId(principal.getUserId(), pageable),
+                true);
     }
 
     // 신청 수락
     @Transactional
     public MentoringApplicationResponse acceptApplication(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
-                .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신청 내역을 찾을 수 없습니다."));
 
-        // 권한 확인: 신청된 프로그램의 멘토가 본인인지 확인
         if (!application.getProgram().getMentor().getId().equals(principal.getUserId())) {
-            throw new RuntimeException("해당 신청을 수락할 권한이 없습니다.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "해당 신청을 수락할 권한이 없습니다.");
         }
 
         if (application.getStatus() != ApplicationStatus.APPLIED) {
-            throw new RuntimeException("신청 상태인 경우에만 수락할 수 있습니다.");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "신청 상태인 경우에만 수락할 수 있습니다.");
         }
 
         application.setStatus(ApplicationStatus.ACCEPTED);
-        return toApplicationResponse(application);
-    
+
+        notificationCommandService.createMentoringAccepted(
+                application,
+                application.getProgram().getMentor().getUser(),
+                application.getMentee());
+
+        return toMentorApplicationResponse(application);
     }
 
     // 신청 거절
     @Transactional
     public MentoringApplicationResponse rejectApplication(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
-                .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신청 내역을 찾을 수 없습니다."));
 
-        // 권한 확인
         if (!application.getProgram().getMentor().getId().equals(principal.getUserId())) {
-            throw new RuntimeException("해당 신청을 거절할 권한이 없습니다.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "해당 신청을 거절할 권한이 없습니다.");
         }
 
         if (application.getStatus() != ApplicationStatus.APPLIED) {
-            throw new RuntimeException("신청 상태인 경우에만 거절할 수 있습니다.");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "신청 상태인 경우에만 거절할 수 있습니다.");
         }
 
-        // 상태 변경
         application.setStatus(ApplicationStatus.REJECTED);
         application.setPaymentStatus(PaymentStatus.REFUNDED);
 
-        // 마일리지 환불 및 트랜잭션 기록
-        mileageService.addMileage(
-            application.getMentee(),
-            application.getAppliedMileage(),
-            TransactionType.MENTORING_REFUND,
-            "멘토링 거절에 따른 환불", application.getId()
-        );
+        notificationCommandService.createMentoringRejected(
+                application,
+                application.getProgram().getMentor().getUser(),
+                application.getMentee());
 
-        return toApplicationResponse(application);
+        mileageService.addMileage(
+                application.getMentee(),
+                application.getAppliedMileage(),
+                TransactionType.MENTORING_REFUND,
+                "멘토링 거절에 따른 환불",
+                application.getId());
+
+        return toMentorApplicationResponse(application);
     }
 
-    // 멘토링 시작 (멘토가 수행)
+    // 멘토링 시작
     @Transactional
     public MentoringApplicationResponse startMentoring(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
-                .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신청 내역을 찾을 수 없습니다."));
 
-        // 권한 확인: 해당 프로그램의 멘토만 시작 가능
         if (!application.getProgram().getMentor().getId().equals(principal.getUserId())) {
-            throw new RuntimeException("해당 멘토링을 시작할 권한이 없습니다.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "해당 멘토링을 시작할 권한이 없습니다.");
         }
 
-        // 상태 확인: 수락된 상태(ACCEPTED)에서만 시작 가능
         if (application.getStatus() != ApplicationStatus.ACCEPTED) {
-            throw new RuntimeException("수락된 신청 건만 시작할 수 있습니다.");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "수락된 신청 건만 시작할 수 있습니다.");
         }
 
         application.setStatus(ApplicationStatus.ONGOING);
-        return toApplicationResponse(application);
+
+        notificationCommandService.createMentoringStarted(
+                application,
+                application.getProgram().getMentor().getUser(),
+                application.getMentee());
+
+        return toMentorApplicationResponse(application);
     }
 
-    // 멘토가 수업 완료를 선언 (정산 대기 상태로 진입)
+    // 멘토 완료 보고
     @Transactional
     public MentoringApplicationResponse finishMentoring(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
-                .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신청 내역을 찾을 수 없습니다."));
 
         if (!application.getProgram().getMentor().getId().equals(principal.getUserId())) {
-            throw new RuntimeException("해당 권한이 없습니다.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "해당 권한이 없습니다.");
         }
 
         if (application.getStatus() != ApplicationStatus.ONGOING) {
-            throw new RuntimeException("진행 중인 멘토링만 완료 보고를 할 수 있습니다.");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "진행 중인 멘토링만 완료 보고를 할 수 있습니다.");
         }
 
         application.setStatus(ApplicationStatus.FINISHED);
 
-        return toApplicationResponse(application);
+        notificationCommandService.createMentoringFinished(
+                application,
+                application.getProgram().getMentor().getUser(),
+                application.getMentee());
+
+        return toMentorApplicationResponse(application);
     }
 
-    // 멘토링 완료 확정 및 정산 (멘티가 수행)
+    // 멘토링 완료 확정 및 정산
     @Transactional
     public MentoringApplicationResponse completeMentoring(CustomUserPrincipal principal, UUID applicationId) {
-        MentoringApplication application = mentoringApplicationRepository.findById(applicationId)
-                .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(applicationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신청 내역을 찾을 수 없습니다."));
 
-        // 권한 확인: 신청한 멘티만 완료 확정 가능
         if (!application.getMentee().getId().equals(principal.getUserId())) {
-            throw new RuntimeException("해당 멘토링을 완료 확정할 권한이 없습니다.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "해당 멘토링을 완료 확정할 권한이 없습니다.");
         }
 
-        // 상태 확인: 진행 중(ONGOING)이거나 멘토가 완료 보고(FINISHED)한 상태에서만 멘티가 완료 확정 가능
-        if (application.getStatus() != ApplicationStatus.ONGOING && application.getStatus() != ApplicationStatus.FINISHED) {
-            throw new RuntimeException("행 중이거나 완료 보고된 멘토링만 완료 확정할 수 있습니다.");
+        if (application.getStatus() != ApplicationStatus.ONGOING &&
+                application.getStatus() != ApplicationStatus.FINISHED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "진행 중이거나 완료 보고된 멘토링만 완료 확정할 수 있습니다.");
         }
 
-        // 상태 변경
         application.setStatus(ApplicationStatus.COMPLETED);
         application.setPaymentStatus(PaymentStatus.SETTLED);
         application.setCompletedAt(java.time.OffsetDateTime.now());
 
-        // 멘토에게 마일리지 입금 및 트랜잭션 기록
-        MentorProfile mentorProfile = application.getProgram().getMentor();
+        // develop 신규 1: 멘토 프로필 조회 예외를 404로 변경
+        MentorProfile mentorProfile = mentorProfileRepository
+                .findByIdForUpdate(application.getProgram().getMentor().getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "멘토 프로필을 찾을 수 없습니다."));
+
+        // [KP-C1 #90 F3]: 공통 계산기로 수수료 계산, fee_amount 저장 및 멘토 지급액 산출
+        MentoringSettlementCalculator.SettlementResult settlement = MentoringSettlementCalculator
+                .applySettlement(application);
+
         mileageService.addMileage(
-            mentorProfile.getUser(),
-            application.getAppliedMileage(),
-            TransactionType.SETTLEMENT,
-            "멘토링 완료 정산",
-            application.getId()
-        );
+                mentorProfile.getUser(),
+                settlement.payoutAmount(),
+                TransactionType.SETTLEMENT,
+                "멘토링 완료 정산",
+                application.getId());
 
+        mentorProfileRepository.incrementMenteeCount(mentorProfile.getUserId());
 
-        // 멘토 통계 업데이트 : 누적 멘티 수 증가
-        mentorProfile.setMenteeCount(mentorProfile.getMenteeCount() + 1);
+        notificationCommandService.createMentoringCompleted(
+                application,
+                application.getMentee(),
+                mentorProfile.getUser());
 
-        return toApplicationResponse(application);
-
+        return toMenteeApplicationResponse(application);
     }
 
     // 자동 정산 대상 처리
-    @Transactional
+    @Transactional(readOnly = true)
     public void processAutoSettlement() {
-        
-        OffsetDateTime threshold = OffsetDateTime.now().minusDays(7);
-        List<MentoringApplication> targets = mentoringApplicationRepository.findByStatusAndUpdatedAtBefore(ApplicationStatus.FINISHED, threshold);
 
-        for (MentoringApplication application : targets) {
+        OffsetDateTime threshold = OffsetDateTime.now().minusDays(7);
+        List<UUID> targetIds = mentoringApplicationRepository.findIdsByStatusAndUpdatedAtBefore(
+                ApplicationStatus.FINISHED,
+                threshold);
+
+        for (UUID applicationId : targetIds) {
             try {
                 // 개별 트랜잭션 호출
-                settlementProcessor.processSingleSettlement(application);
+                settlementProcessor.processSingleSettlement(applicationId, threshold);
 
             } catch (Exception e) {
-                
-                System.err.println("자동 정산 실패 (ID: " + application.getId() + "): " + e.getMessage());
+
+                System.err.println("자동 정산 실패 (ID: " + applicationId + "): " + e.getMessage());
             }
         }
     }
 
-
     // 리뷰 생성
     @Transactional
     public MentoringReviewResponse createReview(CustomUserPrincipal principal, MentoringReviewRequest request) {
-        MentoringApplication application = mentoringApplicationRepository.findById(request.applicationId())
-                .orElseThrow(() -> new RuntimeException("신청 내역을 찾을 수 없습니다."));
-        
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(request.applicationId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신청 내역을 찾을 수 없습니다."));
 
-        // 권한 확인: 해당 멘토링을 신청한 멘티만 작성 가능
         if (!application.getMentee().getId().equals(principal.getUserId())) {
-            throw new RuntimeException("리뷰를 작성할 권한이 없습니다.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "리뷰를 작성할 권한이 없습니다.");
         }
 
-        // 상태 확인: 완료(COMPLETED)된 멘토링만 리뷰 작성 가능
         if (application.getStatus() != ApplicationStatus.COMPLETED) {
-            throw new RuntimeException("완료된 멘토링에 대해서만 리뷰를 남길 수 있습니다.");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "완료된 멘토링에 대해서만 리뷰를 남길 수 있습니다.");
         }
 
-        // 중복 확인: 이미 리뷰를 작성했는지 확인
         if (mentoringReviewRepository.existsByApplicationId(application.getId())) {
-            throw new RuntimeException("이미 이 멘토링에 대한 리뷰를 작성했습니다.");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 이 멘토링에 대한 리뷰를 작성했습니다.");
         }
 
-        // 리뷰 엔티티 생성 및 저장
         MentoringReview review = new MentoringReview();
         review.setApplication(application);
         review.setMentor(application.getProgram().getMentor());
@@ -474,37 +557,86 @@ public class MentoringService {
 
         MentoringReview savedReview = mentoringReviewRepository.save(review);
 
-        // 멘토 통계 업데이트
-        updateMentorStats(application.getProgram().getMentor(), request.rating());
+        // develop 신규 2: 멘토 프로필 조회 예외를 404로 변경
+        MentorProfile mentorProfile = mentorProfileRepository
+                .findByIdForUpdate(application.getProgram().getMentor().getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "멘토 프로필을 찾을 수 없습니다."));
 
-        return MentoringReviewResponse.from(savedReview);
-    }
-
-    private MentoringApplicationResponse toApplicationResponse(MentoringApplication application) {
-        return MentoringApplicationResponse.from(
+        updateMentorStats(mentorProfile, request.rating());
+        notificationCommandService.createMentoringReview(
                 application,
-                mentoringReviewRepository.existsByApplicationId(application.getId())
-        );
+                savedReview,
+                application.getMentee(),
+                mentorProfile.getUser());
+
+        return MentoringReviewResponse.from(savedReview, membershipService.isActive(savedReview.getMentee().getId()));
     }
 
-    private Page<MentoringApplicationResponse> toApplicationResponsePage(Page<MentoringApplication> applications) {
+    private MentoringApplicationResponse toMenteeApplicationResponse(MentoringApplication application) {
+        return toApplicationResponse(application, false);
+    }
+
+    private MentoringApplicationResponse toMentorApplicationResponse(MentoringApplication application) {
+        return toApplicationResponse(application, true);
+    }
+
+    private MentoringApplicationResponse toApplicationResponse(MentoringApplication application, boolean mentorView) {
+        UUID mentorId = application.getProgram().getMentor().getId();
+        UUID menteeId = application.getMentee().getId();
+        Set<UUID> activeUserIds = membershipService.findActiveUserIds(new HashSet<>(List.of(mentorId, menteeId)));
+        return toRoleResponse(
+                application,
+                mentoringReviewRepository.existsByApplicationId(application.getId()),
+                activeUserIds.contains(mentorId),
+                activeUserIds.contains(menteeId),
+                mentorView);
+    }
+
+    private Page<MentoringApplicationResponse> toApplicationResponsePage(
+            Page<MentoringApplication> applications,
+            boolean mentorView) {
         if (applications.getContent().isEmpty()) {
-            return applications.map(application -> MentoringApplicationResponse.from(application, false));
+            return applications.map(application -> toRoleResponse(application, false, false, false, mentorView));
         }
 
         List<UUID> applicationIds = applications.getContent().stream()
                 .map(MentoringApplication::getId)
                 .toList();
         Set<UUID> reviewedApplicationIds = new HashSet<>(
-                mentoringReviewRepository.findReviewedApplicationIds(applicationIds)
-        );
+                mentoringReviewRepository.findReviewedApplicationIds(applicationIds));
+        Set<UUID> participantIds = new HashSet<>();
+        applications.forEach(application -> {
+            participantIds.add(application.getProgram().getMentor().getId());
+            participantIds.add(application.getMentee().getId());
+        });
+        Set<UUID> activeUserIds = membershipService.findActiveUserIds(participantIds);
 
-        return applications.map(application ->
-                MentoringApplicationResponse.from(
-                        application,
-                        reviewedApplicationIds.contains(application.getId())
-                )
-        );
+        return applications.map(application -> toRoleResponse(
+                application,
+                reviewedApplicationIds.contains(application.getId()),
+                activeUserIds.contains(application.getProgram().getMentor().getId()),
+                activeUserIds.contains(application.getMentee().getId()),
+                mentorView));
+    }
+
+    private MentoringApplicationResponse toRoleResponse(
+            MentoringApplication application,
+            boolean hasReview,
+            boolean mentorMembershipBadge,
+            boolean menteeMembershipBadge,
+            boolean mentorView) {
+        if (mentorView) {
+            return MentoringApplicationResponse.fromMentor(
+                    application,
+                    hasReview,
+                    mentorMembershipBadge,
+                    menteeMembershipBadge);
+        }
+        return MentoringApplicationResponse.fromMentee(
+                application,
+                hasReview,
+                mentorMembershipBadge,
+                menteeMembershipBadge);
     }
 
     // 멘토 평점 업데이트
@@ -528,10 +660,12 @@ public class MentoringService {
     // 특정 멘토의 리뷰 목록 조회
     @Transactional(readOnly = true)
     public Page<MentoringReviewResponse> getMentorReviews(UUID mentorId, Pageable pageable) {
-        return mentoringReviewRepository.findByMentorUserId(mentorId, pageable).map(MentoringReviewResponse::from);
+        Page<MentoringReview> reviews = mentoringReviewRepository.findByMentorUserId(mentorId, pageable);
+        Set<UUID> reviewerIds = new HashSet<>();
+        reviews.forEach(review -> reviewerIds.add(review.getMentee().getId()));
+        Set<UUID> activeUserIds = reviewerIds.isEmpty() ? Set.of() : membershipService.findActiveUserIds(reviewerIds);
+        return reviews.map(review -> MentoringReviewResponse.from(review,
+                activeUserIds.contains(review.getMentee().getId())));
     }
 
-
-
-    
 }

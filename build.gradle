@@ -44,4 +44,8 @@ dependencies {
 
 tasks.named('test') {
 	useJUnitPlatform()
+    // Java 21 Mockito 동적 에이전트 허용 및 메모리 증설
+    jvmArgs '-XX:+EnableDynamicAgentLoading', '-Xmx2048m'
+    // 테스트 30개마다 새로운 JVM을 띄워 스프링 컨텍스트 누적으로 인한 충돌 방지
+    forkEvery = 30
 }

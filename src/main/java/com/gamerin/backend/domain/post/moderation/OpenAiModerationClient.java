@@ -1,12 +1,22 @@
 package com.gamerin.backend.domain.post.moderation;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
+import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
@@ -27,16 +37,42 @@ public class OpenAiModerationClient {
     private final boolean apiKeyConfigured;
     private final boolean enabled;
     private final String model;
+    private final int maxParallelRequests;
 
+    @Autowired
     public OpenAiModerationClient(
             @Value("${openai.api.key:}") String apiKey,
             @Value("${openai.moderation.enabled:true}") boolean enabled,
-            @Value("${openai.moderation.model:" + DEFAULT_MODEL + "}") String model
+            @Value("${openai.moderation.model:" + DEFAULT_MODEL + "}") String model,
+            @Value("${openai.moderation.max-parallel-requests:4}") int maxParallelRequests,
+            @Value("${openai.moderation.connect-timeout:3s}") Duration connectTimeout,
+            @Value("${openai.moderation.read-timeout:10s}") Duration readTimeout
     ) {
+        this(apiKey, enabled, model, maxParallelRequests,
+                RestClient.builder().requestFactory(requestFactory(connectTimeout, readTimeout)));
+    }
+
+    static ClientHttpRequestFactory requestFactory(Duration connectTimeout, Duration readTimeout) {
+        return ClientHttpRequestFactoryBuilder.detect().build(ClientHttpRequestFactorySettings.defaults()
+                .withConnectTimeout(connectTimeout)
+                .withReadTimeout(readTimeout));
+    }
+
+    OpenAiModerationClient(
+            String apiKey,
+            boolean enabled,
+            String model,
+            int maxParallelRequests,
+            RestClient.Builder restClientBuilder
+    ) {
+        if (maxParallelRequests < 1) {
+            throw new IllegalArgumentException("OpenAI moderation max parallel requests must be at least 1.");
+        }
         this.apiKeyConfigured = apiKey != null && !apiKey.isBlank();
         this.enabled = enabled;
         this.model = model == null || model.isBlank() ? DEFAULT_MODEL : model;
-        this.restClient = RestClient.builder()
+        this.maxParallelRequests = maxParallelRequests;
+        this.restClient = restClientBuilder
                 .baseUrl(BASE_URL)
                 .defaultHeader("Authorization", "Bearer " + apiKey)
                 .defaultHeader("Content-Type", "application/json")
@@ -54,14 +90,60 @@ public class OpenAiModerationClient {
 
         validateApiKeyConfigured();
 
-        for (List<ModerationInput> requestInputs : splitRequestsByImageLimit(inputs)) {
-            ModerationDecision decision = moderateSingleRequest(requestInputs);
-            if (decision.flagged()) {
-                return decision;
-            }
+        List<List<ModerationInput>> requests = splitRequestsByImageLimit(inputs);
+        if (requests.isEmpty()) {
+            return ModerationDecision.allowed();
         }
+        long startedAt = System.nanoTime();
+        String outcome = "failed";
+        try {
+            ModerationDecision decision = requests.size() == 1
+                    ? moderateSingleRequest(requests.get(0))
+                    : moderateInParallel(requests);
+            outcome = decision.flagged() ? "flagged" : "allowed";
+            return decision;
+        } finally {
+            JsonConsoleLogger.info("moderation.openai.completed", "failed".equals(outcome) ? "failure" : "success", outcome, Map.of(
+                    "model", model,
+                    "requestCount", requests.size(),
+                    "maxParallelRequests", maxParallelRequests,
+                    "durationMs", (System.nanoTime() - startedAt) / 1_000_000
+            ));
+        }
+    }
 
-        return ModerationDecision.allowed();
+    private ModerationDecision moderateInParallel(List<List<ModerationInput>> requests) {
+        // 차단 I/O 대기라 가상 스레드를 쓰고, 고정 크기 풀로 호출당 동시 요청 수를 제한한다.
+        ExecutorService executor = Executors.newFixedThreadPool(
+                Math.min(requests.size(), maxParallelRequests),
+                Thread.ofVirtual().name("openai-moderation-", 0).factory()
+        );
+        try {
+            CompletionService<ModerationDecision> completionService = new ExecutorCompletionService<>(executor);
+            requests.forEach(requestInputs -> completionService.submit(() -> moderateSingleRequest(requestInputs)));
+
+            for (int completed = 0; completed < requests.size(); completed++) {
+                ModerationDecision decision = completionService.take().get();
+                if (decision.flagged()) {
+                    return decision;
+                }
+            }
+            return ModerationDecision.allowed();
+        } catch (ExecutionException ex) {
+            if (ex.getCause() instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            if (ex.getCause() instanceof Error error) {
+                throw error;
+            }
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to moderate content with OpenAI.", ex.getCause());
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to moderate content with OpenAI.", ex);
+        } finally {
+            // 판정이 끝나면 남은 요청은 인터럽트로 취소하고 완료를 기다리지 않는다.
+            executor.shutdownNow();
+        }
     }
 
     static List<List<ModerationInput>> splitRequestsByImageLimit(List<ModerationInput> inputs) {
@@ -136,6 +218,14 @@ public class OpenAiModerationClient {
             ));
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "OpenAI moderation request was rejected.", ex);
         } catch (RestClientException ex) {
+            if (Thread.currentThread().isInterrupted()) {
+                // 다른 요청의 판정으로 취소된 경우라 실패 로그를 남기지 않는다.
+                JsonConsoleLogger.info("moderation.openai.request", "cancelled", "cancelled", Map.of(
+                        "model", model,
+                        "inputCount", inputs.size()
+                ));
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Failed to moderate content with OpenAI.", ex);
+            }
             JsonConsoleLogger.failure("moderation.openai.request", "rest_client_exception", Map.of(
                     "model", model,
                     "inputCount", inputs.size(),

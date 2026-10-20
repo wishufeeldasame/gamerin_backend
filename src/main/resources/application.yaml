@@ -1,4 +1,7 @@
 spring:
+  jackson:
+    deserialization:
+      fail-on-numbers-for-enums: true  # enum 순번(2, "2")을 코드로 받지 않는다
   application:
     name: backend
 
@@ -43,8 +46,17 @@ app:
   post:
     cleanup:
       hard-delete-after: 24h
+      hidden-hard-delete-after: 14d
       initial-delay-ms: 60000
       fixed-delay-ms: 3600000
+  payment:
+    recovery:
+      initial-delay-ms: 60000
+      fixed-delay-ms: 300000
+  hashtag:
+    backfill:
+      enabled: ${APP_HASHTAG_BACKFILL_ENABLED:false}
+      batch-size: ${APP_HASHTAG_BACKFILL_BATCH_SIZE:200}
   frontend:
     base-url: http://localhost:3000
     password-reset-path: /auth/reset-password
@@ -54,6 +66,35 @@ app:
     password-reset:
       expiration-minutes: 30
 
+pubg:
+  api:
+    connect-timeout: ${PUBG_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${PUBG_API_READ_TIMEOUT:10s}
+
+riot:
+  api:
+    connect-timeout: ${RIOT_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${RIOT_API_READ_TIMEOUT:10s}
+
+r6:
+  api:
+    key: ${R6DATA_API_KEY:}
+    base-url: ${R6DATA_API_BASE_URL:https://api.r6data.com}
+    connect-timeout: ${R6DATA_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${R6DATA_API_READ_TIMEOUT:10s}
+
+kakaopay:
+  api:
+    base-url: https://open-api.kakaopay.com
+    secret-key: ${KAKAOPAY_SECRET_KEY:}
+    connect-timeout: 3s
+    # 카카오페이 플랫폼 타임아웃(11초)보다 길게 둔다. 초과하면 결과 불명으로 처리한다.
+    read-timeout: 15s
+  # 허용하는 유일한 CID. 비어 있으면 결제 준비를 거부한다.
+  cid: ${KAKAOPAY_CID:}
+  # 결제 취소 API 기능 플래그. 사용자 화면 연결은 없다.
+  cancel-enabled: ${KAKAOPAY_CANCEL_ENABLED:false}
+
 openai:
   api:
     key: ${OPENAI_API_KEY:}
@@ -61,4 +102,7 @@ openai:
     enabled: true
     ffmpeg-timeout-ms: ${OPENAI_MODERATION_FFMPEG_TIMEOUT_MS:15000}
     model: omni-moderation-latest
+    max-parallel-requests: ${OPENAI_MODERATION_MAX_PARALLEL_REQUESTS:4}
+    connect-timeout: ${OPENAI_MODERATION_CONNECT_TIMEOUT:3s}
+    read-timeout: ${OPENAI_MODERATION_READ_TIMEOUT:10s}
     ffmpeg-path: ffmpeg

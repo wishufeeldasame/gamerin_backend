@@ -1,0 +1,27 @@
+{
+  "platform_families_full_profiles": [
+    {
+      "board_ids_full_profiles": [
+        {
+          "board_id": "ranked",
+          "full_profiles": [
+            {
+              "season_id": 41,
+              "profile": { "wins": 0, "losses": 0, "abandon": 0 }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "data": {
+    "platformInfo": {
+      "platformUserId": "unranked-account",
+      "platformUserHandle": "UnrankedPlayer"
+    },
+    "metadata": {
+      "currentSeason": 41
+    },
+    "segments": []
+  }
+}
