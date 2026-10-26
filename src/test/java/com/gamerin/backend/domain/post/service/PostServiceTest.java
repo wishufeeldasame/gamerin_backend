@@ -417,6 +417,36 @@ class PostServiceTest {
     }
 
     @Test
+    void createMultipartRejectsWhenModerationFlagsVideoThumbnailBeforeStorage() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        MockMultipartFile videoFile = videoFile();
+        MockMultipartFile thumbnailFile = new MockMultipartFile("thumbnailFile", "thumb.jpg", "image/jpeg",
+                "thumbnail".getBytes());
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(videoMetadataService.readDurationSeconds(any())).thenReturn(120.0);
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Content violates moderation policy: sexual"))
+                .when(contentModerationService)
+                .assertPostAllowed(eq("video post"), eq(List.of(videoFile, thumbnailFile)));
+
+        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
+        request.setContent("video post");
+        request.setMediaFiles(List.of(videoFile));
+        request.setThumbnailFile(thumbnailFile);
+
+        assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
+
+        verify(postRepository, never()).save(any(Post.class));
+        verify(videoOptimizationService, never()).prepareVideo(any(MultipartFile.class));
+        verify(mediaUploadSecurityService, never()).prepareImage(any(MultipartFile.class));
+    }
+
+    @Test
     void createMultipartRejectsWhenModerationFlagsMediaBeforeStorage() throws Exception {
         UUID userId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
