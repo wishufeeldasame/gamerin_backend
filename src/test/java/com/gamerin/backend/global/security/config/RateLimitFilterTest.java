@@ -96,19 +96,36 @@ class RateLimitFilterTest {
     }
 
     @Test
-    void trackedKeysAreCappedAndNewKeysAreRejectedWhenFull() throws Exception {
-        for (int i = 0; i < RateLimitFilter.MAX_TRACKED_KEYS; i++) {
+    void trackedKeysAreCappedWithoutBlockingNewClients() throws Exception {
+        // 오래된 순서: 10.0.0.0 이 가장 먼저 기록된다
+        for (int i = 0; i < 10; i++) {
+            send("/api/v1/auth/login", "10.0.0.0", null);
+        }
+        for (int i = 1; i < RateLimitFilter.MAX_TRACKED_KEYS; i++) {
             send("/api/v1/auth/login", "10.0." + (i / 256) + "." + (i % 256), null);
         }
         assertThat(filter.trackedKeyCount()).isEqualTo(RateLimitFilter.MAX_TRACKED_KEYS);
 
-        assertThat(send("/api/v1/auth/login", "198.51.100.1", null)).isEqualTo(429);
-        assertThat(send("/api/v1/auth/login", "10.0.0.0", null)).isEqualTo(200);
+        assertThat(send("/api/v1/auth/login", "198.51.100.1", null)).isEqualTo(200);
         assertThat(filter.trackedKeyCount()).isEqualTo(RateLimitFilter.MAX_TRACKED_KEYS);
 
-        clock.advance(Duration.ofSeconds(61));
-        assertThat(send("/api/v1/auth/login", "198.51.100.1", null)).isEqualTo(200);
-        assertThat(filter.trackedKeyCount()).isEqualTo(1);
+        // 가장 오래 요청이 없던 키가 밀려나 기록이 초기화된다
+        assertThat(send("/api/v1/auth/login", "10.0.0.0", null)).isEqualTo(200);
+        assertThat(filter.trackedKeyCount()).isEqualTo(RateLimitFilter.MAX_TRACKED_KEYS);
+    }
+
+    @Test
+    void recentlyActiveKeyIsKeptWhenCapIsReached() throws Exception {
+        for (int i = 0; i < RateLimitFilter.MAX_TRACKED_KEYS; i++) {
+            send("/api/v1/auth/login", "10.0." + (i / 256) + "." + (i % 256), null);
+        }
+        for (int i = 0; i < 9; i++) {
+            send("/api/v1/auth/login", "10.0.0.0", null);
+        }
+
+        send("/api/v1/auth/login", "198.51.100.1", null);
+
+        assertThat(send("/api/v1/auth/login", "10.0.0.0", null)).isEqualTo(429);
     }
 
     @Test
