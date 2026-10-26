@@ -75,7 +75,7 @@ class DirectMessageAttachmentRepositoryTest {
             User sender,
             OffsetDateTime createdAt
     ) {
-        DirectMessage message = DirectMessage.create(conversation, sender, null, null);
+        DirectMessage message = DirectMessage.create(conversation, sender, "attachment", null);
         entityManager.persist(message);
         DirectMessageAttachment attachment = DirectMessageAttachment.create(
                 message,

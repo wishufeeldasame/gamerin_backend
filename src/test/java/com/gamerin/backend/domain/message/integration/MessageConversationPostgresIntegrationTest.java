@@ -23,11 +23,18 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
+import com.gamerin.backend.domain.message.entity.DirectMessage;
+import com.gamerin.backend.domain.message.entity.DirectMessageAttachment;
+import com.gamerin.backend.domain.message.entity.MessageAttachmentType;
+import com.gamerin.backend.domain.message.entity.MessageConversation;
+import com.gamerin.backend.domain.message.repository.DirectMessageAttachmentRepository;
 import com.gamerin.backend.domain.message.service.MessageService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+
+import jakarta.persistence.EntityManager;
 
 @Tag("postgresql")
 @EnabledIfEnvironmentVariable(named = "MESSAGE_POSTGRES_TEST_URL", matches = ".+")
@@ -45,6 +52,10 @@ class MessageConversationPostgresIntegrationTest {
     private UserRepository userRepository;
     @Autowired
     private JdbcTemplate jdbcTemplate;
+    @Autowired
+    private DirectMessageAttachmentRepository directMessageAttachmentRepository;
+    @Autowired
+    private EntityManager entityManager;
 
     @DynamicPropertySource
     static void configurePostgres(DynamicPropertyRegistry registry) {
@@ -98,6 +109,41 @@ class MessageConversationPostgresIntegrationTest {
                 where conversation_id = ? and id is not null and joined_at is not null
                   and user_id in (?, ?)
                 """, Long.class, response.id(), sender.getId(), recipient.getId())).isEqualTo(2L);
+    }
+
+    @Test
+    void attachmentAccessRejectsMessagesSentBeforeParticipantClearedAt() {
+        User sender = saveUser("sender");
+        User viewer = saveUser("viewer");
+        var conversationResponse = messageService.createConversation(CustomUserPrincipal.from(sender),
+                new CreateConversationRequest(null, viewer.getId()));
+        MessageConversation conversation = entityManager.find(MessageConversation.class, conversationResponse.id());
+        OffsetDateTime clearedAt = OffsetDateTime.parse("2026-10-20T10:00:00+09:00");
+
+        UUID beforeClear = saveAttachment(conversation, sender, clearedAt.minusSeconds(1));
+        UUID atClear = saveAttachment(conversation, sender, clearedAt);
+        UUID afterClear = saveAttachment(conversation, sender, clearedAt.plusSeconds(1));
+        jdbcTemplate.update("""
+                update message_participants set cleared_at = ?, deleted_at = null
+                where conversation_id = ? and user_id = ?
+                """, clearedAt, conversation.getId(), viewer.getId());
+        entityManager.clear();
+
+        assertThat(directMessageAttachmentRepository.findAccessibleActiveById(beforeClear, viewer.getId())).isEmpty();
+        assertThat(directMessageAttachmentRepository.findAccessibleActiveById(atClear, viewer.getId())).isEmpty();
+        assertThat(directMessageAttachmentRepository.findAccessibleActiveById(afterClear, viewer.getId())).isPresent();
+        assertThat(directMessageAttachmentRepository.findAccessibleActiveById(beforeClear, sender.getId())).isPresent();
+    }
+
+    private UUID saveAttachment(MessageConversation conversation, User sender, OffsetDateTime createdAt) {
+        DirectMessage message = DirectMessage.create(conversation, sender, "attachment", null);
+        entityManager.persist(message);
+        DirectMessageAttachment attachment = DirectMessageAttachment.create(
+                message, MessageAttachmentType.IMAGE, "image.jpg", "/uploads/message-attachments/image.jpg", 0);
+        entityManager.persist(attachment);
+        entityManager.flush();
+        jdbcTemplate.update("update direct_messages set created_at = ? where id = ?", createdAt, message.getId());
+        return attachment.getId();
     }
 
     private User saveUser(String prefix) {
