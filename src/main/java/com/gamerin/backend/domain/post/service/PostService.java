@@ -246,7 +246,11 @@ public class PostService {
 
         validateMultipartCreateRequest(content, mediaFiles, thumbnailFile);
         textSecurityService.assertTextSafe(content);
-        contentModerationService.assertPostAllowed(content, mediaFiles);
+        List<MultipartFile> moderatedFiles = new ArrayList<>(mediaFiles);
+        if (thumbnailFile != null) {
+            moderatedFiles.add(thumbnailFile);
+        }
+        contentModerationService.assertPostAllowed(content, moderatedFiles);
         PreparedMediaUpload preparedMediaUpload = prepareMediaUpload(mediaFiles, thumbnailFile);
 
         try {
