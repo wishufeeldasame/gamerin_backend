@@ -3,7 +3,9 @@ package com.gamerin.backend.domain.post.controller;
 import java.util.List;
 import java.util.UUID;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,6 +24,7 @@ import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
 import com.gamerin.backend.domain.post.dto.request.UpdatePostRequest;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
+import com.gamerin.backend.domain.post.dto.response.PostVideoJobResponse;
 import com.gamerin.backend.domain.post.dto.response.ShareResponse;
 import com.gamerin.backend.domain.post.service.PostService;
 import com.gamerin.backend.domain.repost.dto.response.RepostActionResponse;
@@ -52,11 +55,26 @@ public class PostController {
         return ApiResponse.ok(postService.create(principal, request));
     }
 
+    /**
+     * 사진 게시물은 200과 게시물을, 영상 게시물은 202와 처리 작업을 반환한다.
+     * 영상은 처리가 끝나면 게시물이 만들어지므로 {@code GET /video-jobs/{jobId}}로 상태를 확인한다.
+     */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<PostDetailResponse> createWithFiles(
+    public ResponseEntity<ApiResponse<?>> createWithFiles(
             @AuthenticationPrincipal CustomUserPrincipal principal,
             @Valid @ModelAttribute CreateMultipartPostRequest request) {
-        return ApiResponse.ok(postService.create(principal, request));
+        PostService.MultipartCreateResult result = postService.create(principal, request);
+        if (result.videoJob() != null) {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.ok(result.videoJob()));
+        }
+        return ResponseEntity.ok(ApiResponse.ok(result.post()));
+    }
+
+    @GetMapping("/video-jobs/{jobId}")
+    public ApiResponse<PostVideoJobResponse> getVideoJob(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID jobId) {
+        return ApiResponse.ok(postService.getVideoJob(principal, jobId));
     }
 
     /**
