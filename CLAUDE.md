@@ -55,7 +55,7 @@
 - `src/main/resources/application.yaml`: 공통 설정. 기본 활성 프로필은 `local`, 서버 포트는 8080이다.
 - `src/main/resources/application-prod.yaml`: 운영 프로필 설정. 환경변수, 기본값, 고정 설정이 혼재한다.
 - 운영 환경변수 주입은 `../docker/docker-compose.yml`과 대조한다.
-- `RIOT_API_KEY`는 운영 프로필이 참조하지만 현재 Compose의 명시적 주입 목록에는 없으므로 컨테이너 연동 시 확인이 필요하다.
+- `RIOT_API_KEY`는 운영 프로필이 참조하며, Compose가 `RIOT_API_CONNECT_TIMEOUT`·`RIOT_API_READ_TIMEOUT`과 함께 backend 환경변수로 주입한다.
 - 운영 비밀 값은 출력하지 않는다.
 - 소스 루트는 `src/main/java/com/gamerin/backend/`, 테스트 루트는 `src/test/java/com/gamerin/backend/`다. 아래 `domain/...`, `global/...` 경로는 소스 루트 기준이다.
 - `domain/<도메인>/` 아래 controller, service, repository, entity, dto 등 기존 계층을 따라 변경 흐름을 확인한다.
