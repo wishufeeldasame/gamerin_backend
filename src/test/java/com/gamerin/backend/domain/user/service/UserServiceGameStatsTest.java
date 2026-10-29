@@ -72,7 +72,7 @@ class UserServiceGameStatsTest {
     }
 
     @Test
-    void profileResponseKeepsCommonPubgAndR6FieldsAndRemovesR6InternalIdentifier() {
+    void publicProfileKeepsCommonPubgAndR6FieldsAndRemovesAccountIdentifiers() {
         User user = savedUser(UUID.randomUUID(), "target", "Target");
         Map<String, Object> pubg = new HashMap<>();
         pubg.put("connected", true);
@@ -94,6 +94,8 @@ class UserServiceGameStatsTest {
         r6.put("matches", 25);
         r6.put("statsMode", "NORMAL");
         r6.put("accountId", "r6-account");
+        r6.put("playerNameNormalized", "r6player");
+        r6.put("updatedAt", "2026-10-26T00:00:00Z");
 
         user.getProfile().updateGameStats(new HashMap<>(Map.of("PUBG", pubg, "R6", r6)));
 
@@ -111,7 +113,7 @@ class UserServiceGameStatsTest {
                 .containsEntry("winRate", 12)
                 .containsEntry("matches", 42)
                 .containsEntry("statsMode", "RANKED")
-                .containsEntry("accountId", "pubg-account");
+                .doesNotContainKey("accountId");
         assertThat(publicR6)
                 .containsEntry("connected", true)
                 .containsEntry("playerName", "R6Player")
@@ -121,10 +123,59 @@ class UserServiceGameStatsTest {
                 .containsEntry("winRate", 48)
                 .containsEntry("matches", 25)
                 .containsEntry("statsMode", "NORMAL")
-                .doesNotContainKey("accountId");
+                .containsEntry("updatedAt", "2026-10-26T00:00:00Z")
+                .doesNotContainKeys("accountId", "playerNameNormalized");
 
         assertThat(nestedMap(user.getProfile().getGameStats(), "PUBG")).containsKey("accountId");
         assertThat(nestedMap(user.getProfile().getGameStats(), "R6")).containsKey("accountId");
+    }
+
+    @Test
+    void publicProfileKeepsLolSummaryAndRemovesRiotIdentifiersAndUnknownEntries() {
+        User user = savedUser(UUID.randomUUID(), "target", "Target");
+        UserProfile profile = user.getProfile();
+        profile.connectRiot("player#KR1", "riot-puuid");
+        profile.updateLolSummary("Gold I", 3.5, 60, 20);
+        Map<String, Object> gameStats = new HashMap<>(profile.getGameStats());
+        gameStats.put("LEGACY", Map.of("accountId", "legacy-account"));
+        gameStats.put("note", "raw");
+        profile.updateGameStats(gameStats);
+
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(user));
+
+        var response = userService.getProfile(null, "target");
+
+        assertThat(response.gameStats()).containsOnlyKeys("RIOT", "LOL");
+        assertThat(nestedMap(response.gameStats(), "RIOT"))
+                .containsOnlyKeys("connected")
+                .containsEntry("connected", true);
+        assertThat(nestedMap(response.gameStats(), "LOL"))
+                .containsEntry("connected", true)
+                .containsEntry("tierLabel", "Gold I")
+                .containsEntry("kda", 3.5)
+                .containsEntry("winRate", 60)
+                .containsEntry("games", 20);
+    }
+
+    @Test
+    void ownProfileKeepsAccountIdentifiersExceptR6AccountId() {
+        User user = savedUser(UUID.randomUUID(), "target", "Target");
+        UserProfile profile = user.getProfile();
+        profile.connectRiot("player#KR1", "riot-puuid");
+        profile.connectPubg("pubgPlayer", "pubg-account");
+        profile.connectR6("R6Player", "r6player", "PC", "r6-account", null, null, null, null, null, null);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(user.getId())).thenReturn(Optional.of(user));
+
+        var response = userService.getMyProfile(user.getId());
+
+        assertThat(nestedMap(response.gameStats(), "RIOT"))
+                .containsEntry("riotId", "player#KR1")
+                .containsEntry("puuid", "riot-puuid");
+        assertThat(nestedMap(response.gameStats(), "PUBG")).containsEntry("accountId", "pubg-account");
+        assertThat(nestedMap(response.gameStats(), "R6"))
+                .containsEntry("playerNameNormalized", "r6player")
+                .doesNotContainKey("accountId");
     }
 
     @Test
@@ -162,9 +213,12 @@ class UserServiceGameStatsTest {
         var response = ownProfile ? userService.getMyProfile(user.getId()) : userService.getProfile(null, "target");
 
         assertThat(response.gameStats()).doesNotContainKey("LOL");
-        assertThat(nestedMap(response.gameStats(), "RIOT"))
-                .containsEntry("connected", true)
-                .containsEntry("riotId", "replacement#KR1");
+        assertThat(nestedMap(response.gameStats(), "RIOT")).containsEntry("connected", true);
+        if (ownProfile) {
+            assertThat(nestedMap(response.gameStats(), "RIOT")).containsEntry("riotId", "replacement#KR1");
+        } else {
+            assertThat(nestedMap(response.gameStats(), "RIOT")).doesNotContainKeys("riotId", "puuid");
+        }
         assertThat(nestedMap(response.gameStats(), "PUBG"))
                 .containsEntry("connected", true)
                 .containsEntry("playerName", "replacement")

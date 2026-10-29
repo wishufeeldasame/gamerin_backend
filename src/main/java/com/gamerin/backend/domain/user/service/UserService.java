@@ -4,6 +4,7 @@ import com.gamerin.backend.domain.game.model.GameType;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -38,6 +39,15 @@ public class UserService {
     private static final long MAX_PROFILE_COVER_UPLOAD_BYTES = 5L * 1024L * 1024L;
     private static final String UUID_JPEG_FILE_PATTERN =
             "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\.jpg";
+    // 다른 사용자에게는 화면 요약 필드만 공개한다. 외부 계정 식별자(accountId, puuid, riotId 등)는 제외한다.
+    private static final Map<String, Set<String>> PUBLIC_GAME_STATS_FIELDS = Map.of(
+            GameType.PUBG.name(), Set.of("connected", "playerName", "tierLabel", "kd", "winRate", "matches", "statsMode"),
+            GameType.R6.name(), Set.of(
+                    "connected", "playerName", "platform", "tierLabel", "kd", "winRate", "matches", "statsMode", "updatedAt"
+            ),
+            GameType.LOL.name(), Set.of("connected", "tierLabel", "kda", "winRate", "games"),
+            "RIOT", Set.of("connected")
+    );
 
     private final UserRepository userRepository;
     private final FollowRepository followRepository;
@@ -73,7 +83,7 @@ public class UserService {
         User user = userRepository.findByIdAndDeletedAtIsNull(userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
-        return toProfileResponse(user, false, false);
+        return toProfileResponse(user, false, false, true);
     }
 
     @Transactional(readOnly = true)
@@ -88,13 +98,14 @@ public class UserService {
             followsViewer = followRepository.existsByFollowerIdAndFolloweeId(user.getId(), viewerId);
         }
 
-        return toProfileResponse(user, isFollowing, followsViewer);
+        return toProfileResponse(user, isFollowing, followsViewer, false);
     }
 
     private DetailedUserProfileResponse toProfileResponse(
             User user,
             boolean isFollowing,
-            boolean followsViewer
+            boolean followsViewer,
+            boolean ownProfile
     ) {
         UserProfile profile = user.getProfile();
 
@@ -113,7 +124,8 @@ public class UserService {
                 profile != null ? profile.getWebsite() : null,
                 profile != null ? profile.getCoverImageUrl() : null,
                 profile != null ? profile.getProfileImageUrl() : null,
-                profile != null ? toPublicGameStats(profile.getGameStats()) : null,
+                profile == null ? null
+                        : ownProfile ? toOwnGameStats(profile.getGameStats()) : toPublicGameStats(profile.getGameStats()),
                 profile != null && profile.isVerifiedBadge(),
                 membershipService.isActive(user.getId()),
                 isFollowing,
@@ -127,6 +139,27 @@ public class UserService {
     }
 
     private Map<String, Object> toPublicGameStats(Map<String, Object> gameStats) {
+        if (gameStats == null) {
+            return null;
+        }
+
+        Map<String, Object> publicGameStats = new HashMap<>();
+        for (Map.Entry<String, Set<String>> allowed : PUBLIC_GAME_STATS_FIELDS.entrySet()) {
+            if (!(gameStats.get(allowed.getKey()) instanceof Map<?, ?> stats)) {
+                continue;
+            }
+            Map<String, Object> publicStats = new HashMap<>();
+            for (String fieldName : allowed.getValue()) {
+                if (stats.containsKey(fieldName)) {
+                    publicStats.put(fieldName, stats.get(fieldName));
+                }
+            }
+            publicGameStats.put(allowed.getKey(), publicStats);
+        }
+        return publicGameStats;
+    }
+
+    private Map<String, Object> toOwnGameStats(Map<String, Object> gameStats) {
         if (gameStats == null) {
             return null;
         }
