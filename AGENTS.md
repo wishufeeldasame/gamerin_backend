@@ -135,7 +135,7 @@
 - `MentoringScheduler`는 서버 기본 시간대 기준 매일 03시에 자동 정산을 호출한다.
 - `bootRun` 등 애플리케이션 실행을 단순 컴파일 확인으로 사용하지 않는다.
 - OpenAI Moderation, PUBG, R6, Riot, 메일 연동은 관련 client/service와 공개 설정을 확인한다.
-- 메일 발송은 `domain/auth/service/PasswordResetMailService.java`와 `EmailVerificationMailService.java`가 담당한다. SMTP가 설정되지 않으면 이메일 인증번호는 `local` 프로필에서만 콘솔 로그로 대체하고 그 외 프로필은 발송 실패로 처리한다. 비밀번호 재설정 링크는 프로필과 관계없이 콘솔 로그로 대체한다.
+- 메일 발송은 `domain/auth/service/PasswordResetMailService.java`와 `EmailVerificationMailService.java`가 담당한다. SMTP가 설정되지 않으면 이메일 인증번호와 비밀번호 재설정 링크는 `local` 프로필에서만 콘솔 로그로 대체하고 그 외 프로필은 발송 실패로 처리한다.
 - API 오류, timeout, rate limit, 검열 실패 처리 정책을 임의로 완화하지 않는다.
 - 키·토큰·개인정보는 로그와 문서에 남기지 않는다.
 - OpenAI 검열 클라이언트는 `domain/post/moderation/OpenAiModerationClient.java`, 게임 API 클라이언트는 `domain/pubg/client/`, `domain/r6/client/`, `domain/riot/client/`에 있다.
