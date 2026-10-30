@@ -3,6 +3,8 @@ package com.gamerin.backend.domain.auth.service;
 import com.gamerin.backend.domain.auth.dto.response.EmailVerificationConfirmResponse;
 import com.gamerin.backend.domain.auth.dto.response.EmailVerificationResponse;
 import com.gamerin.backend.domain.auth.entity.EmailVerification;
+import com.gamerin.backend.domain.auth.entity.EmailVerificationLock;
+import com.gamerin.backend.domain.auth.repository.EmailVerificationLockRepository;
 import com.gamerin.backend.domain.auth.repository.EmailVerificationRepository;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +13,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
@@ -38,6 +41,9 @@ class EmailVerificationServiceTest {
     private EmailVerificationRepository emailVerificationRepository;
 
     @Mock
+    private EmailVerificationLockRepository emailVerificationLockRepository;
+
+    @Mock
     private UserRepository userRepository;
 
     @Mock
@@ -51,13 +57,16 @@ class EmailVerificationServiceTest {
     @BeforeEach
     void setUp() {
         emailVerificationService = new EmailVerificationService(
-                emailVerificationRepository, userRepository, tokenService, emailVerificationMailService);
+                emailVerificationRepository, emailVerificationLockRepository, userRepository, tokenService,
+                emailVerificationMailService);
         lenient().when(tokenService.sha256(anyString())).thenAnswer(invocation -> "hash:" + invocation.getArgument(0));
     }
 
     @Test
     void sendSignupCodeStoresHashedCodeAndMailsRawCode() {
         when(userRepository.existsByEmail(EMAIL)).thenReturn(false);
+        when(emailVerificationLockRepository.findByEmail(EMAIL))
+                .thenReturn(Optional.of(EmailVerificationLock.of(EMAIL)));
         when(emailVerificationRepository.findTopByEmailOrderByCreatedAtDesc(EMAIL))
                 .thenReturn(Optional.of(verification(OffsetDateTime.now().minusSeconds(61))));
 
@@ -84,12 +93,43 @@ class EmailVerificationServiceTest {
 
         assertStatus(() -> emailVerificationService.sendSignupCode(EMAIL), HttpStatus.CONFLICT);
 
-        verifyNoInteractions(emailVerificationRepository, emailVerificationMailService);
+        verifyNoInteractions(emailVerificationRepository, emailVerificationLockRepository,
+                emailVerificationMailService);
+    }
+
+    @Test
+    void sendSignupCodeCreatesLockRowForFirstRequest() {
+        when(userRepository.existsByEmail(EMAIL)).thenReturn(false);
+        when(emailVerificationLockRepository.findByEmail(EMAIL)).thenReturn(Optional.empty());
+        when(emailVerificationRepository.findTopByEmailOrderByCreatedAtDesc(EMAIL)).thenReturn(Optional.empty());
+
+        emailVerificationService.sendSignupCode(EMAIL);
+
+        ArgumentCaptor<EmailVerificationLock> lockCaptor = ArgumentCaptor.forClass(EmailVerificationLock.class);
+        verify(emailVerificationLockRepository).saveAndFlush(lockCaptor.capture());
+        assertThat(lockCaptor.getValue().getEmail()).isEqualTo(EMAIL);
+        verify(emailVerificationRepository).save(any(EmailVerification.class));
+        verify(emailVerificationMailService).sendSignupVerificationCode(eq(EMAIL), anyString());
+    }
+
+    @Test
+    void sendSignupCodeRejectsConcurrentFirstRequestOnDuplicateLockRow() {
+        when(userRepository.existsByEmail(EMAIL)).thenReturn(false);
+        when(emailVerificationLockRepository.findByEmail(EMAIL)).thenReturn(Optional.empty());
+        when(emailVerificationLockRepository.saveAndFlush(any(EmailVerificationLock.class)))
+                .thenThrow(new DataIntegrityViolationException("duplicate key"));
+
+        assertStatus(() -> emailVerificationService.sendSignupCode(EMAIL), HttpStatus.TOO_MANY_REQUESTS);
+
+        verify(emailVerificationRepository, never()).save(any(EmailVerification.class));
+        verifyNoInteractions(emailVerificationMailService);
     }
 
     @Test
     void sendSignupCodeRejectsResendWithinCooldown() {
         when(userRepository.existsByEmail(EMAIL)).thenReturn(false);
+        when(emailVerificationLockRepository.findByEmail(EMAIL))
+                .thenReturn(Optional.of(EmailVerificationLock.of(EMAIL)));
         when(emailVerificationRepository.findTopByEmailOrderByCreatedAtDesc(EMAIL))
                 .thenReturn(Optional.of(verification(OffsetDateTime.now().minusSeconds(10))));
 
