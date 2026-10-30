@@ -288,11 +288,17 @@ public class PostService {
      * - E2: 작성자 본인, 삭제·숨김(report_counts.is_hidden) 아님, 1시간 이내, 요청 시점 멤버십 isActive,
      * edit_count = 0 검증
      * - E4: 비관적 쓰기 잠금(PESSIMISTIC_WRITE)으로 동시 수정을 직렬화하며, 본문이 동일하면 저장·차감 없음
-     * - E5: 생성과 동일한 텍스트 검사 및 ContentModerationService 검열 재적용 (실패 시 edit_count 미차감)
+     * - E5: 생성과 동일한 텍스트 검사 및 ContentModerationService 검열 재적용 (행 잠금 전에 수행, 실패 시 edit_count 미차감)
      * - E6: 해시태그·멘션 재파싱, 새로 추가된 멘션만 알림 생성, 제거된 멘션 알림 유지
      */
     public PostDetailResponse update(CustomUserPrincipal principal, UUID postId, UpdatePostRequest request) {
         User user = getCurrentUser(principal);
+        // 외부 검열 호출 동안 행 잠금을 잡지 않도록 잠금 전에 본문 검사·검열을 끝낸다.
+        String content = normalizeContent(request != null ? request.content() : null);
+        validateCreateRequest(content);
+        textSecurityService.assertTextSafe(content);
+        contentModerationService.assertTextAllowed(content);
+
         Post post = getActivePostForUpdate(postId);
 
         if (reportCountRepository != null
@@ -318,15 +324,9 @@ public class PostService {
                     "Post can only be edited within 1 hour of creation.");
         }
 
-        String content = normalizeContent(request != null ? request.content() : null);
-        validateCreateRequest(content);
-
         if (Objects.equals(post.getContent(), content)) {
             return postResponseAssembler.toPostDetail(post, user.getId());
         }
-
-        textSecurityService.assertTextSafe(content);
-        contentModerationService.assertTextAllowed(content);
 
         post.editContent(content);
         hashtagService.syncForPost(post);
@@ -399,14 +399,15 @@ public class PostService {
 
     public CommentResponse createComment(CustomUserPrincipal principal, UUID postId, CreateCommentRequest request) {
         User user = getCurrentUser(principal);
-        Post post = getActivePostForUpdate(postId);
         String content = normalizeContent(request.content());
 
         if (content == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Comment content is required.");
         }
+        // 외부 검열 호출 동안 게시물 행 잠금을 잡지 않도록 잠금 전에 검열한다.
         textSecurityService.assertTextSafe(content);
         contentModerationService.assertTextAllowed(content);
+        Post post = getActivePostForUpdate(postId);
 
         PostComment savedComment = postCommentRepository.save(PostComment.create(post, user, content));
         post.increaseCommentCount();

@@ -216,12 +216,12 @@ public class MessageService {
             SendMessageRequest request
     ) {
         User viewer = getCurrentUser(principal);
-        MessageConversation conversation = getActiveConversationForUpdate(conversationId);
-        MessageParticipant viewerParticipant = getParticipant(conversationId, viewer.getId());
-        Optional<DirectMessage> sentMessage =
+        // 잠금 전에 참여자 엔티티를 올리면 검열 중 나가기·재입장 변경이 잠금 뒤 조회에 반영되지 않아 존재 여부만 확인한다.
+        ensureParticipant(conversationId, viewer.getId());
+        Optional<DirectMessage> alreadySentMessage =
                 findSentMessage(viewer.getId(), conversationId, request.clientMessageId());
-        if (sentMessage.isPresent()) {
-            return toMessageResponse(sentMessage.get(), viewer.getId());
+        if (alreadySentMessage.isPresent()) {
+            return toMessageResponse(alreadySentMessage.get(), viewer.getId());
         }
 
         String content = normalizeContent(request.content());
@@ -230,6 +230,16 @@ public class MessageService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message content or shared post is required.");
         }
         validateMessageContent(content);
+
+        MessageConversation conversation = getActiveConversationForUpdate(conversationId);
+        MessageParticipant viewerParticipant = getParticipant(conversationId, viewer.getId());
+
+        // 검열 중에 같은 키 요청이 먼저 저장됐을 수 있어 대화 잠금 뒤 다시 확인한다.
+        Optional<DirectMessage> sentMessage =
+                findSentMessage(viewer.getId(), conversationId, request.clientMessageId());
+        if (sentMessage.isPresent()) {
+            return toMessageResponse(sentMessage.get(), viewer.getId());
+        }
 
         DirectMessage savedMessage = saveMessage(
                 conversation,
@@ -250,8 +260,8 @@ public class MessageService {
             SendMultipartMessageRequest request
     ) {
         User viewer = getCurrentUser(principal);
-        MessageConversation conversation = getActiveConversation(conversationId);
-        MessageParticipant viewerParticipant = getParticipant(conversationId, viewer.getId());
+        // 잠금 전에 참여자 엔티티를 올리면 검열 중 나가기·재입장 변경이 잠금 뒤 조회에 반영되지 않아 존재 여부만 확인한다.
+        ensureParticipant(conversationId, viewer.getId());
         UUID clientMessageId = request.getClientMessageId();
         Optional<DirectMessage> alreadySentMessage = findSentMessage(viewer.getId(), conversationId, clientMessageId);
         if (alreadySentMessage.isPresent()) {
@@ -269,8 +279,8 @@ public class MessageService {
         validateMultipartMessageContent(content, attachments);
         List<PreparedMessageAttachment> preparedAttachments = prepareAttachments(attachments);
 
-        conversation = getActiveConversationForUpdate(conversationId);
-        viewerParticipant = getParticipant(conversationId, viewer.getId());
+        MessageConversation conversation = getActiveConversationForUpdate(conversationId);
+        MessageParticipant viewerParticipant = getParticipant(conversationId, viewer.getId());
 
         List<MessageAttachmentStorageService.StoredFile> storedFiles = new ArrayList<>();
         try {

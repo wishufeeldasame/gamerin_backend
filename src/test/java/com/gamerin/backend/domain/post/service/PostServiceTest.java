@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
@@ -707,7 +709,6 @@ class PostServiceTest {
         Post post = savedPost(postId, user);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
         doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                 "Content violates moderation policy: harassment"))
                 .when(contentModerationService)
@@ -721,6 +722,7 @@ class PostServiceTest {
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
 
+        verify(postRepository, never()).findActiveByIdForUpdate(any());
         verify(postCommentRepository, never()).save(any());
     }
 
@@ -758,6 +760,10 @@ class PostServiceTest {
         verify(postCommentRepository).save(commentCaptor.capture());
         verify(notificationCommandService).createComment(commentCaptor.getValue(), post, actor);
         verify(mentionService).attachToComment(commentCaptor.getValue());
+        // 검열은 게시물 행 잠금보다 먼저 수행된다.
+        InOrder inOrder = inOrder(contentModerationService, postRepository);
+        inOrder.verify(contentModerationService).assertTextAllowed("hello");
+        inOrder.verify(postRepository).findActiveByIdForUpdate(postId);
         assertThat(actual).isEqualTo(response);
         assertThat(post.getCommentCount()).isEqualTo(1);
     }
@@ -861,13 +867,16 @@ class PostServiceTest {
         assertThat(post.getContent()).isEqualTo("new #valorant @friend2");
         assertThat(post.getEditCount()).isEqualTo(1);
         verify(textSecurityService).assertTextSafe("new #valorant @friend2");
-        verify(contentModerationService).assertTextAllowed("new #valorant @friend2");
+        // 검열은 게시물 행 잠금보다 먼저 수행된다.
+        InOrder inOrder = inOrder(contentModerationService, postRepository);
+        inOrder.verify(contentModerationService).assertTextAllowed("new #valorant @friend2");
+        inOrder.verify(postRepository).findActiveByIdForUpdate(postId);
         verify(hashtagService).syncForPost(post);
         verify(mentionService).attachToPost(post);
     }
 
     @Test
-    void updateDoesNotDeductEditCountOrRunModerationWhenNormalizedContentIsUnchanged() {
+    void updateDoesNotDeductEditCountWhenNormalizedContentIsUnchanged() {
         UUID userId = UUID.randomUUID();
         UUID postId = UUID.randomUUID();
         User author = savedUser(userId, "author", "Author");
@@ -888,8 +897,7 @@ class PostServiceTest {
 
         assertThat(actual).isSameAs(response);
         assertThat(post.getEditCount()).isZero();
-        verify(textSecurityService, never()).assertTextSafe(any());
-        verify(contentModerationService, never()).assertTextAllowed(any());
+        verify(contentModerationService).assertTextAllowed("same content");
         verify(hashtagService, never()).syncForPost(any());
         verify(mentionService, never()).attachToPost(any());
     }
@@ -1024,10 +1032,6 @@ class PostServiceTest {
         Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(15));
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
-        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
-        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
-                .thenReturn(false);
-        when(membershipService.isActive(userId)).thenReturn(true);
         doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                 "Content violates moderation policy: violence"))
                 .when(contentModerationService)
@@ -1043,6 +1047,7 @@ class PostServiceTest {
 
         assertThat(post.getContent()).isEqualTo("original");
         assertThat(post.getEditCount()).isZero();
+        verify(postRepository, never()).findActiveByIdForUpdate(any());
         verify(hashtagService, never()).syncForPost(any());
         verify(mentionService, never()).attachToPost(any());
     }

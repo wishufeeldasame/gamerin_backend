@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -475,6 +477,10 @@ class MessageServiceTest {
         MessageParticipant recipientParticipant = participant(conversation, recipient);
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(true);
         when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
@@ -530,12 +536,10 @@ class MessageServiceTest {
         MessageParticipant viewerParticipant = participant(conversation, viewer);
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
-                .thenReturn(Optional.of(conversation));
-        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
                 viewer.getId()
-        )).thenReturn(Optional.of(viewerParticipant));
+        )).thenReturn(true);
         doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: harassment"))
                 .when(contentModerationService)
                 .assertTextAllowed("bad message");
@@ -550,7 +554,82 @@ class MessageServiceTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
 
         verify(textSecurityService).assertTextSafe("bad message");
+        verify(messageParticipantRepository, never()).findByConversationIdAndUserIdAndDeletedAtIsNull(any(), any());
+        verify(messageConversationRepository, never()).findActiveByIdForUpdate(any());
         verify(directMessageRepository, never()).save(any(DirectMessage.class));
+    }
+
+    @Test
+    void sendMessageRejectsNonParticipantBeforeModerationAndLock() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(false);
+
+        assertThatThrownBy(() -> messageService.sendMessage(
+                CustomUserPrincipal.from(viewer),
+                conversation.getId(),
+                new SendMessageRequest("hello", null)
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.FORBIDDEN.value());
+
+        verify(contentModerationService, never()).assertTextAllowed(any());
+        verify(messageConversationRepository, never()).findActiveByIdForUpdate(any());
+        verify(directMessageRepository, never()).save(any(DirectMessage.class));
+    }
+
+    @Test
+    void sendMessageLoadsParticipantEntityOnlyOnceAfterModerationAndLock() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(true);
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(messageParticipantRepository.findByConversationId(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant));
+        when(directMessageRepository.save(any(DirectMessage.class)))
+                .thenAnswer(invocation -> {
+                    DirectMessage message = invocation.getArgument(0);
+                    ReflectionTestUtils.setField(message, "id", UUID.randomUUID());
+                    ReflectionTestUtils.setField(message, "createdAt", OffsetDateTime.now());
+                    return message;
+                });
+        when(messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant));
+        when(directMessageAttachmentRepository.findByMessageIds(any())).thenReturn(List.of());
+
+        messageService.sendMessage(
+                CustomUserPrincipal.from(viewer),
+                conversation.getId(),
+                new SendMessageRequest("hello", null)
+        );
+
+        // 잠금 전에 참여자 엔티티를 올리면 검열 중 변경이 잠금 뒤 조회에 반영되지 않는다.
+        InOrder inOrder = inOrder(messageParticipantRepository, contentModerationService, messageConversationRepository);
+        inOrder.verify(messageParticipantRepository)
+                .existsByConversationIdAndUserIdAndDeletedAtIsNull(conversation.getId(), viewer.getId());
+        inOrder.verify(contentModerationService).assertTextAllowed("hello");
+        inOrder.verify(messageConversationRepository).findActiveByIdForUpdate(conversation.getId());
+        inOrder.verify(messageParticipantRepository)
+                .findByConversationIdAndUserIdAndDeletedAtIsNull(conversation.getId(), viewer.getId());
+        verify(messageParticipantRepository)
+                .findByConversationIdAndUserIdAndDeletedAtIsNull(conversation.getId(), viewer.getId());
     }
 
     @Test
@@ -564,6 +643,10 @@ class MessageServiceTest {
         AtomicReference<DirectMessage> savedMessage = new AtomicReference<>();
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(true);
         when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
@@ -594,10 +677,55 @@ class MessageServiceTest {
         assertThat(first.clientMessageId()).isEqualTo(clientMessageId);
         assertThat(retried.clientMessageId()).isEqualTo(clientMessageId);
         verify(directMessageRepository).save(any(DirectMessage.class));
+        // 검열은 대화 행 잠금보다 먼저 수행된다.
+        InOrder inOrder = inOrder(contentModerationService, messageConversationRepository);
+        inOrder.verify(contentModerationService).assertTextAllowed("hello");
+        inOrder.verify(messageConversationRepository).findActiveByIdForUpdate(conversation.getId());
         verify(textSecurityService).assertTextSafe("hello");
         verify(contentModerationService).assertTextAllowed("hello");
         verify(notificationCommandService).createOrRefreshDirectMessage(any(), any(), any(), any());
         verify(messageRealtimeService, times(2)).publish(any(), any());
+    }
+
+    @Test
+    void sendMessageReturnsExistingMessageWhenSameClientMessageIdSavedDuringModeration() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        UUID clientMessageId = UUID.randomUUID();
+        DirectMessage concurrentMessage = DirectMessage.create(conversation, viewer, "hello", null, clientMessageId);
+        ReflectionTestUtils.setField(concurrentMessage, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(concurrentMessage, "createdAt", OffsetDateTime.now());
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(true);
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        // 잠금 전에는 없고 검열 중 다른 요청이 저장해 잠금 뒤에는 있다.
+        when(directMessageRepository.findBySenderIdAndClientMessageId(viewer.getId(), clientMessageId))
+                .thenReturn(Optional.empty(), Optional.of(concurrentMessage));
+        when(messageParticipantRepository.findByConversationId(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant));
+        when(directMessageAttachmentRepository.findByMessageIds(List.of(concurrentMessage.getId())))
+                .thenReturn(List.of());
+
+        var response = messageService.sendMessage(
+                CustomUserPrincipal.from(viewer),
+                conversation.getId(),
+                new SendMessageRequest("hello", null, clientMessageId)
+        );
+
+        assertThat(response.id()).isEqualTo(concurrentMessage.getId());
+        verify(contentModerationService).assertTextAllowed("hello");
+        verify(directMessageRepository, never()).save(any(DirectMessage.class));
+        verify(messageRealtimeService, never()).publish(any(), any());
     }
 
     @Test
@@ -609,12 +737,10 @@ class MessageServiceTest {
         DirectMessage otherConversationMessage = DirectMessage.create(conversation(), viewer, "hello", null, clientMessageId);
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
-                .thenReturn(Optional.of(conversation));
-        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
                 viewer.getId()
-        )).thenReturn(Optional.of(viewerParticipant));
+        )).thenReturn(true);
         when(directMessageRepository.findBySenderIdAndClientMessageId(viewer.getId(), clientMessageId))
                 .thenReturn(Optional.of(otherConversationMessage));
 
@@ -639,6 +765,10 @@ class MessageServiceTest {
         UUID clientMessageId = UUID.randomUUID();
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(true);
         when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
@@ -680,12 +810,10 @@ class MessageServiceTest {
         );
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
-                .thenReturn(Optional.of(conversation));
-        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
                 viewer.getId()
-        )).thenReturn(Optional.of(viewerParticipant));
+        )).thenReturn(true);
         when(directMessageRepository.findBySenderIdAndClientMessageId(viewer.getId(), clientMessageId))
                 .thenReturn(Optional.of(sentMessage));
         when(messageParticipantRepository.findByConversationId(conversation.getId()))
@@ -761,6 +889,17 @@ class MessageServiceTest {
         verify(mediaUploadSecurityService).prepareImage(imageFile);
         verify(messageAttachmentStorageService).store(preparedImage);
 
+        // 참여자 엔티티는 잠금 뒤에 한 번만 조회한다.
+        InOrder inOrder = inOrder(messageParticipantRepository, contentModerationService, messageConversationRepository);
+        inOrder.verify(messageParticipantRepository)
+                .existsByConversationIdAndUserIdAndDeletedAtIsNull(conversation.getId(), viewer.getId());
+        inOrder.verify(contentModerationService).assertMessageAllowed("screenshot", List.of(imageFile));
+        inOrder.verify(messageConversationRepository).findActiveByIdForUpdate(conversation.getId());
+        inOrder.verify(messageParticipantRepository)
+                .findByConversationIdAndUserIdAndDeletedAtIsNull(conversation.getId(), viewer.getId());
+        verify(messageParticipantRepository)
+                .findByConversationIdAndUserIdAndDeletedAtIsNull(conversation.getId(), viewer.getId());
+
         ArgumentCaptor<List<DirectMessageAttachment>> attachmentCaptor = ArgumentCaptor.forClass(List.class);
         verify(directMessageAttachmentRepository).saveAll(attachmentCaptor.capture());
         DirectMessageAttachment attachment = attachmentCaptor.getValue().getFirst();
@@ -782,12 +921,10 @@ class MessageServiceTest {
         );
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
-                .thenReturn(Optional.of(conversation));
-        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
                 viewer.getId()
-        )).thenReturn(Optional.of(viewerParticipant));
+        )).thenReturn(true);
         doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Image file must be JPEG or PNG."))
                 .when(mediaUploadSecurityService)
                 .assertImageFileSafe(fakeImage);
@@ -824,12 +961,10 @@ class MessageServiceTest {
         );
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
-                .thenReturn(Optional.of(conversation));
-        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
                 viewer.getId()
-        )).thenReturn(Optional.of(viewerParticipant));
+        )).thenReturn(true);
         doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: sexual"))
                 .when(contentModerationService)
                 .assertMessageAllowed(eq("blocked"), anyList());
@@ -1024,8 +1159,10 @@ class MessageServiceTest {
             MessageParticipant recipientParticipant
     ) {
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
-                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(true);
         when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
