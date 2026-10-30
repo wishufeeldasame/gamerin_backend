@@ -12,7 +12,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -76,6 +78,7 @@ public class PostService {
     private final PostVideoJobService postVideoJobService;
     private final MembershipService membershipService;
     private final ReportCountRepository reportCountRepository;
+    private final TransactionTemplate transactionTemplate;
     private final Clock clock;
     private final long maxVideoFileSizeBytes;
 
@@ -120,6 +123,7 @@ public class PostService {
                 postVideoJobService,
                 null,
                 null,
+                null,
                 Clock.systemUTC(),
                 maxVideoFileSizeBytes);
     }
@@ -146,6 +150,7 @@ public class PostService {
             PostVideoJobService postVideoJobService,
             MembershipService membershipService,
             ReportCountRepository reportCountRepository,
+            TransactionTemplate transactionTemplate,
             @Value("${app.media.video.max-file-size-bytes:524288000}") long maxVideoFileSizeBytes) {
         this(
                 userRepository,
@@ -168,6 +173,7 @@ public class PostService {
                 postVideoJobService,
                 membershipService,
                 reportCountRepository,
+                transactionTemplate,
                 Clock.systemUTC(),
                 maxVideoFileSizeBytes);
     }
@@ -193,6 +199,7 @@ public class PostService {
             PostVideoJobService postVideoJobService,
             MembershipService membershipService,
             ReportCountRepository reportCountRepository,
+            TransactionTemplate transactionTemplate,
             Clock clock,
             long maxVideoFileSizeBytes) {
         if (maxVideoFileSizeBytes < 1) {
@@ -219,6 +226,7 @@ public class PostService {
         this.postVideoJobService = postVideoJobService;
         this.membershipService = membershipService;
         this.reportCountRepository = reportCountRepository;
+        this.transactionTemplate = transactionTemplate;
         this.clock = clock != null ? clock : Clock.systemUTC();
         this.maxVideoFileSizeBytes = maxVideoFileSizeBytes;
     }
@@ -291,48 +299,54 @@ public class PostService {
      * - E5: 생성과 동일한 텍스트 검사 및 ContentModerationService 검열 재적용 (행 잠금 전에 수행, 실패 시 edit_count 미차감)
      * - E6: 해시태그·멘션 재파싱, 새로 추가된 멘션만 알림 생성, 제거된 멘션 알림 유지
      */
+    // 외부 검열 동안 커넥션을 잡지 않도록 트랜잭션 없이 시작하고, 잠금·쓰기만 transactionTemplate으로 묶는다(바깥 트랜잭션이 있으면 참여).
+    @Transactional(propagation = Propagation.SUPPORTS)
     public PostDetailResponse update(CustomUserPrincipal principal, UUID postId, UpdatePostRequest request) {
-        User user = getCurrentUser(principal);
+        // 사용자 검증은 짧은 트랜잭션으로 하고(바깥 범위에서 조회하면 세션이 커넥션을 쥔다) 엔티티는 쓰기 트랜잭션에서 다시 조회한다.
+        transactionTemplate.execute(status -> getCurrentUser(principal));
         // 외부 검열 호출 동안 행 잠금을 잡지 않도록 잠금 전에 본문 검사·검열을 끝낸다.
         String content = normalizeContent(request != null ? request.content() : null);
         validateCreateRequest(content);
         textSecurityService.assertTextSafe(content);
         contentModerationService.assertTextAllowed(content);
 
-        Post post = getActivePostForUpdate(postId);
+        return transactionTemplate.execute(status -> {
+            User user = getCurrentUser(principal);
+            Post post = getActivePostForUpdate(postId);
 
-        if (reportCountRepository != null
-                && reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found.");
-        }
+            if (reportCountRepository != null
+                    && reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId)) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found.");
+            }
 
-        if (!post.getAuthor().getId().equals(user.getId())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the author can edit this post.");
-        }
+            if (!post.getAuthor().getId().equals(user.getId())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the author can edit this post.");
+            }
 
-        if (membershipService == null || !membershipService.isActive(user.getId())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Active membership is required to edit posts.");
-        }
+            if (membershipService == null || !membershipService.isActive(user.getId())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Active membership is required to edit posts.");
+            }
 
-        if (post.getEditCount() >= Post.MAX_EDIT_COUNT) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Post can only be edited once.");
-        }
+            if (post.getEditCount() >= Post.MAX_EDIT_COUNT) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Post can only be edited once.");
+            }
 
-        OffsetDateTime editableUntil = post.editableUntil();
-        if (editableUntil == null || OffsetDateTime.now(clock).isAfter(editableUntil)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Post can only be edited within 1 hour of creation.");
-        }
+            OffsetDateTime editableUntil = post.editableUntil();
+            if (editableUntil == null || OffsetDateTime.now(clock).isAfter(editableUntil)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Post can only be edited within 1 hour of creation.");
+            }
 
-        if (Objects.equals(post.getContent(), content)) {
+            if (Objects.equals(post.getContent(), content)) {
+                return postResponseAssembler.toPostDetail(post, user.getId());
+            }
+
+            post.editContent(content);
+            hashtagService.syncForPost(post);
+            mentionService.attachToPost(post);
+
             return postResponseAssembler.toPostDetail(post, user.getId());
-        }
-
-        post.editContent(content);
-        hashtagService.syncForPost(post);
-        mentionService.attachToPost(post);
-
-        return postResponseAssembler.toPostDetail(post, user.getId());
+        });
     }
 
     @Transactional(readOnly = true)
@@ -397,8 +411,11 @@ public class PostService {
         return new ShareResponse(post.getId(), post.getShareCount());
     }
 
+    // 외부 검열 동안 커넥션을 잡지 않도록 트랜잭션 없이 시작하고, 잠금·쓰기만 transactionTemplate으로 묶는다(바깥 트랜잭션이 있으면 참여).
+    @Transactional(propagation = Propagation.SUPPORTS)
     public CommentResponse createComment(CustomUserPrincipal principal, UUID postId, CreateCommentRequest request) {
-        User user = getCurrentUser(principal);
+        // 사용자 검증은 짧은 트랜잭션으로 하고(바깥 범위에서 조회하면 세션이 커넥션을 쥔다) 엔티티는 쓰기 트랜잭션에서 다시 조회한다.
+        transactionTemplate.execute(status -> getCurrentUser(principal));
         String content = normalizeContent(request.content());
 
         if (content == null) {
@@ -407,13 +424,17 @@ public class PostService {
         // 외부 검열 호출 동안 게시물 행 잠금을 잡지 않도록 잠금 전에 검열한다.
         textSecurityService.assertTextSafe(content);
         contentModerationService.assertTextAllowed(content);
-        Post post = getActivePostForUpdate(postId);
 
-        PostComment savedComment = postCommentRepository.save(PostComment.create(post, user, content));
-        post.increaseCommentCount();
-        notificationCommandService.createComment(savedComment, post, user);
-        mentionService.attachToComment(savedComment);
-        return postResponseAssembler.toCommentResponse(savedComment, user.getId());
+        return transactionTemplate.execute(status -> {
+            User user = getCurrentUser(principal);
+            Post post = getActivePostForUpdate(postId);
+
+            PostComment savedComment = postCommentRepository.save(PostComment.create(post, user, content));
+            post.increaseCommentCount();
+            notificationCommandService.createComment(savedComment, post, user);
+            mentionService.attachToComment(savedComment);
+            return postResponseAssembler.toCommentResponse(savedComment, user.getId());
+        });
     }
 
     @Transactional(readOnly = true)

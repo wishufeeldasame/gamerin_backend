@@ -32,8 +32,10 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -121,6 +123,9 @@ class MessageServiceTest {
     @Mock
     private MembershipService membershipService;
 
+    @Mock
+    private PlatformTransactionManager transactionManager;
+
     private MessageService messageService;
 
     @BeforeEach
@@ -143,7 +148,8 @@ class MessageServiceTest {
                 videoOptimizationService,
                 sseStreamTokenService,
                 notificationCommandService,
-                membershipService
+                membershipService,
+                new TransactionTemplate(transactionManager)
         );
     }
 
@@ -554,6 +560,8 @@ class MessageServiceTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
 
         verify(textSecurityService).assertTextSafe("bad message");
+        // 사전 확인 트랜잭션 1회뿐이고 검열 거절 뒤에는 쓰기 트랜잭션을 열지 않는다.
+        verify(transactionManager, times(1)).getTransaction(any());
         verify(messageParticipantRepository, never()).findByConversationIdAndUserIdAndDeletedAtIsNull(any(), any());
         verify(messageConversationRepository, never()).findActiveByIdForUpdate(any());
         verify(directMessageRepository, never()).save(any(DirectMessage.class));
@@ -621,10 +629,15 @@ class MessageServiceTest {
         );
 
         // 잠금 전에 참여자 엔티티를 올리면 검열 중 변경이 잠금 뒤 조회에 반영되지 않는다.
-        InOrder inOrder = inOrder(messageParticipantRepository, contentModerationService, messageConversationRepository);
+        // 검열 구간에는 트랜잭션이 없고(사전 확인 트랜잭션은 검열 전에 끝남), 쓰기 트랜잭션은 검열 뒤에 시작된다.
+        InOrder inOrder = inOrder(
+                transactionManager, messageParticipantRepository, contentModerationService, messageConversationRepository);
+        inOrder.verify(transactionManager).getTransaction(any());
         inOrder.verify(messageParticipantRepository)
                 .existsByConversationIdAndUserIdAndDeletedAtIsNull(conversation.getId(), viewer.getId());
+        inOrder.verify(transactionManager).commit(any());
         inOrder.verify(contentModerationService).assertTextAllowed("hello");
+        inOrder.verify(transactionManager).getTransaction(any());
         inOrder.verify(messageConversationRepository).findActiveByIdForUpdate(conversation.getId());
         inOrder.verify(messageParticipantRepository)
                 .findByConversationIdAndUserIdAndDeletedAtIsNull(conversation.getId(), viewer.getId());
@@ -726,6 +739,49 @@ class MessageServiceTest {
         verify(contentModerationService).assertTextAllowed("hello");
         verify(directMessageRepository, never()).save(any(DirectMessage.class));
         verify(messageRealtimeService, never()).publish(any(), any());
+    }
+
+    @Test
+    void sendMessageReturnsExistingMessageEvenIfSharedPostDeletedDuringModeration() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        Post sharedPost = post(viewer);
+        UUID clientMessageId = UUID.randomUUID();
+        DirectMessage concurrentMessage = DirectMessage.create(conversation, viewer, "hello", sharedPost, clientMessageId);
+        ReflectionTestUtils.setField(concurrentMessage, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(concurrentMessage, "createdAt", OffsetDateTime.now());
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(true);
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(directMessageRepository.findBySenderIdAndClientMessageId(viewer.getId(), clientMessageId))
+                .thenReturn(Optional.empty(), Optional.of(concurrentMessage));
+        // 검열 중 공유 게시물이 삭제돼 잠금 뒤 조회는 404가 되지만, 이미 저장된 메시지를 먼저 반환해야 한다.
+        when(postRepository.findByIdAndDeletedAtIsNull(sharedPost.getId()))
+                .thenReturn(Optional.of(sharedPost), Optional.empty());
+        when(messageParticipantRepository.findByConversationId(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant));
+        when(directMessageAttachmentRepository.findByMessageIds(List.of(concurrentMessage.getId())))
+                .thenReturn(List.of());
+
+        var response = messageService.sendMessage(
+                CustomUserPrincipal.from(viewer),
+                conversation.getId(),
+                new SendMessageRequest("hello", sharedPost.getId(), clientMessageId)
+        );
+
+        assertThat(response.id()).isEqualTo(concurrentMessage.getId());
+        verify(postRepository, times(1)).findByIdAndDeletedAtIsNull(sharedPost.getId());
+        verify(directMessageRepository, never()).save(any(DirectMessage.class));
     }
 
     @Test
@@ -890,10 +946,14 @@ class MessageServiceTest {
         verify(messageAttachmentStorageService).store(preparedImage);
 
         // 참여자 엔티티는 잠금 뒤에 한 번만 조회한다.
-        InOrder inOrder = inOrder(messageParticipantRepository, contentModerationService, messageConversationRepository);
+        InOrder inOrder = inOrder(
+                transactionManager, messageParticipantRepository, contentModerationService, messageConversationRepository);
+        inOrder.verify(transactionManager).getTransaction(any());
         inOrder.verify(messageParticipantRepository)
                 .existsByConversationIdAndUserIdAndDeletedAtIsNull(conversation.getId(), viewer.getId());
+        inOrder.verify(transactionManager).commit(any());
         inOrder.verify(contentModerationService).assertMessageAllowed("screenshot", List.of(imageFile));
+        inOrder.verify(transactionManager).getTransaction(any());
         inOrder.verify(messageConversationRepository).findActiveByIdForUpdate(conversation.getId());
         inOrder.verify(messageParticipantRepository)
                 .findByConversationIdAndUserIdAndDeletedAtIsNull(conversation.getId(), viewer.getId());

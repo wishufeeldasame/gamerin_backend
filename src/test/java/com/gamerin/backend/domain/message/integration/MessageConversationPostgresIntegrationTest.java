@@ -1,12 +1,17 @@
 package com.gamerin.backend.domain.message.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import javax.sql.DataSource;
 
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
@@ -20,19 +25,24 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
+import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
 import com.gamerin.backend.domain.message.entity.DirectMessage;
 import com.gamerin.backend.domain.message.entity.DirectMessageAttachment;
 import com.gamerin.backend.domain.message.entity.MessageAttachmentType;
 import com.gamerin.backend.domain.message.entity.MessageConversation;
 import com.gamerin.backend.domain.message.repository.DirectMessageAttachmentRepository;
 import com.gamerin.backend.domain.message.service.MessageService;
+import com.gamerin.backend.domain.post.moderation.ContentModerationService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+import com.zaxxer.hikari.HikariDataSource;
 
 import jakarta.persistence.EntityManager;
 
@@ -56,6 +66,10 @@ class MessageConversationPostgresIntegrationTest {
     private DirectMessageAttachmentRepository directMessageAttachmentRepository;
     @Autowired
     private EntityManager entityManager;
+    @Autowired
+    private DataSource dataSource;
+    @MockitoSpyBean
+    private ContentModerationService contentModerationService;
 
     @DynamicPropertySource
     static void configurePostgres(DynamicPropertyRegistry registry) {
@@ -133,6 +147,39 @@ class MessageConversationPostgresIntegrationTest {
         assertThat(directMessageAttachmentRepository.findAccessibleActiveById(atClear, viewer.getId())).isEmpty();
         assertThat(directMessageAttachmentRepository.findAccessibleActiveById(afterClear, viewer.getId())).isPresent();
         assertThat(directMessageAttachmentRepository.findAccessibleActiveById(beforeClear, sender.getId())).isPresent();
+    }
+
+    /**
+     * #130: 외부 검열이 실행되는 동안 풀의 활성 커넥션이 0이어야 한다(검열을 트랜잭션 밖에서 수행).
+     * 클래스 트랜잭션이 커넥션을 잡지 않도록 테스트 트랜잭션을 중단하고, 커밋된 데이터는 직접 정리한다.
+     */
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void sendMessageDoesNotHoldConnectionDuringModeration() throws Exception {
+        try {
+            User sender = saveUser("sender");
+            User recipient = saveUser("recipient");
+            CustomUserPrincipal senderPrincipal = CustomUserPrincipal.from(sender);
+            UUID conversationId = messageService.createConversation(senderPrincipal,
+                    new CreateConversationRequest(null, recipient.getId())).id();
+
+            HikariDataSource hikari = dataSource.unwrap(HikariDataSource.class);
+            AtomicInteger activeDuringModeration = new AtomicInteger(-1);
+            doAnswer(invocation -> {
+                activeDuringModeration.set(hikari.getHikariPoolMXBean().getActiveConnections());
+                return null;
+            }).when(contentModerationService).assertTextAllowed(anyString());
+
+            messageService.sendMessage(senderPrincipal, conversationId, new SendMessageRequest("검열 중 커넥션 확인", null));
+
+            assertThat(activeDuringModeration.get()).isZero();
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from direct_messages where conversation_id = ?", Long.class, conversationId))
+                    .isEqualTo(1L);
+        } finally {
+            jdbcTemplate.execute("truncate table notifications, direct_messages, message_participants, "
+                    + "message_conversations, users cascade");
+        }
     }
 
     private UUID saveAttachment(MessageConversation conversation, User sender, OffsetDateTime createdAt) {
