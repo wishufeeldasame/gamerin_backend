@@ -7,14 +7,18 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +26,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -29,9 +34,12 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMultipartMessageRequest;
+import com.gamerin.backend.domain.message.dto.request.SharePostMessageRequest;
 import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
 import com.gamerin.backend.domain.message.entity.DirectMessage;
 import com.gamerin.backend.domain.message.entity.DirectMessageAttachment;
@@ -42,6 +50,7 @@ import com.gamerin.backend.domain.message.repository.DirectMessageAttachmentRepo
 import com.gamerin.backend.domain.message.repository.DirectMessageRepository;
 import com.gamerin.backend.domain.message.repository.MessageConversationRepository;
 import com.gamerin.backend.domain.message.repository.MessageParticipantRepository;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.moderation.ContentModerationService;
 import com.gamerin.backend.domain.post.repository.PostRepository;
@@ -104,6 +113,12 @@ class MessageServiceTest {
     @Mock
     private SseStreamTokenService sseStreamTokenService;
 
+    @Mock
+    private NotificationCommandService notificationCommandService;
+
+    @Mock
+    private MembershipService membershipService;
+
     private MessageService messageService;
 
     @BeforeEach
@@ -124,7 +139,9 @@ class MessageServiceTest {
                 textSecurityService,
                 videoMetadataService,
                 videoOptimizationService,
-                sseStreamTokenService
+                sseStreamTokenService,
+                notificationCommandService,
+                membershipService
         );
     }
 
@@ -136,6 +153,8 @@ class MessageServiceTest {
         DirectMessage message = message(conversation, viewer, "message");
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
                 viewer.getId()
@@ -167,6 +186,8 @@ class MessageServiceTest {
         );
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
                 viewer.getId()
@@ -208,6 +229,8 @@ class MessageServiceTest {
         MessageParticipant viewerParticipant = participant(conversation, viewer);
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
                 viewer.getId()
@@ -259,6 +282,121 @@ class MessageServiceTest {
     }
 
     @Test
+    void getConversationsEnrichesNestedRecipientsWithOneMembershipLookup() throws Exception {
+        User viewer = user("viewer");
+        User activeRecipient = user("active");
+        User inactiveRecipient = user("inactive");
+        MessageConversation first = conversation();
+        MessageConversation second = conversation();
+        MessageParticipant firstViewer = participant(first, viewer);
+        MessageParticipant secondViewer = participant(second, viewer);
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageParticipantRepository.findActiveByUserIdWithConversation(viewer.getId()))
+                .thenReturn(List.of(firstViewer, secondViewer));
+        when(messageParticipantRepository.findByConversationId(first.getId()))
+                .thenReturn(List.of(firstViewer, participant(first, activeRecipient)));
+        when(messageParticipantRepository.findByConversationId(second.getId()))
+                .thenReturn(List.of(secondViewer, participant(second, inactiveRecipient)));
+        when(membershipService.findActiveUserIds(List.of(activeRecipient.getId(), inactiveRecipient.getId())))
+                .thenReturn(Set.of(activeRecipient.getId()));
+
+        List<ConversationResponse> responses = messageService.getConversations(CustomUserPrincipal.from(viewer));
+
+        assertThat(responses).extracting(response -> response.recipient().membershipBadge())
+                .containsExactly(true, false);
+        var json = new ObjectMapper().findAndRegisterModules().valueToTree(responses);
+        assertThat(json.get(0).get("recipient").get("membershipBadge").booleanValue()).isTrue();
+        assertThat(json.get(1).get("recipient").get("membershipBadge").booleanValue()).isFalse();
+        assertThat(json.get(0).has("participants")).isFalse();
+        assertThat(responses).extracting(ConversationResponse::id).containsExactly(first.getId(), second.getId());
+        verify(membershipService).findActiveUserIds(List.of(activeRecipient.getId(), inactiveRecipient.getId()));
+        verify(membershipService, never()).isActive(any());
+    }
+
+    @Test
+    void getConversationsSkipsMembershipLookupForEmptyResult() {
+        User viewer = user("viewer");
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+
+        assertThat(messageService.getConversations(CustomUserPrincipal.from(viewer))).isEmpty();
+
+        verifyNoInteractions(membershipService);
+    }
+
+    @Test
+    void searchRecipientsAddsMembershipBadgesWithOneLookup() {
+        User viewer = user("viewer");
+        User active = user("active");
+        User inactive = user("inactive");
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(userRepository.searchMessageRecipients(eq(viewer.getId()), eq("recipient"), any()))
+                .thenReturn(List.of(active, inactive));
+        when(membershipService.findActiveUserIds(List.of(active.getId(), inactive.getId())))
+                .thenReturn(Set.of(active.getId()));
+
+        var responses = messageService.searchRecipients(CustomUserPrincipal.from(viewer), " recipient ", 20);
+
+        assertThat(responses).extracting(response -> response.membershipBadge()).containsExactly(true, false);
+        assertThat(responses).extracting(response -> response.id()).containsExactly(active.getId(), inactive.getId());
+        verify(membershipService).findActiveUserIds(List.of(active.getId(), inactive.getId()));
+        verify(membershipService, never()).isActive(any());
+    }
+
+    @Test
+    void searchRecipientsSkipsMembershipLookupForEmptyResult() {
+        User viewer = user("viewer");
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+
+        assertThat(messageService.searchRecipients(CustomUserPrincipal.from(viewer), "unknown", 20)).isEmpty();
+
+        verifyNoInteractions(membershipService);
+    }
+
+    @Test
+    void sharePostEnrichesRecipientsInRequestedOrderWithOneMembershipLookup() {
+        User viewer = user("viewer");
+        User active = user("active");
+        User inactive = user("inactive");
+        Post sharedPost = post(viewer);
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(postRepository.findByIdAndDeletedAtIsNull(sharedPost.getId())).thenReturn(Optional.of(sharedPost));
+        for (User recipient : List.of(active, inactive)) {
+            MessageConversation conversation = conversation();
+            MessageParticipant viewerParticipant = participant(conversation, viewer);
+            MessageParticipant recipientParticipant = participant(conversation, recipient);
+            List<MessageParticipant> participants = List.of(viewerParticipant, recipientParticipant);
+            List<String> orderedIds = new java.util.ArrayList<>(List.of(viewer.getId().toString(), recipient.getId().toString()));
+            orderedIds.sort(String::compareTo);
+            when(userRepository.findByIdAndDeletedAtIsNull(recipient.getId())).thenReturn(Optional.of(recipient));
+            when(messageConversationRepository.findActiveByDirectKeyForUpdate(String.join(":", orderedIds)))
+                    .thenReturn(Optional.of(conversation));
+            when(messageParticipantRepository.findByConversationIdAndUserId(conversation.getId(), viewer.getId()))
+                    .thenReturn(Optional.of(viewerParticipant));
+            when(messageParticipantRepository.findByConversationId(conversation.getId())).thenReturn(participants);
+            when(messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(conversation.getId()))
+                    .thenReturn(participants);
+        }
+        when(directMessageRepository.save(any(DirectMessage.class))).thenAnswer(invocation -> {
+            DirectMessage saved = invocation.getArgument(0);
+            ReflectionTestUtils.setField(saved, "id", UUID.randomUUID());
+            ReflectionTestUtils.setField(saved, "createdAt", OffsetDateTime.now());
+            return saved;
+        });
+        when(membershipService.findActiveUserIds(List.of(inactive.getId(), active.getId())))
+                .thenReturn(Set.of(active.getId()));
+
+        var responses = messageService.sharePost(CustomUserPrincipal.from(viewer),
+                new SharePostMessageRequest(sharedPost.getId(), null, List.of(inactive.getId(), active.getId()), null));
+
+        assertThat(responses).extracting(response -> response.recipient().id())
+                .containsExactly(inactive.getId(), active.getId());
+        assertThat(responses).extracting(response -> response.recipient().membershipBadge())
+                .containsExactly(false, true);
+        verify(membershipService).findActiveUserIds(List.of(inactive.getId(), active.getId()));
+        verify(membershipService, never()).isActive(any());
+    }
+
+    @Test
     void createConversationReactivatesDeletedParticipant() {
         User viewer = user("viewer");
         User recipient = user("recipient");
@@ -270,15 +408,16 @@ class MessageServiceTest {
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
         when(userRepository.findByIdAndDeletedAtIsNull(recipient.getId())).thenReturn(Optional.of(recipient));
-        when(messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(any()))
+        when(messageConversationRepository.findActiveByDirectKeyForUpdate(any()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserId(conversation.getId(), viewer.getId()))
                 .thenReturn(Optional.of(viewerParticipant));
         when(messageParticipantRepository.findByConversationId(conversation.getId()))
                 .thenReturn(List.of(viewerParticipant, recipientParticipant));
         when(directMessageRepository.findRecentActiveByConversationIdAfter(any(), any(), any())).thenReturn(List.of());
+        when(membershipService.isActive(recipient.getId())).thenReturn(true);
 
-        messageService.createConversation(
+        ConversationResponse response = messageService.createConversation(
                 CustomUserPrincipal.from(viewer),
                 new CreateConversationRequest(null, recipient.getId())
         );
@@ -286,6 +425,8 @@ class MessageServiceTest {
         assertThat(viewerParticipant.getDeletedAt()).isNull();
         assertThat(viewerParticipant.getClearedAt()).isEqualTo(clearedAt);
         assertThat(viewerParticipant.getLastReadAt()).isNotNull();
+        assertThat(response.recipient().membershipBadge()).isTrue();
+        verify(membershipService).isActive(recipient.getId());
         verify(messageConversationRepository).insertDirectConversationIfAbsent(any());
         verify(messageParticipantRepository).insertParticipantIfAbsent(conversation.getId(), viewer.getId());
         verify(messageParticipantRepository).insertParticipantIfAbsent(conversation.getId(), recipient.getId());
@@ -305,7 +446,7 @@ class MessageServiceTest {
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
         when(userRepository.findByIdAndDeletedAtIsNull(recipient.getId())).thenReturn(Optional.of(recipient));
-        when(messageConversationRepository.findByDirectKeyAndDeletedAtIsNull(any()))
+        when(messageConversationRepository.findActiveByDirectKeyForUpdate(any()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserId(conversation.getId(), viewer.getId()))
                 .thenReturn(Optional.of(viewerParticipant));
@@ -313,7 +454,7 @@ class MessageServiceTest {
                 .thenReturn(List.of(viewerParticipant, recipientParticipant));
         when(directMessageRepository.findRecentActiveByConversationId(any(), any())).thenReturn(List.of());
 
-        messageService.createConversation(
+        ConversationResponse response = messageService.createConversation(
                 CustomUserPrincipal.from(viewer),
                 new CreateConversationRequest(null, recipient.getId())
         );
@@ -321,6 +462,7 @@ class MessageServiceTest {
         assertThat(recipientParticipant.getDeletedAt()).isNotNull();
         assertThat(recipientParticipant.getClearedAt()).isEqualTo(recipientClearedAt);
         assertThat(recipientParticipant.getLastReadAt()).isNull();
+        assertThat(response.recipient().membershipBadge()).isFalse();
     }
 
     @Test
@@ -333,7 +475,7 @@ class MessageServiceTest {
         MessageParticipant recipientParticipant = participant(conversation, recipient);
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
@@ -364,6 +506,8 @@ class MessageServiceTest {
             ArgumentCaptor<DirectMessage> messageCaptor = ArgumentCaptor.forClass(DirectMessage.class);
             verify(directMessageRepository).save(messageCaptor.capture());
             assertThat(messageCaptor.getValue().getContent()).isEqualTo("");
+            assertThat(messageCaptor.getValue().getClientMessageId()).isNull();
+            verify(directMessageRepository, never()).findBySenderIdAndClientMessageId(any(), any());
             verify(messageRealtimeService, never()).publish(any(), any());
 
             List<TransactionSynchronization> synchronizations =
@@ -386,7 +530,7 @@ class MessageServiceTest {
         MessageParticipant viewerParticipant = participant(conversation, viewer);
 
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
-        when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),
@@ -407,6 +551,177 @@ class MessageServiceTest {
 
         verify(textSecurityService).assertTextSafe("bad message");
         verify(directMessageRepository, never()).save(any(DirectMessage.class));
+    }
+
+    @Test
+    void sendMessageRetryWithSameClientMessageIdReturnsSavedMessageAndModeratesOnce() {
+        User viewer = user("viewer");
+        User recipient = user("recipient");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        MessageParticipant recipientParticipant = participant(conversation, recipient);
+        UUID clientMessageId = UUID.randomUUID();
+        AtomicReference<DirectMessage> savedMessage = new AtomicReference<>();
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(directMessageRepository.findBySenderIdAndClientMessageId(viewer.getId(), clientMessageId))
+                .thenAnswer(invocation -> Optional.ofNullable(savedMessage.get()));
+        when(messageParticipantRepository.findByConversationId(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant, recipientParticipant));
+        when(directMessageRepository.save(any(DirectMessage.class)))
+                .thenAnswer(invocation -> {
+                    DirectMessage message = invocation.getArgument(0);
+                    ReflectionTestUtils.setField(message, "id", UUID.randomUUID());
+                    ReflectionTestUtils.setField(message, "createdAt", OffsetDateTime.now());
+                    savedMessage.set(message);
+                    return message;
+                });
+        when(messageParticipantRepository.findByConversationIdAndDeletedAtIsNull(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant, recipientParticipant));
+        when(directMessageAttachmentRepository.findByMessageIds(any())).thenReturn(List.of());
+
+        SendMessageRequest request = new SendMessageRequest(" hello ", null, clientMessageId);
+        var first = messageService.sendMessage(CustomUserPrincipal.from(viewer), conversation.getId(), request);
+        var retried = messageService.sendMessage(CustomUserPrincipal.from(viewer), conversation.getId(), request);
+
+        assertThat(retried.id()).isEqualTo(first.id());
+        assertThat(first.clientMessageId()).isEqualTo(clientMessageId);
+        assertThat(retried.clientMessageId()).isEqualTo(clientMessageId);
+        verify(directMessageRepository).save(any(DirectMessage.class));
+        verify(textSecurityService).assertTextSafe("hello");
+        verify(contentModerationService).assertTextAllowed("hello");
+        verify(notificationCommandService).createOrRefreshDirectMessage(any(), any(), any(), any());
+        verify(messageRealtimeService, times(2)).publish(any(), any());
+    }
+
+    @Test
+    void sendMessageRejectsClientMessageIdUsedInAnotherConversation() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        UUID clientMessageId = UUID.randomUUID();
+        DirectMessage otherConversationMessage = DirectMessage.create(conversation(), viewer, "hello", null, clientMessageId);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(directMessageRepository.findBySenderIdAndClientMessageId(viewer.getId(), clientMessageId))
+                .thenReturn(Optional.of(otherConversationMessage));
+
+        assertThatThrownBy(() -> messageService.sendMessage(
+                CustomUserPrincipal.from(viewer),
+                conversation.getId(),
+                new SendMessageRequest("hello", null, clientMessageId)
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.CONFLICT.value());
+
+        verifyNoInteractions(contentModerationService);
+        verify(directMessageRepository, never()).save(any(DirectMessage.class));
+    }
+
+    @Test
+    void sendMessageMapsConcurrentClientMessageIdCollisionToConflict() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        UUID clientMessageId = UUID.randomUUID();
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(messageParticipantRepository.findByConversationId(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant));
+        when(directMessageRepository.save(any(DirectMessage.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        doThrow(new DataIntegrityViolationException(
+                "duplicate key value violates unique constraint \"uk_direct_messages_sender_client_message_id\""
+        )).when(directMessageRepository).flush();
+
+        assertThatThrownBy(() -> messageService.sendMessage(
+                CustomUserPrincipal.from(viewer),
+                conversation.getId(),
+                new SendMessageRequest("hello", null, clientMessageId)
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.CONFLICT.value());
+        verify(notificationCommandService, never()).createOrRefreshDirectMessage(any(), any(), any(), any());
+    }
+
+    @Test
+    void sendMultipartMessageRetryWithSameClientMessageIdSkipsValidationAndStorage() {
+        User viewer = user("viewer");
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        UUID clientMessageId = UUID.randomUUID();
+        DirectMessage sentMessage = DirectMessage.create(conversation, viewer, "screenshot", null, clientMessageId);
+        ReflectionTestUtils.setField(sentMessage, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(sentMessage, "createdAt", OffsetDateTime.now());
+        MockMultipartFile imageFile = new MockMultipartFile(
+                "attachments",
+                "screenshot.png",
+                "image/png",
+                "image".getBytes()
+        );
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(directMessageRepository.findBySenderIdAndClientMessageId(viewer.getId(), clientMessageId))
+                .thenReturn(Optional.of(sentMessage));
+        when(messageParticipantRepository.findByConversationId(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant));
+        when(directMessageAttachmentRepository.findByMessageIds(List.of(sentMessage.getId()))).thenReturn(List.of());
+
+        SendMultipartMessageRequest request = new SendMultipartMessageRequest();
+        request.setContent("screenshot");
+        request.setAttachments(List.of(imageFile));
+        request.setClientMessageId(clientMessageId);
+
+        var response = messageService.sendMultipartMessage(CustomUserPrincipal.from(viewer), conversation.getId(), request);
+
+        assertThat(response.id()).isEqualTo(sentMessage.getId());
+        assertThat(response.clientMessageId()).isEqualTo(clientMessageId);
+        verifyNoInteractions(contentModerationService, mediaUploadSecurityService, messageAttachmentStorageService);
+        verify(messageConversationRepository, never()).findActiveByIdForUpdate(any());
+        verify(directMessageRepository, never()).save(any(DirectMessage.class));
+    }
+
+    @Test
+    void messageResponseExposesClientMessageIdOnlyToSender() {
+        User sender = user("sender");
+        User recipient = user("recipient");
+        MessageConversation conversation = conversation();
+        List<MessageParticipant> participants = List.of(participant(conversation, sender), participant(conversation, recipient));
+        UUID clientMessageId = UUID.randomUUID();
+        DirectMessage message = DirectMessage.create(conversation, sender, "hello", null, clientMessageId);
+        ReflectionTestUtils.setField(message, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(message, "createdAt", OffsetDateTime.now());
+        MessageResponseAssembler assembler = new MessageResponseAssembler();
+
+        assertThat(assembler.toMessage(message, sender.getId(), List.of(), participants).clientMessageId())
+                .isEqualTo(clientMessageId);
+        assertThat(assembler.toMessage(message, recipient.getId(), List.of(), participants).clientMessageId())
+                .isNull();
     }
 
     @Test
@@ -710,6 +1025,8 @@ class MessageServiceTest {
     ) {
         when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
         when(messageConversationRepository.findByIdAndDeletedAtIsNull(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
                 .thenReturn(Optional.of(conversation));
         when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
                 conversation.getId(),

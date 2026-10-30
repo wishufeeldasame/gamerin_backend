@@ -3,11 +3,14 @@ package com.gamerin.backend.domain.post.controller;
 import java.util.List;
 import java.util.UUID;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -18,10 +21,14 @@ import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
+import com.gamerin.backend.domain.post.dto.request.UpdatePostRequest;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
+import com.gamerin.backend.domain.post.dto.response.PostVideoJobResponse;
 import com.gamerin.backend.domain.post.dto.response.ShareResponse;
 import com.gamerin.backend.domain.post.service.PostService;
+import com.gamerin.backend.domain.repost.dto.response.RepostActionResponse;
+import com.gamerin.backend.domain.repost.service.PostRepostService;
 import com.gamerin.backend.global.response.ApiResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
@@ -34,40 +41,64 @@ import jakarta.validation.Valid;
 public class PostController {
 
     private final PostService postService;
+    private final PostRepostService postRepostService;
 
-    public PostController(PostService postService) {
+    public PostController(PostService postService, PostRepostService postRepostService) {
         this.postService = postService;
+        this.postRepostService = postRepostService;
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public ApiResponse<PostDetailResponse> create(
             @AuthenticationPrincipal CustomUserPrincipal principal,
-            @Valid @RequestBody CreatePostRequest request
-    ) {
+            @Valid @RequestBody CreatePostRequest request) {
         return ApiResponse.ok(postService.create(principal, request));
     }
 
+    /**
+     * 사진 게시물은 200과 게시물을, 영상 게시물은 202와 처리 작업을 반환한다.
+     * 영상은 처리가 끝나면 게시물이 만들어지므로 {@code GET /video-jobs/{jobId}}로 상태를 확인한다.
+     */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<PostDetailResponse> createWithFiles(
+    public ResponseEntity<ApiResponse<?>> createWithFiles(
             @AuthenticationPrincipal CustomUserPrincipal principal,
-            @Valid @ModelAttribute CreateMultipartPostRequest request
-    ) {
-        return ApiResponse.ok(postService.create(principal, request));
+            @Valid @ModelAttribute CreateMultipartPostRequest request) {
+        PostService.MultipartCreateResult result = postService.create(principal, request);
+        if (result.videoJob() != null) {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.ok(result.videoJob()));
+        }
+        return ResponseEntity.ok(ApiResponse.ok(result.post()));
+    }
+
+    @GetMapping("/video-jobs/{jobId}")
+    public ApiResponse<PostVideoJobResponse> getVideoJob(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID jobId) {
+        return ApiResponse.ok(postService.getVideoJob(principal, jobId));
+    }
+
+    /**
+     * KP-C3 (#92): 멤버십 게시물 본문 수정 API (E1).
+     */
+    @PatchMapping(value = "/{postId}", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ApiResponse<PostDetailResponse> update(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId,
+            @Valid @RequestBody UpdatePostRequest request) {
+        return ApiResponse.ok(postService.update(principal, postId, request));
     }
 
     @GetMapping("/{postId}")
     public ApiResponse<PostDetailResponse> getDetail(
             @AuthenticationPrincipal CustomUserPrincipal principal,
-            @PathVariable UUID postId
-    ) {
+            @PathVariable UUID postId) {
         return ApiResponse.ok(postService.getDetail(principal, postId));
     }
 
     @DeleteMapping("/{postId}")
     public ApiResponse<Void> delete(
             @AuthenticationPrincipal CustomUserPrincipal principal,
-            @PathVariable UUID postId
-    ) {
+            @PathVariable UUID postId) {
         postService.delete(principal, postId);
         return ApiResponse.ok(null);
     }
@@ -75,8 +106,7 @@ public class PostController {
     @PostMapping("/{postId}/likes")
     public ApiResponse<Void> like(
             @AuthenticationPrincipal CustomUserPrincipal principal,
-            @PathVariable UUID postId
-    ) {
+            @PathVariable UUID postId) {
         postService.like(principal, postId);
         return ApiResponse.ok(null);
     }
@@ -84,17 +114,29 @@ public class PostController {
     @DeleteMapping("/{postId}/likes")
     public ApiResponse<Void> unlike(
             @AuthenticationPrincipal CustomUserPrincipal principal,
-            @PathVariable UUID postId
-    ) {
+            @PathVariable UUID postId) {
         postService.unlike(principal, postId);
         return ApiResponse.ok(null);
+    }
+
+    @PostMapping("/{postId}/reposts")
+    public ApiResponse<RepostActionResponse> repost(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId) {
+        return ApiResponse.ok(postRepostService.repost(principal, postId));
+    }
+
+    @DeleteMapping("/{postId}/reposts")
+    public ApiResponse<RepostActionResponse> unrepost(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable UUID postId) {
+        return ApiResponse.ok(postRepostService.unrepost(principal, postId));
     }
 
     @PostMapping("/{postId}/bookmarks")
     public ApiResponse<Void> bookmark(
             @AuthenticationPrincipal CustomUserPrincipal principal,
-            @PathVariable UUID postId
-    ) {
+            @PathVariable UUID postId) {
         postService.bookmark(principal, postId);
         return ApiResponse.ok(null);
     }
@@ -102,8 +144,7 @@ public class PostController {
     @DeleteMapping("/{postId}/bookmarks")
     public ApiResponse<Void> unbookmark(
             @AuthenticationPrincipal CustomUserPrincipal principal,
-            @PathVariable UUID postId
-    ) {
+            @PathVariable UUID postId) {
         postService.unbookmark(principal, postId);
         return ApiResponse.ok(null);
     }
@@ -112,8 +153,7 @@ public class PostController {
     public ApiResponse<ShareResponse> share(
             @AuthenticationPrincipal CustomUserPrincipal principal,
             @PathVariable UUID postId,
-            @RequestBody(required = false) CreateShareRequest request
-    ) {
+            @RequestBody(required = false) CreateShareRequest request) {
         return ApiResponse.ok(postService.share(principal, postId, request));
     }
 
@@ -121,16 +161,14 @@ public class PostController {
     public ApiResponse<CommentResponse> createComment(
             @AuthenticationPrincipal CustomUserPrincipal principal,
             @PathVariable UUID postId,
-            @Valid @RequestBody CreateCommentRequest request
-    ) {
+            @Valid @RequestBody CreateCommentRequest request) {
         return ApiResponse.ok(postService.createComment(principal, postId, request));
     }
 
     @GetMapping("/{postId}/comments")
     public ApiResponse<List<CommentResponse>> getComments(
             @AuthenticationPrincipal CustomUserPrincipal principal,
-            @PathVariable UUID postId
-    ) {
+            @PathVariable UUID postId) {
         return ApiResponse.ok(postService.getComments(principal, postId));
     }
 
@@ -138,8 +176,7 @@ public class PostController {
     public ApiResponse<Void> deleteComment(
             @AuthenticationPrincipal CustomUserPrincipal principal,
             @PathVariable UUID postId,
-            @PathVariable UUID commentId
-    ) {
+            @PathVariable UUID commentId) {
         postService.deleteComment(principal, postId, commentId);
         return ApiResponse.ok(null);
     }

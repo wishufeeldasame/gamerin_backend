@@ -12,12 +12,14 @@ import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.post.entity.VideoQualityTier;
 import com.gamerin.backend.domain.post.service.FfmpegProcessRunner.FailureType;
 import com.gamerin.backend.domain.post.service.FfmpegProcessRunner.FfmpegProcessException;
 
@@ -36,7 +38,23 @@ public class VideoOptimizationService {
     private final long processingTimeoutMillis;
     private final FfmpegProcessRunner ffmpegProcessRunner;
     private final VideoTemporaryStorageGuard temporaryStorageGuard;
+    private final String postPreset;
+    private final long postProcessingTimeoutMillis;
 
+    public VideoOptimizationService(
+            boolean enabled,
+            String ffmpegPath,
+            int maxConcurrency,
+            long acquireTimeoutMillis,
+            long processingTimeoutMillis,
+            FfmpegProcessRunner ffmpegProcessRunner,
+            VideoTemporaryStorageGuard temporaryStorageGuard
+    ) {
+        this(enabled, ffmpegPath, maxConcurrency, acquireTimeoutMillis, processingTimeoutMillis,
+                ffmpegProcessRunner, temporaryStorageGuard, "veryfast", 600_000);
+    }
+
+    @Autowired
     public VideoOptimizationService(
             @Value("${app.media.video.optimization.enabled:true}") boolean enabled,
             @Value("${app.media.video.optimization.ffmpeg-path:ffmpeg}") String ffmpegPath,
@@ -44,8 +62,13 @@ public class VideoOptimizationService {
             @Value("${app.media.video.optimization.acquire-timeout-ms:5000}") long acquireTimeoutMillis,
             @Value("${app.media.video.optimization.timeout-ms:60000}") long processingTimeoutMillis,
             FfmpegProcessRunner ffmpegProcessRunner,
-            VideoTemporaryStorageGuard temporaryStorageGuard
+            VideoTemporaryStorageGuard temporaryStorageGuard,
+            @Value("${app.media.video.processing.preset:veryfast}") String postPreset,
+            @Value("${app.media.video.processing.timeout-ms:600000}") long postProcessingTimeoutMillis
     ) {
+        if (postProcessingTimeoutMillis < 1) {
+            throw new IllegalArgumentException("Post video processing timeout must be at least 1 ms.");
+        }
         if (maxConcurrency < 1) {
             throw new IllegalArgumentException("Video optimization max concurrency must be at least 1.");
         }
@@ -63,6 +86,70 @@ public class VideoOptimizationService {
         this.processingTimeoutMillis = processingTimeoutMillis;
         this.ffmpegProcessRunner = ffmpegProcessRunner;
         this.temporaryStorageGuard = temporaryStorageGuard;
+        this.postPreset = postPreset == null || postPreset.isBlank() ? "veryfast" : postPreset;
+        this.postProcessingTimeoutMillis = postProcessingTimeoutMillis;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    /**
+     * 게시물 영상 워커용 재인코딩. 업로드 요청과 분리돼 있으므로 DM 동기 처리용 자리(processingSlots)를 쓰지 않는다.
+     * 실패하면 {@link FfmpegProcessException}을 그대로 던져 워커가 작업을 실패 처리한다.
+     */
+    public void transcodeForPost(Path inputVideo, Path outputVideo, VideoQualityTier tier) throws IOException {
+        ffmpegProcessRunner.run(postTranscodeCommand(inputVideo, outputVideo, tier), postProcessingTimeoutMillis);
+        validateOutput(outputVideo);
+    }
+
+    List<String> postTranscodeCommand(Path inputVideo, Path outputVideo, VideoQualityTier tier) {
+        int shortSide = tier.maxShortSide();
+        // 짧은 변 기준으로 줄이고 원본보다 키우지 않는다. 가로·세로 영상 모두 같은 규칙이다.
+        // libx264(yuv420p)는 홀수 크기를 거부하므로 짧은 변도 짝수로 내린다(긴 변은 -2가 맞춘다).
+        String evenShortSide = "trunc(min(" + shortSide + ",%s)/2)*2";
+        String scale = "scale=w='if(gt(iw,ih),-2," + evenShortSide.formatted("iw") + ")'"
+                + ":h='if(gt(iw,ih)," + evenShortSide.formatted("ih") + ",-2)'";
+        return List.of(
+                ffmpegPath,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                inputVideo.toString(),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0?",
+                "-vf",
+                scale,
+                "-fpsmax",
+                "60",
+                "-c:v",
+                "libx264",
+                "-preset",
+                postPreset,
+                "-crf",
+                "23",
+                "-maxrate",
+                tier.maxBitrate(),
+                "-bufsize",
+                tier.bufferSize(),
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
+                "-map_metadata",
+                "-1",
+                "-f",
+                "mp4",
+                outputVideo.toString()
+        );
     }
 
     public MediaStorageService.PreparedMediaPath prepareVideo(MultipartFile file) {
@@ -151,7 +238,8 @@ public class VideoOptimizationService {
                 "-map",
                 "0:v:0",
                 "-map",
-                "0:a?",
+                // 아이폰 공간 음향(APAC)처럼 FFmpeg이 모르는 추가 오디오 트랙이 있으면 실패하므로 첫 오디오 트랙만 쓴다.
+                "0:a:0?",
                 "-c",
                 "copy",
                 "-movflags",
@@ -176,7 +264,8 @@ public class VideoOptimizationService {
                 "-map",
                 "0:v:0",
                 "-map",
-                "0:a?",
+                // 아이폰 공간 음향(APAC)처럼 FFmpeg이 모르는 추가 오디오 트랙이 있으면 실패하므로 첫 오디오 트랙만 쓴다.
+                "0:a:0?",
                 "-vf",
                 "scale=w=1920:h=1080:force_original_aspect_ratio=decrease:force_divisible_by=2",
                 "-c:v",

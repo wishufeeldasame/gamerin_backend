@@ -209,6 +209,110 @@ class VideoOptimizationServiceTest {
     }
 
     @Test
+    void remuxAndTranscodeMapOnlyFirstAudioTrack() throws Exception {
+        java.util.List<java.util.List<String>> commands = new java.util.ArrayList<>();
+        FfmpegProcessRunner recordingRunner = new FfmpegProcessRunner() {
+            @Override
+            public Result run(java.util.List<String> command, long timeoutMillis) {
+                commands.add(command);
+                if (commands.size() == 1) {
+                    throw new FfmpegProcessException(
+                            FailureType.COMMAND_FAILED,
+                            1,
+                            "Could not find tag for codec none",
+                            null
+                    );
+                }
+                try {
+                    Files.writeString(Path.of(command.getLast()), "transcoded-video");
+                } catch (Exception ex) {
+                    throw new AssertionError(ex);
+                }
+                return new Result(0, "");
+            }
+        };
+        VideoOptimizationService videoOptimizationService = service(
+                true,
+                "ffmpeg",
+                1,
+                1_000,
+                1_000,
+                recordingRunner
+        );
+
+        MediaStorageService.PreparedMediaPath prepared = videoOptimizationService.prepareVideo(videoFile());
+        try {
+            assertThat(commands).hasSize(2);
+            for (java.util.List<String> command : commands) {
+                int audioMapIndex = command.indexOf("0:a:0?");
+                assertThat(audioMapIndex).isPositive();
+                assertThat(command.get(audioMapIndex - 1)).isEqualTo("-map");
+                assertThat(command).doesNotContain("0:a?");
+            }
+        } finally {
+            Files.deleteIfExists(prepared.path());
+        }
+    }
+
+    @Test
+    void postTranscodeScalesByShortSideAndCapsBitrateForEachTier() {
+        VideoOptimizationService videoOptimizationService = new VideoOptimizationService(
+                true, "ffmpeg", 1, 0, 60_000, new FfmpegProcessRunner(), storageGuard(), "faster", 600_000);
+
+        java.util.List<String> hd = videoOptimizationService.postTranscodeCommand(
+                Path.of("in.mov"), Path.of("out.mp4"), com.gamerin.backend.domain.post.entity.VideoQualityTier.HD);
+        java.util.List<String> fhd = videoOptimizationService.postTranscodeCommand(
+                Path.of("in.mov"), Path.of("out.mp4"), com.gamerin.backend.domain.post.entity.VideoQualityTier.FHD);
+
+        assertThat(argAfter(hd, "-vf"))
+                .isEqualTo("scale=w='if(gt(iw,ih),-2,trunc(min(720,iw)/2)*2)'"
+                        + ":h='if(gt(iw,ih),trunc(min(720,ih)/2)*2,-2)'");
+        assertThat(argAfter(hd, "-maxrate")).isEqualTo("4M");
+        assertThat(argAfter(hd, "-bufsize")).isEqualTo("8M");
+        assertThat(argAfter(fhd, "-vf")).contains("min(1080,iw)/2").contains("min(1080,ih)/2");
+        assertThat(argAfter(fhd, "-maxrate")).isEqualTo("8M");
+        assertThat(argAfter(fhd, "-bufsize")).isEqualTo("16M");
+        assertThat(argAfter(hd, "-preset")).isEqualTo("faster");
+        assertThat(argAfter(hd, "-fpsmax")).isEqualTo("60");
+        assertThat(argAfter(hd, "-c:v")).isEqualTo("libx264");
+        assertThat(argAfter(hd, "-pix_fmt")).isEqualTo("yuv420p");
+        assertThat(hd).containsSequence("-map", "0:a:0?");
+        assertThat(hd.getLast()).isEqualTo("out.mp4");
+    }
+
+    @Test
+    void postTranscodeUsesWorkerTimeoutWithoutTakingRequestSlot() throws Exception {
+        AtomicInteger observedTimeout = new AtomicInteger();
+        FfmpegProcessRunner runner = new FfmpegProcessRunner() {
+            @Override
+            public Result run(java.util.List<String> command, long timeoutMillis) {
+                observedTimeout.set((int) timeoutMillis);
+                try {
+                    Files.writeString(Path.of(command.getLast()), "encoded");
+                } catch (Exception ex) {
+                    throw new AssertionError(ex);
+                }
+                return new Result(0, "");
+            }
+        };
+        VideoOptimizationService videoOptimizationService = new VideoOptimizationService(
+                true, "ffmpeg", 1, 0, 60_000, runner, storageGuard(), "veryfast", 900_000);
+        Semaphore slots = processingSlots(videoOptimizationService);
+        assertThat(slots.tryAcquire()).isTrue();
+        Path output = Files.createTempFile("gamerin-transcode-test-", ".mp4");
+        try {
+            videoOptimizationService.transcodeForPost(Path.of("in.mov"), output,
+                    com.gamerin.backend.domain.post.entity.VideoQualityTier.HD);
+
+            assertThat(observedTimeout).hasValue(900_000);
+            assertThat(output).hasContent("encoded");
+        } finally {
+            slots.release();
+            Files.deleteIfExists(output);
+        }
+    }
+
+    @Test
     void interruptedConcurrencyWaitPreservesInterruptAndDoesNotReleaseUnownedPermit() {
         VideoOptimizationService videoOptimizationService = service(true, "ffmpeg", 1, 5000);
         Semaphore processingSlots = processingSlots(videoOptimizationService);
@@ -314,5 +418,13 @@ class VideoOptimizationServiceTest {
                     .filter(path -> path.getFileName().toString().startsWith("gamerin-video-"))
                     .collect(Collectors.toSet());
         }
+    }
+
+    private String argAfter(java.util.List<String> command, String flag) {
+        return command.get(command.indexOf(flag) + 1);
+    }
+
+    private VideoTemporaryStorageGuard storageGuard() {
+        return new VideoTemporaryStorageGuard(0, path -> Long.MAX_VALUE);
     }
 }

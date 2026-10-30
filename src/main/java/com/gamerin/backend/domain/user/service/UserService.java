@@ -1,6 +1,10 @@
 package com.gamerin.backend.domain.user.service;
 
+import com.gamerin.backend.domain.game.model.GameType;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -13,6 +17,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.post.service.LightweightSecurityScanService;
 import com.gamerin.backend.domain.post.service.MediaStorageService;
 import com.gamerin.backend.domain.post.service.MediaUploadSecurityService;
@@ -34,6 +39,15 @@ public class UserService {
     private static final long MAX_PROFILE_COVER_UPLOAD_BYTES = 5L * 1024L * 1024L;
     private static final String UUID_JPEG_FILE_PATTERN =
             "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\.jpg";
+    // 다른 사용자에게는 화면 요약 필드만 공개한다. 외부 계정 식별자(accountId, puuid, riotId 등)는 제외한다.
+    private static final Map<String, Set<String>> PUBLIC_GAME_STATS_FIELDS = Map.of(
+            GameType.PUBG.name(), Set.of("connected", "playerName", "tierLabel", "kd", "winRate", "matches", "statsMode"),
+            GameType.R6.name(), Set.of(
+                    "connected", "playerName", "platform", "tierLabel", "kd", "winRate", "matches", "statsMode", "updatedAt"
+            ),
+            GameType.LOL.name(), Set.of("connected", "tierLabel", "kda", "winRate", "games"),
+            "RIOT", Set.of("connected")
+    );
 
     private final UserRepository userRepository;
     private final FollowRepository followRepository;
@@ -42,6 +56,7 @@ public class UserService {
     private final MediaStorageService mediaStorageService;
     private final MediaUploadSecurityService mediaUploadSecurityService;
     private final LightweightSecurityScanService lightweightSecurityScanService;
+    private final MembershipService membershipService;
 
     public UserService(
             UserRepository userRepository,
@@ -50,7 +65,8 @@ public class UserService {
             PostMediaRepository postMediaRepository,
             MediaStorageService mediaStorageService,
             MediaUploadSecurityService mediaUploadSecurityService,
-            LightweightSecurityScanService lightweightSecurityScanService
+            LightweightSecurityScanService lightweightSecurityScanService,
+            MembershipService membershipService
     ) {
         this.userRepository = userRepository;
         this.followRepository = followRepository;
@@ -59,6 +75,7 @@ public class UserService {
         this.mediaStorageService = mediaStorageService;
         this.mediaUploadSecurityService = mediaUploadSecurityService;
         this.lightweightSecurityScanService = lightweightSecurityScanService;
+        this.membershipService = membershipService;
     }
 
     @Transactional(readOnly = true)
@@ -66,7 +83,7 @@ public class UserService {
         User user = userRepository.findByIdAndDeletedAtIsNull(userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
-        return toProfileResponse(user, false);
+        return toProfileResponse(user, false, false, true);
     }
 
     @Transactional(readOnly = true)
@@ -74,14 +91,22 @@ public class UserService {
         User user = userRepository.findByHandleAndDeletedAtIsNull(handle)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
-        boolean isFollowing = viewerId != null
-                && !viewerId.equals(user.getId())
-                && followRepository.existsByFollowerIdAndFolloweeId(viewerId, user.getId());
+        boolean isFollowing = false;
+        boolean followsViewer = false;
+        if (viewerId != null && !viewerId.equals(user.getId())) {
+            isFollowing = followRepository.existsByFollowerIdAndFolloweeId(viewerId, user.getId());
+            followsViewer = followRepository.existsByFollowerIdAndFolloweeId(user.getId(), viewerId);
+        }
 
-        return toProfileResponse(user, isFollowing);
+        return toProfileResponse(user, isFollowing, followsViewer, false);
     }
 
-    private DetailedUserProfileResponse toProfileResponse(User user, boolean isFollowing) {
+    private DetailedUserProfileResponse toProfileResponse(
+            User user,
+            boolean isFollowing,
+            boolean followsViewer,
+            boolean ownProfile
+    ) {
         UserProfile profile = user.getProfile();
 
         long followersCount = followRepository.countActiveFollowersByFolloweeId(user.getId());
@@ -99,15 +124,81 @@ public class UserService {
                 profile != null ? profile.getWebsite() : null,
                 profile != null ? profile.getCoverImageUrl() : null,
                 profile != null ? profile.getProfileImageUrl() : null,
-                profile != null ? profile.getGameStats() : null,
+                profile == null ? null
+                        : ownProfile ? toOwnGameStats(profile.getGameStats()) : toPublicGameStats(profile.getGameStats()),
                 profile != null && profile.isVerifiedBadge(),
+                membershipService.isActive(user.getId()),
                 isFollowing,
+                followsViewer,
                 followersCount,
                 followingCount,
                 postCount,
                 mediaPostCount,
                 mediaItemCount
         );
+    }
+
+    private Map<String, Object> toPublicGameStats(Map<String, Object> gameStats) {
+        if (gameStats == null) {
+            return null;
+        }
+
+        Map<String, Object> publicGameStats = new HashMap<>();
+        for (Map.Entry<String, Set<String>> allowed : PUBLIC_GAME_STATS_FIELDS.entrySet()) {
+            if (!(gameStats.get(allowed.getKey()) instanceof Map<?, ?> stats)) {
+                continue;
+            }
+            Map<String, Object> publicStats = new HashMap<>();
+            for (String fieldName : allowed.getValue()) {
+                if (stats.containsKey(fieldName)) {
+                    publicStats.put(fieldName, stats.get(fieldName));
+                }
+            }
+            publicGameStats.put(allowed.getKey(), publicStats);
+        }
+        return publicGameStats;
+    }
+
+    private Map<String, Object> toOwnGameStats(Map<String, Object> gameStats) {
+        if (gameStats == null) {
+            return null;
+        }
+
+        Map<String, Object> publicGameStats = new HashMap<>();
+        for (Map.Entry<String, Object> entry : gameStats.entrySet()) {
+            Object value = entry.getValue();
+            if (value instanceof Map<?, ?> map) {
+                publicGameStats.put(entry.getKey(), copyStringKeyedMap(map));
+            } else {
+                publicGameStats.put(entry.getKey(), value);
+            }
+        }
+
+        removeInternalFields(publicGameStats, GameType.R6.name(), "accountId");
+        return publicGameStats;
+    }
+
+    private Map<String, Object> copyStringKeyedMap(Map<?, ?> source) {
+        Map<String, Object> copy = new HashMap<>();
+        for (Map.Entry<?, ?> entry : source.entrySet()) {
+            if (entry.getKey() instanceof String key) {
+                copy.put(key, entry.getValue());
+            }
+        }
+        return copy;
+    }
+
+    private void removeInternalFields(Map<String, Object> gameStats, String gameKey, String... fieldNames) {
+        Object stats = gameStats.get(gameKey);
+        if (!(stats instanceof Map<?, ?> map)) {
+            return;
+        }
+
+        Map<String, Object> publicStats = copyStringKeyedMap(map);
+        for (String fieldName : fieldNames) {
+            publicStats.remove(fieldName);
+        }
+        gameStats.put(gameKey, publicStats);
     }
 
     @Transactional

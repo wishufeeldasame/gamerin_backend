@@ -14,6 +14,8 @@ public class SendMultipartMessageRequest {
 
     private UUID sharedPostId;
 
+    private UUID clientMessageId;
+
     private List<MultipartFile> attachments;
 
     public String getContent() {
@@ -30,6 +32,14 @@ public class SendMultipartMessageRequest {
 
     public void setSharedPostId(UUID sharedPostId) {
         this.sharedPostId = sharedPostId;
+    }
+
+    public UUID getClientMessageId() {
+        return clientMessageId;
+    }
+
+    public void setClientMessageId(UUID clientMessageId) {
+        this.clientMessageId = clientMessageId;
     }
 
     public List<MultipartFile> getAttachments() {

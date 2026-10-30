@@ -95,4 +95,8 @@ public class PostComment {
     public OffsetDateTime getDeletedAt() {
         return deletedAt;
     }
+
+    public void restore() {
+        this.deletedAt = null;
+    }
 }

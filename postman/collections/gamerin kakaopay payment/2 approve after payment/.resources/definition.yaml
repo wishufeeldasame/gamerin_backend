@@ -1,0 +1,4 @@
+$kind: collection
+order: 2000
+description: |-
+  결제창에서 테스트 결제를 마친 뒤 pgToken 변수를 채우고 1번 폴더에 이어서 실행한다.

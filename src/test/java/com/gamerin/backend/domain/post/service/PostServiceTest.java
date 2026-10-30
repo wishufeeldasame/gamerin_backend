@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -12,7 +13,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -29,26 +33,33 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.hashtag.service.HashtagService;
+import com.gamerin.backend.domain.membership.service.MembershipService;
+import com.gamerin.backend.domain.mention.service.MentionService;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
+import com.gamerin.backend.domain.post.dto.request.UpdatePostRequest;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
+import com.gamerin.backend.domain.post.dto.response.PostVideoJobResponse;
 import com.gamerin.backend.domain.post.entity.Post;
-import com.gamerin.backend.domain.post.entity.PostBookmark;
 import com.gamerin.backend.domain.post.entity.PostComment;
+import com.gamerin.backend.domain.post.entity.PostLike;
 import com.gamerin.backend.domain.post.entity.PostMedia;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
 import com.gamerin.backend.domain.post.entity.PostShare;
 import com.gamerin.backend.domain.post.entity.ShareTarget;
 import com.gamerin.backend.domain.post.moderation.ContentModerationService;
-import com.gamerin.backend.domain.post.repository.PostBookmarkRepository;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostLikeRepository;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.post.repository.PostShareRepository;
+import com.gamerin.backend.domain.report.entity.ReportTargetType;
+import com.gamerin.backend.domain.report.repository.ReportCountRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -57,6 +68,7 @@ import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 class PostServiceTest {
 
     private static final long TEST_MAX_VIDEO_FILE_SIZE_BYTES = 500L * 1024L * 1024L;
+    private static final OffsetDateTime FIXED_NOW = OffsetDateTime.parse("2026-10-18T08:30:00Z");
 
     @Mock
     private UserRepository userRepository;
@@ -71,7 +83,7 @@ class PostServiceTest {
     private PostLikeRepository postLikeRepository;
 
     @Mock
-    private PostBookmarkRepository postBookmarkRepository;
+    private PostBookmarkCommandService postBookmarkCommandService;
 
     @Mock
     private PostCommentRepository postCommentRepository;
@@ -81,6 +93,15 @@ class PostServiceTest {
 
     @Mock
     private PostResponseAssembler postResponseAssembler;
+
+    @Mock
+    private HashtagService hashtagService;
+
+    @Mock
+    private MentionService mentionService;
+
+    @Mock
+    private NotificationCommandService notificationCommandService;
 
     @Mock
     private MediaStorageService mediaStorageService;
@@ -101,30 +122,44 @@ class PostServiceTest {
     private TextSecurityService textSecurityService;
 
     @Mock
-    private VideoOptimizationService videoOptimizationService;
+    private PostVideoJobService postVideoJobService;
+
+    @Mock
+    private MembershipService membershipService;
+
+    @Mock
+    private ReportCountRepository reportCountRepository;
+
+    private Clock clock;
 
     private PostService postService;
 
     @BeforeEach
     void setUp() {
+        clock = Clock.fixed(FIXED_NOW.toInstant(), ZoneOffset.UTC);
         postService = new PostService(
                 userRepository,
                 postRepository,
                 postMediaRepository,
                 postLikeRepository,
-                postBookmarkRepository,
+                postBookmarkCommandService,
                 postCommentRepository,
                 postShareRepository,
                 postResponseAssembler,
+                hashtagService,
+                mentionService,
+                notificationCommandService,
                 mediaStorageService,
                 videoMetadataService,
                 contentModerationService,
                 mediaUploadSecurityService,
                 lightweightSecurityScanService,
                 textSecurityService,
-                videoOptimizationService,
-                TEST_MAX_VIDEO_FILE_SIZE_BYTES
-        );
+                postVideoJobService,
+                membershipService,
+                reportCountRepository,
+                clock,
+                TEST_MAX_VIDEO_FILE_SIZE_BYTES);
     }
 
     @Test
@@ -134,64 +169,27 @@ class PostServiceTest {
                 postRepository,
                 postMediaRepository,
                 postLikeRepository,
-                postBookmarkRepository,
+                postBookmarkCommandService,
                 postCommentRepository,
                 postShareRepository,
                 postResponseAssembler,
+                hashtagService,
+                mentionService,
+                notificationCommandService,
                 mediaStorageService,
                 videoMetadataService,
                 contentModerationService,
                 mediaUploadSecurityService,
                 lightweightSecurityScanService,
                 textSecurityService,
-                videoOptimizationService,
-                0
-        ))
+                postVideoJobService,
+                0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("max file size");
     }
 
     @Test
-    void createRejectsWhenContentIsMissing() {
-        UUID userId = UUID.randomUUID();
-        User user = savedUser(userId, "tester", "Tester");
-
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-
-        assertThatThrownBy(() -> postService.create(
-                CustomUserPrincipal.from(user),
-                new CreatePostRequest("   ")
-        ))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
-                .isEqualTo(HttpStatus.BAD_REQUEST.value());
-
-        verify(postRepository, never()).save(any(Post.class));
-    }
-
-    @Test
-    void createRejectsWhenTextModerationFlagsContent() {
-        UUID userId = UUID.randomUUID();
-        User user = savedUser(userId, "tester", "Tester");
-
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: violence"))
-                .when(contentModerationService)
-                .assertTextAllowed("bad post");
-
-        assertThatThrownBy(() -> postService.create(
-                CustomUserPrincipal.from(user),
-                new CreatePostRequest(" bad post ")
-        ))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
-                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
-
-        verify(postRepository, never()).save(any(Post.class));
-    }
-
-    @Test
-    void createMultipartStoresUploadedVideoWithoutThumbnail() throws Exception {
+    void createAttachesHashtagsAfterSavingJsonPost() {
         UUID userId = UUID.randomUUID();
         UUID postId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
@@ -203,31 +201,106 @@ class PostServiceTest {
             ReflectionTestUtils.setField(post, "id", postId);
             return post;
         });
-        when(postResponseAssembler.toPostDetail(any(Post.class), any(UUID.class))).thenReturn(response);
+        when(postResponseAssembler.toPostDetail(any(Post.class), eq(userId))).thenReturn(response);
+
+        PostDetailResponse result = postService.create(
+                CustomUserPrincipal.from(user),
+                new CreatePostRequest("#PUBG ranked"));
+
+        assertThat(result).isSameAs(response);
+        ArgumentCaptor<Post> postCaptor = ArgumentCaptor.forClass(Post.class);
+        verify(hashtagService).attachToPost(postCaptor.capture());
+        verify(mentionService).attachToPost(postCaptor.getValue());
+        assertThat(postCaptor.getValue().getId()).isEqualTo(postId);
+        assertThat(postCaptor.getValue().getContent()).isEqualTo("#PUBG ranked");
+    }
+
+    @Test
+    void createRejectsWhenContentIsMissing() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> postService.create(
+                CustomUserPrincipal.from(user),
+                new CreatePostRequest("   ")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.BAD_REQUEST.value());
+
+        verify(postRepository, never()).save(any(Post.class));
+        verify(hashtagService, never()).attachToPost(any(Post.class));
+        verify(mentionService, never()).attachToPost(any(Post.class));
+    }
+
+    @Test
+    void createRejectsWhenTextModerationFlagsContent() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Content violates moderation policy: violence"))
+                .when(contentModerationService)
+                .assertTextAllowed("bad post");
+
+        assertThatThrownBy(() -> postService.create(
+                CustomUserPrincipal.from(user),
+                new CreatePostRequest(" bad post ")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
+
+        verify(postRepository, never()).save(any(Post.class));
+        verify(hashtagService, never()).attachToPost(any(Post.class));
+        verify(mentionService, never()).attachToPost(any(Post.class));
+    }
+
+    @Test
+    void createMultipartQueuesVideoUploadWithoutCreatingPost() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        MockMultipartFile video = videoFile();
+        PostVideoJobResponse queued = new PostVideoJobResponse(UUID.randomUUID(), "QUEUED", null, null);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
         when(videoMetadataService.readDurationSeconds(any())).thenReturn(120.0);
-        MediaStorageService.PreparedMediaPath preparedVideo = preparedVideo();
-        when(videoOptimizationService.prepareVideo(any(MultipartFile.class))).thenReturn(preparedVideo);
-        when(mediaStorageService.storePostMedia(any(MediaStorageService.PreparedMediaPath.class)))
-                .thenReturn(new MediaStorageService.StoredFile(
-                        Path.of("uploads/post-media/video.mp4"),
-                        "http://localhost:8080/uploads/post-media/video.mp4"
-                ));
+        when(postVideoJobService.enqueue(eq(user), eq("clip"), eq(video), isNull())).thenReturn(queued);
+
+        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
+        request.setContent(" clip ");
+        request.setMediaFiles(List.of(video));
+
+        PostService.MultipartCreateResult result = postService.create(CustomUserPrincipal.from(user), request);
+
+        assertThat(result.videoJob()).isSameAs(queued);
+        assertThat(result.post()).isNull();
+        verify(contentModerationService).assertPostAllowed(eq("clip"), anyList());
+        verify(postRepository, never()).save(any(Post.class));
+        verify(hashtagService, never()).attachToPost(any(Post.class));
+        verify(mentionService, never()).attachToPost(any(Post.class));
+        verify(postMediaRepository, never()).saveAll(anyList());
+    }
+
+    @Test
+    void createMultipartDoesNotQueueVideoWhenModerationFlagsIt() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(videoMetadataService.readDurationSeconds(any())).thenReturn(30.0);
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy"))
+                .when(contentModerationService)
+                .assertPostAllowed(any(), anyList());
 
         CreateMultipartPostRequest request = new CreateMultipartPostRequest();
         request.setMediaFiles(List.of(videoFile()));
 
-        postService.create(CustomUserPrincipal.from(user), request);
+        assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
+                .isInstanceOf(ResponseStatusException.class);
 
-        ArgumentCaptor<List<PostMedia>> mediaCaptor = ArgumentCaptor.forClass(List.class);
-        verify(postMediaRepository).saveAll(mediaCaptor.capture());
-
-        List<PostMedia> savedMedia = mediaCaptor.getValue();
-        assertThat(savedMedia).hasSize(1);
-        assertThat(savedMedia.get(0).getMediaType()).isEqualTo(PostMediaType.VIDEO);
-        assertThat(savedMedia.get(0).getMediaUrl()).endsWith("/video.mp4");
-        assertThat(savedMedia.get(0).getThumbnailUrl()).isNull();
-        verify(mediaStorageService).deleteQuietly(preparedVideo);
-        verify(mediaStorageService, never()).deleteQuietly(any(MediaStorageService.StoredFile.class));
+        verify(postVideoJobService, never()).enqueue(any(), any(), any(), any());
     }
 
     @Test
@@ -306,7 +379,7 @@ class PostServiceTest {
 
         verify(mediaUploadSecurityService, never()).assertVideoFileSafe(any(MultipartFile.class));
         verify(videoMetadataService, never()).readDurationSeconds(any(MultipartFile.class));
-        verify(videoOptimizationService, never()).prepareVideo(any(MultipartFile.class));
+        verify(postVideoJobService, never()).enqueue(any(), any(), any(), any());
     }
 
     @Test
@@ -328,7 +401,7 @@ class PostServiceTest {
         verify(mediaUploadSecurityService).assertImageFileSafe(image);
         verify(mediaUploadSecurityService, never()).assertVideoFileSafe(video);
         verify(videoMetadataService, never()).readDurationSeconds(video);
-        verify(videoOptimizationService, never()).prepareVideo(video);
+        verify(postVideoJobService, never()).enqueue(any(), any(), any(), any());
     }
 
     @Test
@@ -351,12 +424,43 @@ class PostServiceTest {
     }
 
     @Test
+    void createMultipartRejectsWhenModerationFlagsVideoThumbnailBeforeStorage() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        MockMultipartFile videoFile = videoFile();
+        MockMultipartFile thumbnailFile = new MockMultipartFile("thumbnailFile", "thumb.jpg", "image/jpeg",
+                "thumbnail".getBytes());
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(videoMetadataService.readDurationSeconds(any())).thenReturn(120.0);
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Content violates moderation policy: sexual"))
+                .when(contentModerationService)
+                .assertPostAllowed(eq("video post"), eq(List.of(videoFile, thumbnailFile)));
+
+        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
+        request.setContent("video post");
+        request.setMediaFiles(List.of(videoFile));
+        request.setThumbnailFile(thumbnailFile);
+
+        assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
+
+        verify(postRepository, never()).save(any(Post.class));
+        verify(postVideoJobService, never()).enqueue(any(), any(), any(), any());
+        verify(mediaUploadSecurityService, never()).prepareImage(any(MultipartFile.class));
+    }
+
+    @Test
     void createMultipartRejectsWhenModerationFlagsMediaBeforeStorage() throws Exception {
         UUID userId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: sexual"))
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Content violates moderation policy: sexual"))
                 .when(contentModerationService)
                 .assertPostAllowed(eq("image post"), anyList());
 
@@ -393,8 +497,10 @@ class PostServiceTest {
                 .thenReturn(preparedImage())
                 .thenReturn(preparedImage());
         when(mediaStorageService.storePostMedia(any(MediaStorageService.PreparedMediaFile.class)))
-                .thenReturn(new MediaStorageService.StoredFile(Path.of("uploads/post-media/a.jpg"), "http://localhost:8080/uploads/post-media/a.jpg"))
-                .thenReturn(new MediaStorageService.StoredFile(Path.of("uploads/post-media/b.jpg"), "http://localhost:8080/uploads/post-media/b.jpg"));
+                .thenReturn(new MediaStorageService.StoredFile(Path.of("uploads/post-media/a.jpg"),
+                        "http://localhost:8080/uploads/post-media/a.jpg"))
+                .thenReturn(new MediaStorageService.StoredFile(Path.of("uploads/post-media/b.jpg"),
+                        "http://localhost:8080/uploads/post-media/b.jpg"));
 
         CreateMultipartPostRequest request = new CreateMultipartPostRequest();
         request.setContent("image post");
@@ -424,10 +530,9 @@ class PostServiceTest {
                 "mediaFiles",
                 "animation.gif",
                 "image/gif",
-                "GIF89a".getBytes()
-        );
-        MediaStorageService.PreparedMediaFile preparedGif =
-                new MediaStorageService.PreparedMediaFile("sanitized-animation".getBytes(), ".gif");
+                "GIF89a".getBytes());
+        MediaStorageService.PreparedMediaFile preparedGif = new MediaStorageService.PreparedMediaFile(
+                "sanitized-animation".getBytes(), ".gif");
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
         when(postRepository.save(any(Post.class))).thenAnswer(invocation -> {
@@ -439,8 +544,7 @@ class PostServiceTest {
         when(mediaUploadSecurityService.prepareImage(gif)).thenReturn(preparedGif);
         when(mediaStorageService.storePostMedia(preparedGif)).thenReturn(new MediaStorageService.StoredFile(
                 Path.of("uploads/post-media/animation.gif"),
-                "http://localhost:8080/uploads/post-media/animation.gif"
-        ));
+                "http://localhost:8080/uploads/post-media/animation.gif"));
 
         CreateMultipartPostRequest request = new CreateMultipartPostRequest();
         request.setContent("animated gif post");
@@ -459,35 +563,25 @@ class PostServiceTest {
     }
 
     @Test
-    void bookmarkDoesNothingWhenAlreadyBookmarked() {
-        UUID userId = UUID.randomUUID();
+    void bookmarkDelegatesToBookmarkCommandService() {
         UUID postId = UUID.randomUUID();
-        User user = savedUser(userId, "tester", "Tester");
-        Post post = savedPost(postId, user);
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        CustomUserPrincipal principal = CustomUserPrincipal.from(user);
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
-        when(postBookmarkRepository.existsByPostIdAndUserId(postId, userId)).thenReturn(true);
+        postService.bookmark(principal, postId);
 
-        postService.bookmark(CustomUserPrincipal.from(user), postId);
-
-        verify(postBookmarkRepository, never()).save(any(PostBookmark.class));
+        verify(postBookmarkCommandService).bookmark(principal, postId);
     }
 
     @Test
-    void bookmarkStoresWhenMissing() {
-        UUID userId = UUID.randomUUID();
+    void unbookmarkDelegatesToBookmarkCommandService() {
         UUID postId = UUID.randomUUID();
-        User user = savedUser(userId, "tester", "Tester");
-        Post post = savedPost(postId, user);
+        User user = savedUser(UUID.randomUUID(), "tester", "Tester");
+        CustomUserPrincipal principal = CustomUserPrincipal.from(user);
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
-        when(postBookmarkRepository.existsByPostIdAndUserId(postId, userId)).thenReturn(false);
+        postService.unbookmark(principal, postId);
 
-        postService.bookmark(CustomUserPrincipal.from(user), postId);
-
-        verify(postBookmarkRepository).save(any(PostBookmark.class));
+        verify(postBookmarkCommandService).unbookmark(principal, postId);
     }
 
     @Test
@@ -498,7 +592,7 @@ class PostServiceTest {
         Post post = savedPost(postId, user);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
 
         postService.delete(CustomUserPrincipal.from(user), postId);
 
@@ -515,7 +609,7 @@ class PostServiceTest {
         Post post = savedPost(postId, author);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
 
         assertThatThrownBy(() -> postService.delete(CustomUserPrincipal.from(user), postId))
                 .isInstanceOf(ResponseStatusException.class)
@@ -526,6 +620,70 @@ class PostServiceTest {
     }
 
     @Test
+    void likeCreatesNotificationOnlyWhenLikeIsNew() {
+        UUID actorId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User actor = savedUser(actorId, "actor", "Actor");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedPost(postId, author);
+
+        when(userRepository.findActiveByIdForUpdate(actorId)).thenReturn(Optional.of(actor));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(postLikeRepository.existsByPostIdAndUserId(postId, actorId)).thenReturn(false);
+        when(postLikeRepository.save(any(PostLike.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        postService.like(CustomUserPrincipal.from(actor), postId);
+
+        ArgumentCaptor<PostLike> likeCaptor = ArgumentCaptor.forClass(PostLike.class);
+        verify(postLikeRepository).save(likeCaptor.capture());
+        verify(notificationCommandService).createLike(likeCaptor.getValue(), post, actor);
+        assertThat(post.getLikeCount()).isEqualTo(1);
+    }
+
+    @Test
+    void likeDoesNotCreateAnotherNotificationWhenLikeAlreadyExists() {
+        UUID actorId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User actor = savedUser(actorId, "actor", "Actor");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedPost(postId, author);
+
+        when(userRepository.findActiveByIdForUpdate(actorId)).thenReturn(Optional.of(actor));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(postLikeRepository.existsByPostIdAndUserId(postId, actorId)).thenReturn(true);
+
+        postService.like(CustomUserPrincipal.from(actor), postId);
+
+        verify(postLikeRepository, never()).save(any(PostLike.class));
+        verify(notificationCommandService, never()).createLike(any(), any(), any());
+        assertThat(post.getLikeCount()).isZero();
+    }
+
+    @Test
+    void unlikeRemovesNotificationAndLikeWhenPresent() {
+        UUID actorId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User actor = savedUser(actorId, "actor", "Actor");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedPost(postId, author);
+        post.increaseLikeCount();
+        PostLike like = PostLike.create(post, actor);
+
+        when(userRepository.findActiveByIdForUpdate(actorId)).thenReturn(Optional.of(actor));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(postLikeRepository.findByPostIdAndUserId(postId, actorId)).thenReturn(Optional.of(like));
+
+        postService.unlike(CustomUserPrincipal.from(actor), postId);
+
+        verify(notificationCommandService).removeLike(postId, actorId);
+        verify(postLikeRepository).delete(like);
+        assertThat(post.getLikeCount()).isZero();
+    }
+
+    @Test
     void shareStoresEventAndIncreasesShareCount() {
         UUID userId = UUID.randomUUID();
         UUID postId = UUID.randomUUID();
@@ -533,7 +691,7 @@ class PostServiceTest {
         Post post = savedPost(postId, user);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
 
         postService.share(CustomUserPrincipal.from(user), postId, new CreateShareRequest(ShareTarget.KAKAO));
 
@@ -549,21 +707,59 @@ class PostServiceTest {
         Post post = savedPost(postId, user);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
-        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy: harassment"))
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Content violates moderation policy: harassment"))
                 .when(contentModerationService)
                 .assertTextAllowed("bad comment");
 
         assertThatThrownBy(() -> postService.createComment(
                 CustomUserPrincipal.from(user),
                 postId,
-                new CreateCommentRequest(" bad comment ")
-        ))
+                new CreateCommentRequest(" bad comment ")))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
 
         verify(postCommentRepository, never()).save(any());
+    }
+
+    @Test
+    void createCommentCreatesNotificationAfterSavingComment() {
+        UUID actorId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        UUID commentId = UUID.randomUUID();
+        User actor = savedUser(actorId, "actor", "Actor");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedPost(postId, author);
+        CommentResponse response = new CommentResponse(
+                commentId,
+                "Actor",
+                "actor",
+                null,
+                false,
+                false,
+                "hello",
+                OffsetDateTime.now(),
+                true);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(actorId)).thenReturn(Optional.of(actor));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(postCommentRepository.save(any(PostComment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(postResponseAssembler.toCommentResponse(any(PostComment.class), eq(actorId))).thenReturn(response);
+
+        CommentResponse actual = postService.createComment(
+                CustomUserPrincipal.from(actor),
+                postId,
+                new CreateCommentRequest(" hello "));
+
+        ArgumentCaptor<PostComment> commentCaptor = ArgumentCaptor.forClass(PostComment.class);
+        verify(postCommentRepository).save(commentCaptor.capture());
+        verify(notificationCommandService).createComment(commentCaptor.getValue(), post, actor);
+        verify(mentionService).attachToComment(commentCaptor.getValue());
+        assertThat(actual).isEqualTo(response);
+        assertThat(post.getCommentCount()).isEqualTo(1);
     }
 
     @Test
@@ -580,15 +776,15 @@ class PostServiceTest {
                 "tester",
                 null,
                 false,
+                false,
                 "hello",
                 OffsetDateTime.now(),
-                true
-        );
+                true);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
         when(postRepository.findByIdAndDeletedAtIsNull(postId)).thenReturn(Optional.of(post));
         when(postCommentRepository.findActiveByPostId(postId)).thenReturn(List.of(comment));
-        when(postResponseAssembler.toCommentResponse(comment, userId)).thenReturn(response);
+        when(postResponseAssembler.toCommentResponses(List.of(comment), userId)).thenReturn(List.of(response));
 
         List<CommentResponse> comments = postService.getComments(CustomUserPrincipal.from(user), postId);
 
@@ -606,10 +802,13 @@ class PostServiceTest {
         PostComment comment = PostComment.create(post, user, "hello");
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
         when(postCommentRepository.findActiveByPostIdAndId(postId, commentId)).thenReturn(Optional.of(comment));
 
         postService.deleteComment(CustomUserPrincipal.from(user), postId, commentId);
 
+        verify(notificationCommandService).removeComment(commentId);
+        verify(mentionService).removeForComment(commentId);
         verify(postCommentRepository).delete(comment);
         assertThat(post.getCommentCount()).isZero();
     }
@@ -626,6 +825,7 @@ class PostServiceTest {
         PostComment comment = PostComment.create(post, author, "hello");
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
         when(postCommentRepository.findActiveByPostIdAndId(postId, commentId)).thenReturn(Optional.of(comment));
 
         assertThatThrownBy(() -> postService.deleteComment(CustomUserPrincipal.from(user), postId, commentId))
@@ -634,6 +834,224 @@ class PostServiceTest {
                 .isEqualTo(HttpStatus.FORBIDDEN.value());
 
         assertThat(comment.getDeletedAt()).isNull();
+        verify(notificationCommandService, never()).removeComment(any());
+    }
+
+    @Test
+    void updateEditsContentIncrementsEditCountAndResyncsHashtagsAndMentions() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "old #pubg @friend1", FIXED_NOW.minusMinutes(30));
+        PostDetailResponse response = postDetailResponse(postId);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(true);
+        when(postResponseAssembler.toPostDetail(post, userId)).thenReturn(response);
+
+        PostDetailResponse actual = postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("  new #valorant @friend2  "));
+
+        assertThat(actual).isSameAs(response);
+        assertThat(post.getContent()).isEqualTo("new #valorant @friend2");
+        assertThat(post.getEditCount()).isEqualTo(1);
+        verify(textSecurityService).assertTextSafe("new #valorant @friend2");
+        verify(contentModerationService).assertTextAllowed("new #valorant @friend2");
+        verify(hashtagService).syncForPost(post);
+        verify(mentionService).attachToPost(post);
+    }
+
+    @Test
+    void updateDoesNotDeductEditCountOrRunModerationWhenNormalizedContentIsUnchanged() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "same content", FIXED_NOW.minusMinutes(10));
+        PostDetailResponse response = postDetailResponse(postId);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(true);
+        when(postResponseAssembler.toPostDetail(post, userId)).thenReturn(response);
+
+        PostDetailResponse actual = postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("   same content   "));
+
+        assertThat(actual).isSameAs(response);
+        assertThat(post.getEditCount()).isZero();
+        verify(textSecurityService, never()).assertTextSafe(any());
+        verify(contentModerationService, never()).assertTextAllowed(any());
+        verify(hashtagService, never()).syncForPost(any());
+        verify(mentionService, never()).attachToPost(any());
+    }
+
+    @Test
+    void updateRejectsWhenUserIsNotAuthor() {
+        UUID userId = UUID.randomUUID();
+        UUID authorId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User otherUser = savedUser(userId, "other", "Other");
+        User author = savedUser(authorId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(10));
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(otherUser));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(otherUser),
+                postId,
+                new UpdatePostRequest("edited")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.FORBIDDEN.value());
+
+        assertThat(post.getEditCount()).isZero();
+    }
+
+    @Test
+    void updateRejectsWhenMembershipIsInactive() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(10));
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(false);
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("edited")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.FORBIDDEN.value());
+
+        assertThat(post.getEditCount()).isZero();
+    }
+
+    @Test
+    void updateRejectsWhenPostIsHiddenByReports() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(10));
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(true);
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("edited")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.NOT_FOUND.value());
+
+        assertThat(post.getEditCount()).isZero();
+    }
+
+    @Test
+    void updateRejectsWhenOneHourEditWindowHasExpired() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusHours(1).minusSeconds(1));
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(true);
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("edited")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.CONFLICT.value());
+
+        assertThat(post.getEditCount()).isZero();
+    }
+
+    @Test
+    void updateRejectsWhenPostWasAlreadyEditedOnce() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(15));
+        post.editContent("first edit");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(true);
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("second edit")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.CONFLICT.value());
+
+        assertThat(post.getContent()).isEqualTo("first edit");
+        assertThat(post.getEditCount()).isEqualTo(1);
+    }
+
+    @Test
+    void updateDoesNotDeductEditCountWhenModerationFails() {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User author = savedUser(userId, "author", "Author");
+        Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(15));
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
+        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
+        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
+                .thenReturn(false);
+        when(membershipService.isActive(userId)).thenReturn(true);
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Content violates moderation policy: violence"))
+                .when(contentModerationService)
+                .assertTextAllowed("flagged content");
+
+        assertThatThrownBy(() -> postService.update(
+                CustomUserPrincipal.from(author),
+                postId,
+                new UpdatePostRequest("flagged content")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
+
+        assertThat(post.getContent()).isEqualTo("original");
+        assertThat(post.getEditCount()).isZero();
+        verify(hashtagService, never()).syncForPost(any());
+        verify(mentionService, never()).attachToPost(any());
+    }
+
+    private Post savedEditablePost(UUID id, User author, String content, OffsetDateTime createdAt) {
+        Post post = Post.create(author, content);
+        ReflectionTestUtils.setField(post, "id", id);
+        ReflectionTestUtils.setField(post, "createdAt", createdAt);
+        return post;
     }
 
     private PostDetailResponse postDetailResponse(UUID postId) {
@@ -643,16 +1061,19 @@ class PostServiceTest {
                 "tester",
                 null,
                 false,
+                false,
                 null,
                 List.of(),
                 0,
                 0,
                 0,
                 false,
+                0,
+                null,
+                false,
                 false,
                 true,
-                null
-        );
+                null);
     }
 
     private User savedUser(UUID id, String handle, String nickname) {
@@ -684,9 +1105,5 @@ class PostServiceTest {
 
     private MediaStorageService.PreparedMediaFile preparedImage() {
         return new MediaStorageService.PreparedMediaFile("compressed-image".getBytes(), ".jpg");
-    }
-
-    private MediaStorageService.PreparedMediaPath preparedVideo() {
-        return new MediaStorageService.PreparedMediaPath(Path.of("tmp/optimized-video.mp4"), ".mp4");
     }
 }

@@ -4,6 +4,7 @@ import java.util.UUID;
 
 import org.springdoc.core.annotations.ParameterObject;
 
+import com.gamerin.backend.domain.game.model.GameType;
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
@@ -88,7 +89,7 @@ public class MentoringController {
     @Operation(summary = "멘토링 프로그램 목록 조회", description = "전체, 특정 게임, 특정 멘토의 멘토링 프로그램 목록을 조회(페이징 지원)")
     @GetMapping("/programs")
     public ApiResponse<Page<MentoringProgramResponse>> getPrograms(
-        @RequestParam(required = false) String gameName,
+        @RequestParam(required = false) GameType gameName,
         @RequestParam(required = false) UUID mentorId,
         @ParameterObject @PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {

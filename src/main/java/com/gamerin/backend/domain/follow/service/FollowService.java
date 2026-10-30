@@ -15,7 +15,6 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -23,6 +22,8 @@ import org.springframework.web.server.ResponseStatusException;
 import com.gamerin.backend.domain.follow.dto.response.FollowUserResponse;
 import com.gamerin.backend.domain.follow.entity.Follow;
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.membership.service.MembershipService;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -38,14 +39,23 @@ public class FollowService {
 
     private final UserRepository userRepository;
     private final FollowRepository followRepository;
+    private final NotificationCommandService notificationCommandService;
+    private final MembershipService membershipService;
 
-    public FollowService(UserRepository userRepository, FollowRepository followRepository) {
+    public FollowService(
+            UserRepository userRepository,
+            FollowRepository followRepository,
+            NotificationCommandService notificationCommandService,
+            MembershipService membershipService
+    ) {
         this.userRepository = userRepository;
         this.followRepository = followRepository;
+        this.notificationCommandService = notificationCommandService;
+        this.membershipService = membershipService;
     }
 
     public void follow(CustomUserPrincipal principal, String handle) {
-        User follower = getCurrentUser(principal);
+        User follower = lockCurrentUser(principal);
         User followee = getTargetUser(handle);
 
         if (follower.getId().equals(followee.getId())) {
@@ -56,22 +66,19 @@ public class FollowService {
             return;
         }
 
-        try {
-            followRepository.saveAndFlush(Follow.create(follower, followee));
-        } catch (DataIntegrityViolationException e) {
-            if (followRepository.existsByFollowerIdAndFolloweeId(follower.getId(), followee.getId())) {
-                return;
-            }
-            throw e;
-        }
+        Follow savedFollow = followRepository.saveAndFlush(Follow.create(follower, followee));
+        notificationCommandService.createFollow(savedFollow, follower, followee);
     }
 
     public void unfollow(CustomUserPrincipal principal, String handle) {
-        User follower = getCurrentUser(principal);
+        User follower = lockCurrentUser(principal);
         User followee = getTargetUser(handle);
 
         followRepository.findByFollowerIdAndFolloweeId(follower.getId(), followee.getId())
-                .ifPresent(followRepository::delete);
+                .ifPresent(follow -> {
+                    notificationCommandService.removeFollow(follower.getId(), followee.getId());
+                    followRepository.delete(follow);
+                });
     }
 
     @Transactional(readOnly = true)
@@ -142,6 +149,10 @@ public class FollowService {
                 .map(listedUserExtractor)
                 .toList();
         Set<UUID> followingIds = findFollowingIds(viewerId, listedUsers);
+        Set<UUID> listedUserIds = listedUsers.stream().map(User::getId).collect(Collectors.toSet());
+        Set<UUID> activeMemberIds = listedUserIds.isEmpty()
+                ? Set.of()
+                : membershipService.findActiveUserIds(listedUserIds);
 
         List<FollowUserResponse> items = follows.stream()
                 .map(follow -> {
@@ -149,7 +160,8 @@ public class FollowService {
                     return toFollowUserResponse(
                             listedUser,
                             follow.getCreatedAt(),
-                            followingIds.contains(listedUser.getId())
+                            followingIds.contains(listedUser.getId()),
+                            activeMemberIds.contains(listedUser.getId())
                     );
                 })
                 .toList();
@@ -190,7 +202,9 @@ public class FollowService {
         return new HashSet<>(followRepository.findFolloweeIdsByFollowerIdAndFolloweeIdIn(viewerId, userIds));
     }
 
-    private FollowUserResponse toFollowUserResponse(User user, OffsetDateTime followedAt, boolean isFollowing) {
+    private FollowUserResponse toFollowUserResponse(
+            User user, OffsetDateTime followedAt, boolean isFollowing, boolean membershipBadge
+    ) {
         UserProfile profile = user.getProfile();
 
         return new FollowUserResponse(
@@ -200,6 +214,7 @@ public class FollowService {
                 profile != null ? profile.getBio() : null,
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
+                membershipBadge,
                 isFollowing,
                 followedAt
         );
@@ -223,6 +238,15 @@ public class FollowService {
         }
 
         return userRepository.findByIdAndDeletedAtIsNull(principal.getUserId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
+    }
+
+    private User lockCurrentUser(CustomUserPrincipal principal) {
+        if (principal == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication is required.");
+        }
+
+        return userRepository.findActiveByIdForUpdate(principal.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
     }
 

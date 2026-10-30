@@ -40,6 +40,9 @@ public class DirectMessage {
     @JoinColumn(name = "shared_post_id")
     private Post sharedPost;
 
+    @Column(name = "client_message_id", updatable = false)
+    private UUID clientMessageId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
@@ -55,11 +58,22 @@ public class DirectMessage {
             String content,
             Post sharedPost
     ) {
+        return create(conversation, sender, content, sharedPost, null);
+    }
+
+    public static DirectMessage create(
+            MessageConversation conversation,
+            User sender,
+            String content,
+            Post sharedPost,
+            UUID clientMessageId
+    ) {
         DirectMessage message = new DirectMessage();
         message.conversation = conversation;
         message.sender = sender;
         message.content = content;
         message.sharedPost = sharedPost;
+        message.clientMessageId = clientMessageId;
         return message;
     }
 
@@ -94,6 +108,10 @@ public class DirectMessage {
 
     public Post getSharedPost() {
         return sharedPost;
+    }
+
+    public UUID getClientMessageId() {
+        return clientMessageId;
     }
 
     public OffsetDateTime getCreatedAt() {

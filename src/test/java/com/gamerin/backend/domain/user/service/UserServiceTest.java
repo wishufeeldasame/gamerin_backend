@@ -14,6 +14,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
@@ -22,6 +24,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.post.service.LightweightSecurityScanService;
@@ -57,6 +60,9 @@ class UserServiceTest {
     @Mock
     private LightweightSecurityScanService lightweightSecurityScanService;
 
+    @Mock
+    private MembershipService membershipService;
+
     private UserService userService;
 
     @BeforeEach
@@ -68,8 +74,29 @@ class UserServiceTest {
                 postMediaRepository,
                 mediaStorageService,
                 mediaUploadSecurityService,
-                lightweightSecurityScanService
+                lightweightSecurityScanService,
+                membershipService
         );
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void ownAndPublicProfilesUseCurrentMembershipWithoutChangingVerifiedBadge(boolean active) {
+        User user = savedUser(UUID.randomUUID(), "member", "Member");
+        ReflectionTestUtils.setField(user.getProfile(), "verifiedBadge", true);
+        when(userRepository.findByIdAndDeletedAtIsNull(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findByHandleAndDeletedAtIsNull("member")).thenReturn(Optional.of(user));
+        when(membershipService.isActive(user.getId())).thenReturn(active);
+
+        var ownProfile = userService.getMyProfile(user.getId());
+        var publicProfile = userService.getProfile(null, "member");
+
+        assertThat(ownProfile.membershipBadge()).isEqualTo(active);
+        assertThat(publicProfile.membershipBadge()).isEqualTo(active);
+        assertThat(ownProfile.verifiedBadge()).isTrue();
+        assertThat(publicProfile.verifiedBadge()).isTrue();
+        verify(membershipService, org.mockito.Mockito.times(2)).isActive(user.getId());
+        verify(membershipService, never()).findActiveUserIds(any());
     }
 
     @Test
@@ -80,12 +107,90 @@ class UserServiceTest {
 
         when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(profileUser));
         when(followRepository.existsByFollowerIdAndFolloweeId(viewerId, profileUserId)).thenReturn(true);
+        when(followRepository.existsByFollowerIdAndFolloweeId(profileUserId, viewerId)).thenReturn(false);
 
         var response = userService.getProfile(viewerId, "target");
 
         assertThat(response.id()).isEqualTo(profileUserId);
         assertThat(response.handle()).isEqualTo("target");
         assertThat(response.isFollowing()).isTrue();
+        assertThat(response.followsViewer()).isFalse();
+    }
+
+    @Test
+    void getProfileReturnsFollowsViewerStateWhenProfileUserFollowsViewer() {
+        UUID viewerId = UUID.randomUUID();
+        UUID profileUserId = UUID.randomUUID();
+        User profileUser = savedUser(profileUserId, "target", "Target");
+
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(profileUser));
+        when(followRepository.existsByFollowerIdAndFolloweeId(viewerId, profileUserId)).thenReturn(false);
+        when(followRepository.existsByFollowerIdAndFolloweeId(profileUserId, viewerId)).thenReturn(true);
+
+        var response = userService.getProfile(viewerId, "target");
+
+        assertThat(response.isFollowing()).isFalse();
+        assertThat(response.followsViewer()).isTrue();
+    }
+
+    @Test
+    void getProfileReturnsBothFollowingStatesForMutualFollow() {
+        UUID viewerId = UUID.randomUUID();
+        UUID profileUserId = UUID.randomUUID();
+        User profileUser = savedUser(profileUserId, "target", "Target");
+
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(profileUser));
+        when(followRepository.existsByFollowerIdAndFolloweeId(viewerId, profileUserId)).thenReturn(true);
+        when(followRepository.existsByFollowerIdAndFolloweeId(profileUserId, viewerId)).thenReturn(true);
+
+        var response = userService.getProfile(viewerId, "target");
+
+        assertThat(response.isFollowing()).isTrue();
+        assertThat(response.followsViewer()).isTrue();
+    }
+
+    @Test
+    void getProfileReturnsNoFollowingStatesWhenUsersDoNotFollowEachOther() {
+        UUID viewerId = UUID.randomUUID();
+        UUID profileUserId = UUID.randomUUID();
+        User profileUser = savedUser(profileUserId, "target", "Target");
+
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(profileUser));
+        when(followRepository.existsByFollowerIdAndFolloweeId(viewerId, profileUserId)).thenReturn(false);
+        when(followRepository.existsByFollowerIdAndFolloweeId(profileUserId, viewerId)).thenReturn(false);
+
+        var response = userService.getProfile(viewerId, "target");
+
+        assertThat(response.isFollowing()).isFalse();
+        assertThat(response.followsViewer()).isFalse();
+    }
+
+    @Test
+    void getProfileDoesNotCalculateFollowingStatesForSelf() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "me", "Me");
+
+        when(userRepository.findByHandleAndDeletedAtIsNull("me")).thenReturn(Optional.of(user));
+
+        var response = userService.getProfile(userId, "me");
+
+        assertThat(response.isFollowing()).isFalse();
+        assertThat(response.followsViewer()).isFalse();
+        verify(followRepository, never()).existsByFollowerIdAndFolloweeId(any(), any());
+    }
+
+    @Test
+    void getProfileDoesNotCalculateFollowingStatesWithoutViewer() {
+        UUID profileUserId = UUID.randomUUID();
+        User profileUser = savedUser(profileUserId, "target", "Target");
+
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(profileUser));
+
+        var response = userService.getProfile(null, "target");
+
+        assertThat(response.isFollowing()).isFalse();
+        assertThat(response.followsViewer()).isFalse();
+        verify(followRepository, never()).existsByFollowerIdAndFolloweeId(any(), any());
     }
 
     @Test
@@ -99,6 +204,7 @@ class UserServiceTest {
 
         assertThat(response.id()).isEqualTo(userId);
         assertThat(response.isFollowing()).isFalse();
+        assertThat(response.followsViewer()).isFalse();
         verify(followRepository, never()).existsByFollowerIdAndFolloweeId(userId, userId);
     }
 

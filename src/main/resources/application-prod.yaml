@@ -68,9 +68,16 @@ app:
         max-concurrency: ${APP_MEDIA_VIDEO_OPTIMIZATION_MAX_CONCURRENCY:1}
         acquire-timeout-ms: ${APP_MEDIA_VIDEO_OPTIMIZATION_ACQUIRE_TIMEOUT_MS:5000}
         timeout-ms: ${APP_MEDIA_VIDEO_OPTIMIZATION_TIMEOUT_MS:60000}
+      # 게시물 영상 비동기 재인코딩(워커). 작업 입력은 job-dir(기본 java.io.tmpdir 아래)에 둔다.
+      processing:
+        worker-enabled: ${APP_MEDIA_VIDEO_PROCESSING_WORKER_ENABLED:true}
+        preset: ${APP_MEDIA_VIDEO_PROCESSING_PRESET:veryfast}
+        timeout-ms: ${APP_MEDIA_VIDEO_PROCESSING_TIMEOUT_MS:600000}
+        poll-delay-ms: ${APP_MEDIA_VIDEO_PROCESSING_POLL_DELAY_MS:2000}
   post:
     cleanup:
       hard-delete-after: ${POST_CLEANUP_HARD_DELETE_AFTER:24h}
+      hidden-hard-delete-after: ${POST_CLEANUP_HIDDEN_HARD_DELETE_AFTER:14d}
       initial-delay-ms: ${POST_CLEANUP_INITIAL_DELAY_MS:60000}
       fixed-delay-ms: ${POST_CLEANUP_FIXED_DELAY_MS:3600000}
   mail:
@@ -88,12 +95,32 @@ app:
       refresh-cookie-name: ${REFRESH_COOKIE_NAME:refresh_token}
       refresh-cookie-secure: ${REFRESH_COOKIE_SECURE:true}
       refresh-cookie-same-site: ${REFRESH_COOKIE_SAME_SITE:Lax}
+    sse:
+      stream-token-expiration-seconds: ${STREAM_TOKEN_EXPIRATION_SECONDS:60}
+      stream-token-cookie-name: ${STREAM_TOKEN_COOKIE_NAME:message_stream_token}
+      stream-token-cookie-same-site: ${STREAM_TOKEN_COOKIE_SAME_SITE:Lax}
+      stream-token-cookie-secure: ${STREAM_TOKEN_COOKIE_SECURE:true}
     password-reset:
       expiration-minutes: ${PASSWORD_RESET_EXPIRATION_MINUTES:30}
 
 pubg:
   api:
     key: ${PUBG_API_KEY:}
+    connect-timeout: ${PUBG_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${PUBG_API_READ_TIMEOUT:10s}
+
+riot:
+  api:
+    key: ${RIOT_API_KEY:}
+    connect-timeout: ${RIOT_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${RIOT_API_READ_TIMEOUT:10s}
+
+r6:
+  api:
+    key: ${R6DATA_API_KEY:}
+    base-url: ${R6DATA_API_BASE_URL:https://api.r6data.com}
+    connect-timeout: ${R6DATA_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${R6DATA_API_READ_TIMEOUT:10s}
 
 openai:
   api:
@@ -101,4 +128,7 @@ openai:
   moderation:
     enabled: ${OPENAI_MODERATION_ENABLED:true}
     model: ${OPENAI_MODERATION_MODEL:omni-moderation-latest}
+    max-parallel-requests: ${OPENAI_MODERATION_MAX_PARALLEL_REQUESTS:4}
+    connect-timeout: ${OPENAI_MODERATION_CONNECT_TIMEOUT:3s}
+    read-timeout: ${OPENAI_MODERATION_READ_TIMEOUT:10s}
     ffmpeg-path: ${OPENAI_MODERATION_FFMPEG_PATH:ffmpeg}

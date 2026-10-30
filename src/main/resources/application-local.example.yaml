@@ -61,6 +61,12 @@ app:
   frontend:
     base-url: http://localhost:3000
     password-reset-path: /auth/reset-password
+  payment:
+    recovery:
+      # 결제 복구 스케줄러(미확정 주문 정리). 테스트용 application-local.yaml(src/test/resources)에서는
+      # 3600000으로 두어 테스트 중 백그라운드 실행을 막는다.
+      initial-delay-ms: 60000
+      fixed-delay-ms: 300000
   auth:
     jwt:
       secret: "여기에_충분히_긴_랜덤_문자열_또는_base64_secret"
@@ -69,12 +75,36 @@ app:
       refresh-cookie-name: refresh_token
       refresh-cookie-secure: false
       refresh-cookie-same-site: Lax
+    sse:
+      stream-token-cookie-secure: false
     password-reset:
       expiration-minutes: 30
 
 pubg:
   api:
     key: "여기에_PUBG_API_KEY"
+
+riot:
+  api:
+    key: "여기에_RIOT_API_KEY"
+
+r6:
+  api:
+    # Create a key at https://r6data.com/dashboard. Never commit a real key.
+    key: your-r6data-api-key
+    base-url: "https://api.r6data.com"
+    connect-timeout: ${R6DATA_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${R6DATA_API_READ_TIMEOUT:10s}
+
+kakaopay:
+  api:
+    # 카카오페이 개발자센터의 Secret key(dev). 실제 키를 커밋하지 않는다.
+    # 테스트용 application-local.yaml에서는 ""로 비워 셸 환경변수 KAKAOPAY_SECRET_KEY가 있어도 실제 결제 API를 호출하지 않게 한다.
+    secret-key: 여기에_카카오페이_SECRET_KEY
+  # 테스트용 application-local.yaml에서는 ""로 비운다.
+  cid: TC0ONETIME
+  # 결제 취소 API 기능 플래그. 사용자 화면 연결은 없다.
+  cancel-enabled: false
 
 openai:
   api:

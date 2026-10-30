@@ -1,0 +1,7 @@
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+
+[mcp_servers.gamerin-postgres]
+command = "npx"
+args = ["-y", "@bytebase/dbhub@1.2.5", "--transport", "stdio"]
