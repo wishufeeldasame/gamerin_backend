@@ -3,8 +3,11 @@ package com.gamerin.backend.domain.auth.service;
 import com.gamerin.backend.domain.auth.dto.response.EmailVerificationConfirmResponse;
 import com.gamerin.backend.domain.auth.dto.response.EmailVerificationResponse;
 import com.gamerin.backend.domain.auth.entity.EmailVerification;
+import com.gamerin.backend.domain.auth.entity.EmailVerificationLock;
+import com.gamerin.backend.domain.auth.repository.EmailVerificationLockRepository;
 import com.gamerin.backend.domain.auth.repository.EmailVerificationRepository;
 import com.gamerin.backend.domain.user.repository.UserRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +27,7 @@ public class EmailVerificationService {
     static final int MAX_ATTEMPTS = 5;
 
     private final EmailVerificationRepository emailVerificationRepository;
+    private final EmailVerificationLockRepository emailVerificationLockRepository;
     private final UserRepository userRepository;
     private final TokenService tokenService;
     private final EmailVerificationMailService emailVerificationMailService;
@@ -31,10 +35,12 @@ public class EmailVerificationService {
 
     public EmailVerificationService(
             EmailVerificationRepository emailVerificationRepository,
+            EmailVerificationLockRepository emailVerificationLockRepository,
             UserRepository userRepository,
             TokenService tokenService,
             EmailVerificationMailService emailVerificationMailService) {
         this.emailVerificationRepository = emailVerificationRepository;
+        this.emailVerificationLockRepository = emailVerificationLockRepository;
         this.userRepository = userRepository;
         this.tokenService = tokenService;
         this.emailVerificationMailService = emailVerificationMailService;
@@ -45,6 +51,8 @@ public class EmailVerificationService {
         if (userRepository.existsByEmail(email)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 사용 중인 이메일입니다.");
         }
+
+        lockEmailForSend(email);
 
         OffsetDateTime now = OffsetDateTime.now();
         emailVerificationRepository.findTopByEmailOrderByCreatedAtDesc(email)
@@ -60,6 +68,18 @@ public class EmailVerificationService {
         emailVerificationMailService.sendSignupVerificationCode(email, code);
 
         return new EmailVerificationResponse(CODE_EXPIRATION_SECONDS, RESEND_COOLDOWN_SECONDS);
+    }
+
+    // 발송 이력이 없는 이메일은 잠글 행이 없으므로 잠금 행을 먼저 만들고, 동시 최초 요청은 PK 충돌로 거절한다
+    private void lockEmailForSend(String email) {
+        if (emailVerificationLockRepository.findByEmail(email).isPresent()) {
+            return;
+        }
+        try {
+            emailVerificationLockRepository.saveAndFlush(EmailVerificationLock.of(email));
+        } catch (DataIntegrityViolationException e) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "인증번호는 1분 후에 다시 요청할 수 있습니다.");
+        }
     }
 
     // 틀린 시도 횟수가 예외와 함께 롤백되지 않도록 커밋한다
