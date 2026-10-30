@@ -251,17 +251,21 @@ class AdminMentoringServiceTest {
                 .willReturn(programPage);
         // 서비스는 일괄 집계 메서드를 사용하므로 Object[] 형태로 stub
         List<Object[]> sessionRows = new java.util.ArrayList<>();
-        sessionRows.add(new Object[]{programId, 8L});
+        sessionRows.add(new Object[] { programId, 8L });
         List<Object[]> reportRows = new java.util.ArrayList<>();
-        reportRows.add(new Object[]{programId, 2L});
+        reportRows.add(new Object[] { programId, 2L });
+        List<Object[]> directReportRows = new java.util.ArrayList<>();
+        directReportRows.add(new Object[] { programId, 1L });
         given(mentoringApplicationRepository.countByProgramIdIn(List.of(programId)))
                 .willReturn(sessionRows);
         given(reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)))
                 .willReturn(reportRows);
-
+        given(reportRepository.countDirectMentoringReportsByProgramIdIn(List.of(programId)))
+                .willReturn(directReportRows);
 
         // when
-        Page<AdminMentoringProgramResponse> result = adminMentoringService.getPrograms(ProgramStatus.ACTIVE, "코칭", pageable);
+        Page<AdminMentoringProgramResponse> result = adminMentoringService.getPrograms(ProgramStatus.ACTIVE, "코칭",
+                pageable);
 
         // then
         assertThat(result).hasSize(1);
@@ -269,7 +273,7 @@ class AdminMentoringServiceTest {
         assertThat(res.title()).isEqualTo("다이아 탈출 맞춤 코칭");
         assertThat(res.mentorNickname()).isEqualTo("프로멘토");
         assertThat(res.sessions()).isEqualTo(8L);
-        assertThat(res.reports()).isEqualTo(2L);
+        assertThat(res.reports()).isEqualTo(3L); // 신청 건 신고 2건 + 프로그램 직접 신고 1건 = 3건
         assertThat(res.rating()).isEqualTo(4.85);
     }
 
@@ -285,7 +289,8 @@ class AdminMentoringServiceTest {
                 .willReturn(List.of());
 
         // when
-        AdminMentoringProgramResponse res = adminMentoringService.updateProgramStatus(adminId, programId, ProgramStatus.CLOSED);
+        AdminMentoringProgramResponse res = adminMentoringService.updateProgramStatus(adminId, programId,
+                ProgramStatus.CLOSED);
 
         // then
         assertThat(res.status()).isEqualTo(ProgramStatus.CLOSED);
@@ -304,7 +309,7 @@ class AdminMentoringServiceTest {
         given(mentoringProgramRepository.save(any(MentoringProgram.class))).willAnswer(inv -> inv.getArgument(0));
         given(mentoringApplicationRepository.countByProgramId(programId)).willReturn(3L);
         List<Object[]> reportRows = new java.util.ArrayList<>();
-        reportRows.add(new Object[]{programId, 1L});
+        reportRows.add(new Object[] { programId, 1L });
         given(reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)))
                 .willReturn(reportRows);
 
@@ -342,7 +347,8 @@ class AdminMentoringServiceTest {
         given(mentoringApplicationRepository.findByIdForUpdate(applicationId)).willReturn(Optional.of(application));
 
         // when
-        MentoringApplicationResponse response = adminMentoringService.forceRefund(adminId, applicationId, "멘토 불참 신고 접수");
+        MentoringApplicationResponse response = adminMentoringService.forceRefund(adminId, applicationId,
+                "멘토 불참 신고 접수");
 
         // then
         assertThat(response).isNotNull();
@@ -356,8 +362,7 @@ class AdminMentoringServiceTest {
                 eq(30000L),
                 eq(TransactionType.MENTORING_REFUND),
                 any(String.class),
-                eq(applicationId)
-        );
+                eq(applicationId));
 
         verify(adminAuditLogRepository, times(1)).save(any(AdminAuditLog.class));
     }
@@ -385,7 +390,8 @@ class AdminMentoringServiceTest {
                 .willReturn(Optional.of(mentorProfile));
 
         // when
-        MentoringApplicationResponse response = adminMentoringService.forceSettle(adminId, applicationId, "세션 정상 진행 확인");
+        MentoringApplicationResponse response = adminMentoringService.forceSettle(adminId, applicationId,
+                "세션 정상 진행 확인");
 
         // then
         assertThat(response).isNotNull();

@@ -729,4 +729,44 @@ class MentoringServiceTest {
                                         assertThat(ex.getReason()).isEqualTo("활동 중인 멘토만 프로그램을 수정할 수 있습니다.");
                                 });
         }
+
+        @Test
+        @DisplayName("종료 보고(FINISHED) 후 7일이 경과했더라도 미결 신고(RECEIVED, IN_REVIEW)가 존재하면 자동 정산이 보류된다")
+        void processSingleSettlementSkipsWhenUnresolvedReportExists() {
+                UUID mentorId = UUID.randomUUID();
+                UUID menteeId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                UUID appId = UUID.randomUUID();
+                MentoringApplication app = application(mentorId, menteeId, programId, appId);
+                app.setStatus(ApplicationStatus.FINISHED);
+                app.setPaymentStatus(PaymentStatus.ESCROW_HELD);
+                ReflectionTestUtils.setField(app, "updatedAt", OffsetDateTime.now().minusDays(8));
+
+                com.gamerin.backend.domain.report.repository.ReportRepository mockReportRepo = org.mockito.Mockito
+                                .mock(com.gamerin.backend.domain.report.repository.ReportRepository.class);
+
+                SettlementProcessor realProcessor = new SettlementProcessor(
+                                mileageService,
+                                mentoringApplicationRepository,
+                                mentorProfileRepository,
+                                notificationCommandService,
+                                mockReportRepo);
+
+                when(mentoringApplicationRepository.findByIdForUpdate(appId)).thenReturn(Optional.of(app));
+                when(mockReportRepo.existsByTargetTypeAndTargetIdAndStatusIn(
+                                eq(com.gamerin.backend.domain.report.entity.ReportTargetType.MENTORING),
+                                eq(appId),
+                                eq(List.of(
+                                                com.gamerin.backend.domain.report.entity.ReportStatus.RECEIVED,
+                                                com.gamerin.backend.domain.report.entity.ReportStatus.IN_REVIEW))))
+                                .thenReturn(true);
+
+                realProcessor.processSingleSettlement(appId, OffsetDateTime.now().minusDays(7));
+
+                // 정산되지 않고 FINISHED / ESCROW_HELD 상태가 그대로 유지되어야 함
+                assertThat(app.getStatus()).isEqualTo(ApplicationStatus.FINISHED);
+                assertThat(app.getPaymentStatus()).isEqualTo(PaymentStatus.ESCROW_HELD);
+                verify(mileageService, never()).addMileage(any(), any(), any(), any(), any());
+                verify(mentorProfileRepository, never()).incrementMenteeCount(any());
+        }
 }

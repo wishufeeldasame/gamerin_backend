@@ -70,4 +70,19 @@ public interface ReportRepository extends
         @Lock(LockModeType.PESSIMISTIC_WRITE)
         @Query("SELECT r FROM Report r WHERE r.reportCode = :reportCode")
         Optional<Report> findByReportCodeForUpdate(@Param("reportCode") String reportCode);
+
+        // 특정 대상(멘토링 신청 건 등)에 대해 특정 상태 목록(예: RECEIVED, IN_REVIEW 미결 상태)의 신고가 존재하는지 확인
+        // -> 7일 자동 정산 스케줄러에서 분쟁(이의제기) 진행 중인 신청 건의 정산을 보류할 때 사용
+        boolean existsByTargetTypeAndTargetIdAndStatusIn(
+                        ReportTargetType targetType,
+                        UUID targetId,
+                        List<ReportStatus> statuses);
+
+        // 프로그램 ID 자체(targetId = programId)로 직접 접수된 MENTORING 신고 건수 일괄 집계 (N+1 방지용)
+        @Query("SELECT r.targetId AS programId, COUNT(r) AS cnt " +
+                        "FROM Report r " +
+                        "WHERE r.targetType = com.gamerin.backend.domain.report.entity.ReportTargetType.MENTORING " +
+                        "AND r.targetId IN :programIds " +
+                        "GROUP BY r.targetId")
+        List<Object[]> countDirectMentoringReportsByProgramIdIn(@Param("programIds") List<UUID> programIds);
 }

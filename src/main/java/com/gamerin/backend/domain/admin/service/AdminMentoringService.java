@@ -170,10 +170,15 @@ public class AdminMentoringService {
                         sessionMap.put((UUID) row[0], (Long) row[1]);
                 }
 
-                // 신고 건수 일괄 조회 (쿼리 1번)
+                // 신고 건수 일괄 조회 (신청 건 기준 신고 + 프로그램 직접 신고 합산)
                 Map<UUID, Long> reportMap = new java.util.HashMap<>();
-                for (Object[] row : reportRepository.countMentoringReportsByProgramIdIn(programIds)) {
-                        reportMap.put((UUID) row[0], (Long) row[1]);
+                if (!programIds.isEmpty()) {
+                        for (Object[] row : reportRepository.countMentoringReportsByProgramIdIn(programIds)) {
+                                reportMap.merge((UUID) row[0], (Long) row[1], Long::sum);
+                        }
+                        for (Object[] row : reportRepository.countDirectMentoringReportsByProgramIdIn(programIds)) {
+                                reportMap.merge((UUID) row[0], (Long) row[1], Long::sum);
+                        }
                 }
 
                 return page.map(program -> {
@@ -346,9 +351,14 @@ public class AdminMentoringService {
         }
 
         private long countProgramReports(UUID programId) {
-                return reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)).stream()
+                long appReports = reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)).stream()
                                 .mapToLong(row -> (Long) row[1])
                                 .sum();
+                long directReports = reportRepository.countDirectMentoringReportsByProgramIdIn(List.of(programId))
+                                .stream()
+                                .mapToLong(row -> (Long) row[1])
+                                .sum();
+                return appReports + directReports;
         }
 
         private User findAdmin(UUID adminId) {

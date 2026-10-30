@@ -1,11 +1,14 @@
-// 신고/어드민 시스템 통합 서비스 (유저 신고 접수 + 어드민 관리 및 숨김 콘텐츠 실시간 연동 복구 + 원클릭 통합 판정)
 package com.gamerin.backend.domain.report.service;
 
 import com.gamerin.backend.domain.admin.entity.AdminAuditLog;
 import com.gamerin.backend.domain.admin.repository.AdminAuditLogRepository;
 import com.gamerin.backend.domain.admin.repository.SystemConfigRepository;
+import com.gamerin.backend.domain.admin.service.AdminMentoringService;
+import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
+import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
+import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
 import com.gamerin.backend.domain.message.entity.DirectMessage;
 import com.gamerin.backend.domain.message.repository.DirectMessageRepository;
 import com.gamerin.backend.domain.post.entity.Post;
@@ -32,6 +35,7 @@ import com.gamerin.backend.domain.report.repository.ReportRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -49,6 +53,13 @@ import java.util.UUID;
 @Transactional(readOnly = true)
 public class ReportService {
 
+    // 멘토링 신청 건에 대해 신고(이의제기)가 가능한 활성 상태 목록 (이미 정산 완료/취소/거절된 건은 제외)
+    private static final List<ApplicationStatus> REPORTABLE_APPLICATION_STATUSES = List.of(
+            ApplicationStatus.APPLIED,
+            ApplicationStatus.ACCEPTED,
+            ApplicationStatus.ONGOING,
+            ApplicationStatus.FINISHED);
+
     private final ReportRepository reportRepository;
     private final ReportCountRepository reportCountRepository;
     private final SystemConfigRepository systemConfigRepository;
@@ -57,6 +68,8 @@ public class ReportService {
     private final PostCommentRepository postCommentRepository;
     private final AdminAuditLogRepository adminAuditLogRepository;
     private final MentoringApplicationRepository mentoringApplicationRepository;
+    private final MentoringProgramRepository mentoringProgramRepository;
+    private final AdminMentoringService adminMentoringService;
     private final DirectMessageRepository directMessageRepository;
     private final ReportCountInitializer reportCountInitializer;
     private final UserPenaltyService userPenaltyService;
@@ -73,6 +86,37 @@ public class ReportService {
             DirectMessageRepository directMessageRepository,
             ReportCountInitializer reportCountInitializer,
             UserPenaltyService userPenaltyService) {
+        this(
+                reportRepository,
+                reportCountRepository,
+                systemConfigRepository,
+                userRepository,
+                postRepository,
+                postCommentRepository,
+                adminAuditLogRepository,
+                mentoringApplicationRepository,
+                null,
+                null,
+                directMessageRepository,
+                reportCountInitializer,
+                userPenaltyService);
+    }
+
+    @Autowired
+    public ReportService(
+            ReportRepository reportRepository,
+            ReportCountRepository reportCountRepository,
+            SystemConfigRepository systemConfigRepository,
+            UserRepository userRepository,
+            PostRepository postRepository,
+            PostCommentRepository postCommentRepository,
+            AdminAuditLogRepository adminAuditLogRepository,
+            MentoringApplicationRepository mentoringApplicationRepository,
+            MentoringProgramRepository mentoringProgramRepository,
+            AdminMentoringService adminMentoringService,
+            DirectMessageRepository directMessageRepository,
+            ReportCountInitializer reportCountInitializer,
+            UserPenaltyService userPenaltyService) {
         this.reportRepository = reportRepository;
         this.reportCountRepository = reportCountRepository;
         this.systemConfigRepository = systemConfigRepository;
@@ -81,6 +125,8 @@ public class ReportService {
         this.postCommentRepository = postCommentRepository;
         this.adminAuditLogRepository = adminAuditLogRepository;
         this.mentoringApplicationRepository = mentoringApplicationRepository;
+        this.mentoringProgramRepository = mentoringProgramRepository;
+        this.adminMentoringService = adminMentoringService;
         this.directMessageRepository = directMessageRepository;
         this.reportCountInitializer = reportCountInitializer;
         this.userPenaltyService = userPenaltyService;
@@ -269,7 +315,7 @@ public class ReportService {
     }
 
     /**
-     * 어드민 신고 원클릭 통합 판정 처리 (상태 변경 + 콘텐츠 숨김 + 유저 제재 + 감사 로그)
+     * 어드민 신고 원클릭 통합 판정 처리 (상태 변경 + 콘텐츠 숨김 + 멘토링 에스크로 연동 + 유저 제재 + 감사 로그)
      */
     @Transactional
     public AdminReportDetailResponse resolveReport(UUID adminId, String reportIdOrCode,
@@ -283,8 +329,7 @@ public class ReportService {
 
         // 허용된 판정 상태 검증
         if (request.decision() != ReportStatus.RESOLVED && request.decision() != ReportStatus.REJECTED) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "처리 결정은 RESOLVED(처리 완료) 또는 REJECTED(반려)만 가능합니다.");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "처리 결정은 RESOLVED(처리 완료) 또는 REJECTED(반려)만 가능합니다.");
         }
 
         User admin = userRepository.findById(adminId)
@@ -294,7 +339,7 @@ public class ReportService {
         report.updateStatus(request.decision(), admin);
         reportRepository.save(report);
 
-        // 2. 콘텐츠 숨김 처리 (처리 완료이고 숨김 체크된 경우)
+        // 2. 콘텐츠 숨김 처리 (처리 완료이고 숨김 체크된 경우 - 게시글/댓글)
         if (request.decision() == ReportStatus.RESOLVED && request.hideTargetContent()
                 && isAutoHideSupported(report.getTargetType())) {
             // 잠금 순서(report_counts → posts → post_comments)를 신고 접수·복구·정리와 맞춘다.
@@ -313,6 +358,11 @@ public class ReportService {
                         String.format("신고 처리에 따른 콘텐츠 관리자 숨김 (%s, ID: %s)", report.getTargetType(),
                                 report.getTargetId())));
             }
+        }
+
+        // 2-1. 멘토링 신고 판정 연동 (신청 건 이의제기 시 에스크로 강제 환불/정산, 프로그램 신고 시 프로그램 숨김)
+        if (report.getTargetType() == ReportTargetType.MENTORING) {
+            handleMentoringReportResolution(adminId, report, request);
         }
 
         // 3. 피신고자 제재 부여 (처리 완료이고 제재 유형이 선택된 경우)
@@ -345,6 +395,48 @@ public class ReportService {
                 logDetails));
 
         return getAdminReportDetail(reportIdOrCode);
+    }
+
+    /**
+     * 멘토링(MENTORING) 신고 판정에 따른 후속 조치 수행
+     * - 신청 건(MentoringApplication) 이의제기: 멘티가 신고한 에스크로 보관(ESCROW_HELD) 건에 대해
+     * RESOLVED(인용) 시 멘티에게 강제 환불, REJECTED(기각) 및 FINISHED 상태 시 멘토에게 강제 정산
+     * - 프로그램(MentoringProgram) 신고: RESOLVED + hideTargetContent 체크 시 프로그램 강제 숨김
+     */
+    private void handleMentoringReportResolution(
+            UUID adminId,
+            Report report,
+            AdminReportResolutionRequest request) {
+        if (adminMentoringService == null) {
+            return;
+        }
+
+        UUID targetId = report.getTargetId();
+        MentoringApplication application = mentoringApplicationRepository.findById(targetId).orElse(null);
+
+        if (application != null) {
+            boolean reportedByMentee = application.getMentee() != null
+                    && report.getReporter() != null
+                    && application.getMentee().getId().equals(report.getReporter().getId());
+
+            if (reportedByMentee && application.getPaymentStatus() == PaymentStatus.ESCROW_HELD) {
+                if (request.decision() == ReportStatus.RESOLVED) {
+                    adminMentoringService.forceRefund(adminId, application.getId(), request.reason());
+                } else if (request.decision() == ReportStatus.REJECTED
+                        && application.getStatus() == ApplicationStatus.FINISHED) {
+                    adminMentoringService.forceSettle(adminId, application.getId(), request.reason());
+                }
+            }
+            return;
+        }
+
+        if (request.decision() == ReportStatus.RESOLVED
+                && request.hideTargetContent()
+                && mentoringProgramRepository != null) {
+            mentoringProgramRepository.findByIdAndDeletedAtIsNull(targetId)
+                    .ifPresent(
+                            program -> adminMentoringService.hideProgram(adminId, program.getId(), request.reason()));
+        }
     }
 
     // ================= [어드민 숨김 콘텐츠 관리] =================
@@ -450,7 +542,11 @@ public class ReportService {
             case MESSAGE -> directMessageRepository.findById(targetId).map(DirectMessage::getSender).orElse(null);
             case MENTORING -> mentoringApplicationRepository.findById(targetId)
                     .map(app -> mentoringCounterpart(app, report.getReporter().getId()))
-                    .orElse(null);
+                    .orElseGet(() -> mentoringProgramRepository != null
+                            ? mentoringProgramRepository.findById(targetId)
+                                    .map(program -> program.getMentor() != null ? program.getMentor().getUser() : null)
+                                    .orElse(null)
+                            : null);
         };
     }
 
@@ -486,10 +582,17 @@ public class ReportService {
                     .map(comment -> comment.getDeletedAt() == null && comment.getPost().getDeletedAt() == null)
                     .orElse(false);
             case USER -> userRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
-            // 신청 건 참여자(멘토·멘티)만 상대방을 신고할 수 있다.
+            // 1) 신청 건(MentoringApplication)인 경우: 참여자(멘토·멘티)이고 진행/종료보고 상태일 때만 허용
+            // 2) 프로그램(MentoringProgram)인 경우: 삭제되지 않은 프로그램이고 본인 프로그램이 아닐 때 허용
             case MENTORING -> mentoringApplicationRepository.findById(targetId)
-                    .map(app -> mentoringCounterpart(app, reporterId) != null)
-                    .orElse(false);
+                    .map(app -> mentoringCounterpart(app, reporterId) != null
+                            && REPORTABLE_APPLICATION_STATUSES.contains(app.getStatus()))
+                    .orElseGet(() -> mentoringProgramRepository != null
+                            && mentoringProgramRepository.findByIdAndDeletedAtIsNull(targetId)
+                                    .map(program -> program.getMentor() != null
+                                            && program.getMentor().getUser() != null
+                                            && !program.getMentor().getUser().getId().equals(reporterId))
+                                    .orElse(false));
             case MESSAGE ->
                 directMessageRepository.findActiveByIdAndParticipantUserId(targetId, reporterId).isPresent();
         };
@@ -521,7 +624,11 @@ public class ReportService {
                     .orElse("메시지 (ID: " + targetId + ")");
             case MENTORING -> mentoringApplicationRepository.findById(targetId)
                     .map(app -> "멘토링 신청 (프로그램: " + (app.getProgram() != null ? app.getProgram().getTitle() : "") + ")")
-                    .orElse("멘토링 신청 건 (ID: " + targetId + ")");
+                    .orElseGet(() -> mentoringProgramRepository != null
+                            ? mentoringProgramRepository.findById(targetId)
+                                    .map(program -> "멘토링 프로그램: " + program.getTitle())
+                                    .orElse("멘토링 신청 건 (ID: " + targetId + ")")
+                            : "멘토링 신청 건 (ID: " + targetId + ")");
         };
     }
 
