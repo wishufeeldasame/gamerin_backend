@@ -42,6 +42,9 @@ app:
       optimization:
         enabled: false
         ffmpeg-path: ffmpeg
+      processing:
+        # 테스트는 작업 처리를 직접 호출해 검증한다. 스케줄러가 H2에서 대기열을 계속 조회하지 않게 끈다.
+        worker-enabled: false
   post:
     cleanup:
       hard-delete-after: 24h

@@ -27,6 +27,7 @@ import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
 import com.gamerin.backend.domain.post.dto.request.UpdatePostRequest;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
+import com.gamerin.backend.domain.post.dto.response.PostVideoJobResponse;
 import com.gamerin.backend.domain.post.dto.response.ShareResponse;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostComment;
@@ -72,7 +73,7 @@ public class PostService {
     private final MediaUploadSecurityService mediaUploadSecurityService;
     private final LightweightSecurityScanService lightweightSecurityScanService;
     private final TextSecurityService textSecurityService;
-    private final VideoOptimizationService videoOptimizationService;
+    private final PostVideoJobService postVideoJobService;
     private final MembershipService membershipService;
     private final ReportCountRepository reportCountRepository;
     private final Clock clock;
@@ -96,7 +97,7 @@ public class PostService {
             MediaUploadSecurityService mediaUploadSecurityService,
             LightweightSecurityScanService lightweightSecurityScanService,
             TextSecurityService textSecurityService,
-            VideoOptimizationService videoOptimizationService,
+            PostVideoJobService postVideoJobService,
             long maxVideoFileSizeBytes) {
         this(
                 userRepository,
@@ -116,7 +117,7 @@ public class PostService {
                 mediaUploadSecurityService,
                 lightweightSecurityScanService,
                 textSecurityService,
-                videoOptimizationService,
+                postVideoJobService,
                 null,
                 null,
                 Clock.systemUTC(),
@@ -142,7 +143,7 @@ public class PostService {
             MediaUploadSecurityService mediaUploadSecurityService,
             LightweightSecurityScanService lightweightSecurityScanService,
             TextSecurityService textSecurityService,
-            VideoOptimizationService videoOptimizationService,
+            PostVideoJobService postVideoJobService,
             MembershipService membershipService,
             ReportCountRepository reportCountRepository,
             @Value("${app.media.video.max-file-size-bytes:524288000}") long maxVideoFileSizeBytes) {
@@ -164,7 +165,7 @@ public class PostService {
                 mediaUploadSecurityService,
                 lightweightSecurityScanService,
                 textSecurityService,
-                videoOptimizationService,
+                postVideoJobService,
                 membershipService,
                 reportCountRepository,
                 Clock.systemUTC(),
@@ -189,7 +190,7 @@ public class PostService {
             MediaUploadSecurityService mediaUploadSecurityService,
             LightweightSecurityScanService lightweightSecurityScanService,
             TextSecurityService textSecurityService,
-            VideoOptimizationService videoOptimizationService,
+            PostVideoJobService postVideoJobService,
             MembershipService membershipService,
             ReportCountRepository reportCountRepository,
             Clock clock,
@@ -215,7 +216,7 @@ public class PostService {
         this.mediaUploadSecurityService = mediaUploadSecurityService;
         this.lightweightSecurityScanService = lightweightSecurityScanService;
         this.textSecurityService = textSecurityService;
-        this.videoOptimizationService = videoOptimizationService;
+        this.postVideoJobService = postVideoJobService;
         this.membershipService = membershipService;
         this.reportCountRepository = reportCountRepository;
         this.clock = clock != null ? clock : Clock.systemUTC();
@@ -238,7 +239,11 @@ public class PostService {
         return postResponseAssembler.toPostDetail(savedPost, user.getId());
     }
 
-    public PostDetailResponse create(CustomUserPrincipal principal, CreateMultipartPostRequest request) {
+    /**
+     * 사진·텍스트 게시물은 바로 만들어 반환한다. 영상은 검증·검열 후 처리 작업만 저장하고(비동기),
+     * 워커가 재인코딩을 마치면 게시물이 만들어진다.
+     */
+    public MultipartCreateResult create(CustomUserPrincipal principal, CreateMultipartPostRequest request) {
         User user = getCurrentUser(principal);
         String content = normalizeContent(request.getContent());
         List<MultipartFile> mediaFiles = normalizeMultipartFiles(request.getMediaFiles());
@@ -251,23 +256,31 @@ public class PostService {
             moderatedFiles.add(thumbnailFile);
         }
         contentModerationService.assertPostAllowed(content, moderatedFiles);
-        PreparedMediaUpload preparedMediaUpload = prepareMediaUpload(mediaFiles, thumbnailFile);
 
-        try {
-            Post post = Post.create(user, content);
-            Post savedPost = postRepository.save(post);
-            hashtagService.attachToPost(savedPost);
-            mentionService.attachToPost(savedPost);
-
-            if (!preparedMediaUpload.isEmpty()) {
-                saveUploadedMedia(savedPost, preparedMediaUpload);
-            }
-
-            return postResponseAssembler.toPostDetail(savedPost, user.getId());
-        } catch (RuntimeException ex) {
-            preparedMediaUpload.deleteTemporaryFiles(mediaStorageService);
-            throw ex;
+        if (!mediaFiles.isEmpty() && resolveMediaType(mediaFiles.getFirst()) == PostMediaType.VIDEO) {
+            return MultipartCreateResult.ofVideoJob(
+                    postVideoJobService.enqueue(user, content, mediaFiles.getFirst(), thumbnailFile));
         }
+
+        List<MediaStorageService.PreparedMediaFile> preparedImages = mediaFiles.stream()
+                .map(mediaUploadSecurityService::prepareImage)
+                .toList();
+
+        Post post = Post.create(user, content);
+        Post savedPost = postRepository.save(post);
+        hashtagService.attachToPost(savedPost);
+        mentionService.attachToPost(savedPost);
+
+        if (!preparedImages.isEmpty()) {
+            saveUploadedImages(savedPost, preparedImages);
+        }
+
+        return MultipartCreateResult.ofPost(postResponseAssembler.toPostDetail(savedPost, user.getId()));
+    }
+
+    public PostVideoJobResponse getVideoJob(CustomUserPrincipal principal, UUID jobId) {
+        User user = getCurrentUser(principal);
+        return postVideoJobService.getJob(user.getId(), jobId);
     }
 
     /**
@@ -426,35 +439,15 @@ public class PostService {
         post.decreaseCommentCount();
     }
 
-    private void saveUploadedMedia(
-            Post post,
-            PreparedMediaUpload preparedMediaUpload) {
+    private void saveUploadedImages(Post post, List<MediaStorageService.PreparedMediaFile> preparedImages) {
         List<MediaStorageService.StoredFile> storedFiles = new ArrayList<>();
 
         try {
-            MediaStorageService.StoredFile storedThumbnail = null;
-            if (preparedMediaUpload.preparedThumbnailFile() != null) {
-                storedThumbnail = mediaStorageService.storePostMedia(preparedMediaUpload.preparedThumbnailFile());
-                storedFiles.add(storedThumbnail);
-            }
-
             List<PostMedia> mediaToSave = new ArrayList<>();
-            for (int index = 0; index < preparedMediaUpload.mediaCount(); index++) {
-                MediaStorageService.StoredFile storedMedia;
-                if (preparedMediaUpload.mediaType() == PostMediaType.IMAGE) {
-                    storedMedia = mediaStorageService
-                            .storePostMedia(preparedMediaUpload.preparedImageFiles().get(index));
-                } else {
-                    storedMedia = mediaStorageService
-                            .storePostMedia(preparedMediaUpload.preparedVideoFiles().get(index));
-                }
+            for (int index = 0; index < preparedImages.size(); index++) {
+                MediaStorageService.StoredFile storedMedia = mediaStorageService.storePostMedia(preparedImages.get(index));
                 storedFiles.add(storedMedia);
-                mediaToSave.add(PostMedia.create(
-                        post,
-                        preparedMediaUpload.mediaType(),
-                        storedMedia.publicUrl(),
-                        storedThumbnail != null ? storedThumbnail.publicUrl() : null,
-                        index));
+                mediaToSave.add(PostMedia.create(post, PostMediaType.IMAGE, storedMedia.publicUrl(), null, index));
             }
 
             postMediaRepository.saveAll(mediaToSave);
@@ -464,31 +457,7 @@ public class PostService {
                 throw responseStatusException;
             }
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to upload media files.", ex);
-        } finally {
-            preparedMediaUpload.deleteTemporaryFiles(mediaStorageService);
         }
-    }
-
-    private PreparedMediaUpload prepareMediaUpload(List<MultipartFile> mediaFiles, MultipartFile thumbnailFile) {
-        if (mediaFiles.isEmpty()) {
-            return PreparedMediaUpload.empty();
-        }
-
-        PostMediaType mediaType = resolveMediaType(mediaFiles.getFirst());
-        if (mediaType == PostMediaType.IMAGE) {
-            List<MediaStorageService.PreparedMediaFile> preparedImageFiles = mediaFiles.stream()
-                    .map(mediaUploadSecurityService::prepareImage)
-                    .toList();
-            return new PreparedMediaUpload(mediaType, preparedImageFiles, List.of(), null);
-        }
-
-        List<MediaStorageService.PreparedMediaPath> preparedVideoFiles = mediaFiles.stream()
-                .map(videoOptimizationService::prepareVideo)
-                .toList();
-        MediaStorageService.PreparedMediaFile preparedThumbnailFile = thumbnailFile == null
-                ? null
-                : mediaUploadSecurityService.prepareImage(thumbnailFile);
-        return new PreparedMediaUpload(mediaType, List.of(), preparedVideoFiles, preparedThumbnailFile);
     }
 
     private void validateCreateRequest(String content) {
@@ -654,26 +623,15 @@ public class PostService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    private record PreparedMediaUpload(
-            PostMediaType mediaType,
-            List<MediaStorageService.PreparedMediaFile> preparedImageFiles,
-            List<MediaStorageService.PreparedMediaPath> preparedVideoFiles,
-            MediaStorageService.PreparedMediaFile preparedThumbnailFile) {
+    /** 사진·텍스트 게시물이면 post, 영상 게시물이면 처리 작업(videoJob) 중 하나만 채운다. */
+    public record MultipartCreateResult(PostDetailResponse post, PostVideoJobResponse videoJob) {
 
-        private static PreparedMediaUpload empty() {
-            return new PreparedMediaUpload(null, List.of(), List.of(), null);
+        static MultipartCreateResult ofPost(PostDetailResponse post) {
+            return new MultipartCreateResult(post, null);
         }
 
-        private boolean isEmpty() {
-            return preparedImageFiles.isEmpty() && preparedVideoFiles.isEmpty();
-        }
-
-        private int mediaCount() {
-            return mediaType == PostMediaType.IMAGE ? preparedImageFiles.size() : preparedVideoFiles.size();
-        }
-
-        private void deleteTemporaryFiles(MediaStorageService mediaStorageService) {
-            preparedVideoFiles.forEach(mediaStorageService::deleteQuietly);
+        static MultipartCreateResult ofVideoJob(PostVideoJobResponse videoJob) {
+            return new MultipartCreateResult(null, videoJob);
         }
     }
 }

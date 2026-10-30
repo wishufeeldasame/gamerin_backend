@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -43,6 +44,7 @@ import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
 import com.gamerin.backend.domain.post.dto.request.UpdatePostRequest;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
+import com.gamerin.backend.domain.post.dto.response.PostVideoJobResponse;
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostComment;
 import com.gamerin.backend.domain.post.entity.PostLike;
@@ -120,7 +122,7 @@ class PostServiceTest {
     private TextSecurityService textSecurityService;
 
     @Mock
-    private VideoOptimizationService videoOptimizationService;
+    private PostVideoJobService postVideoJobService;
 
     @Mock
     private MembershipService membershipService;
@@ -153,7 +155,7 @@ class PostServiceTest {
                 mediaUploadSecurityService,
                 lightweightSecurityScanService,
                 textSecurityService,
-                videoOptimizationService,
+                postVideoJobService,
                 membershipService,
                 reportCountRepository,
                 clock,
@@ -180,7 +182,7 @@ class PostServiceTest {
                 mediaUploadSecurityService,
                 lightweightSecurityScanService,
                 textSecurityService,
-                videoOptimizationService,
+                postVideoJobService,
                 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("max file size");
@@ -256,44 +258,49 @@ class PostServiceTest {
     }
 
     @Test
-    void createMultipartStoresUploadedVideoWithoutThumbnail() throws Exception {
+    void createMultipartQueuesVideoUploadWithoutCreatingPost() {
         UUID userId = UUID.randomUUID();
-        UUID postId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
-        PostDetailResponse response = postDetailResponse(postId);
+        MockMultipartFile video = videoFile();
+        PostVideoJobResponse queued = new PostVideoJobResponse(UUID.randomUUID(), "QUEUED", null, null);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.save(any(Post.class))).thenAnswer(invocation -> {
-            Post post = invocation.getArgument(0);
-            ReflectionTestUtils.setField(post, "id", postId);
-            return post;
-        });
-        when(postResponseAssembler.toPostDetail(any(Post.class), any(UUID.class))).thenReturn(response);
         when(videoMetadataService.readDurationSeconds(any())).thenReturn(120.0);
-        MediaStorageService.PreparedMediaPath preparedVideo = preparedVideo();
-        when(videoOptimizationService.prepareVideo(any(MultipartFile.class))).thenReturn(preparedVideo);
-        when(mediaStorageService.storePostMedia(any(MediaStorageService.PreparedMediaPath.class)))
-                .thenReturn(new MediaStorageService.StoredFile(
-                        Path.of("uploads/post-media/video.mp4"),
-                        "http://localhost:8080/uploads/post-media/video.mp4"));
+        when(postVideoJobService.enqueue(eq(user), eq("clip"), eq(video), isNull())).thenReturn(queued);
+
+        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
+        request.setContent(" clip ");
+        request.setMediaFiles(List.of(video));
+
+        PostService.MultipartCreateResult result = postService.create(CustomUserPrincipal.from(user), request);
+
+        assertThat(result.videoJob()).isSameAs(queued);
+        assertThat(result.post()).isNull();
+        verify(contentModerationService).assertPostAllowed(eq("clip"), anyList());
+        verify(postRepository, never()).save(any(Post.class));
+        verify(hashtagService, never()).attachToPost(any(Post.class));
+        verify(mentionService, never()).attachToPost(any(Post.class));
+        verify(postMediaRepository, never()).saveAll(anyList());
+    }
+
+    @Test
+    void createMultipartDoesNotQueueVideoWhenModerationFlagsIt() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(videoMetadataService.readDurationSeconds(any())).thenReturn(30.0);
+        doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Content violates moderation policy"))
+                .when(contentModerationService)
+                .assertPostAllowed(any(), anyList());
 
         CreateMultipartPostRequest request = new CreateMultipartPostRequest();
         request.setMediaFiles(List.of(videoFile()));
 
-        postService.create(CustomUserPrincipal.from(user), request);
+        assertThatThrownBy(() -> postService.create(CustomUserPrincipal.from(user), request))
+                .isInstanceOf(ResponseStatusException.class);
 
-        verify(hashtagService).attachToPost(any(Post.class));
-        verify(mentionService).attachToPost(any(Post.class));
-        ArgumentCaptor<List<PostMedia>> mediaCaptor = ArgumentCaptor.forClass(List.class);
-        verify(postMediaRepository).saveAll(mediaCaptor.capture());
-
-        List<PostMedia> savedMedia = mediaCaptor.getValue();
-        assertThat(savedMedia).hasSize(1);
-        assertThat(savedMedia.get(0).getMediaType()).isEqualTo(PostMediaType.VIDEO);
-        assertThat(savedMedia.get(0).getMediaUrl()).endsWith("/video.mp4");
-        assertThat(savedMedia.get(0).getThumbnailUrl()).isNull();
-        verify(mediaStorageService).deleteQuietly(preparedVideo);
-        verify(mediaStorageService, never()).deleteQuietly(any(MediaStorageService.StoredFile.class));
+        verify(postVideoJobService, never()).enqueue(any(), any(), any(), any());
     }
 
     @Test
@@ -372,7 +379,7 @@ class PostServiceTest {
 
         verify(mediaUploadSecurityService, never()).assertVideoFileSafe(any(MultipartFile.class));
         verify(videoMetadataService, never()).readDurationSeconds(any(MultipartFile.class));
-        verify(videoOptimizationService, never()).prepareVideo(any(MultipartFile.class));
+        verify(postVideoJobService, never()).enqueue(any(), any(), any(), any());
     }
 
     @Test
@@ -394,7 +401,7 @@ class PostServiceTest {
         verify(mediaUploadSecurityService).assertImageFileSafe(image);
         verify(mediaUploadSecurityService, never()).assertVideoFileSafe(video);
         verify(videoMetadataService, never()).readDurationSeconds(video);
-        verify(videoOptimizationService, never()).prepareVideo(video);
+        verify(postVideoJobService, never()).enqueue(any(), any(), any(), any());
     }
 
     @Test
@@ -442,7 +449,7 @@ class PostServiceTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
 
         verify(postRepository, never()).save(any(Post.class));
-        verify(videoOptimizationService, never()).prepareVideo(any(MultipartFile.class));
+        verify(postVideoJobService, never()).enqueue(any(), any(), any(), any());
         verify(mediaUploadSecurityService, never()).prepareImage(any(MultipartFile.class));
     }
 
@@ -1098,9 +1105,5 @@ class PostServiceTest {
 
     private MediaStorageService.PreparedMediaFile preparedImage() {
         return new MediaStorageService.PreparedMediaFile("compressed-image".getBytes(), ".jpg");
-    }
-
-    private MediaStorageService.PreparedMediaPath preparedVideo() {
-        return new MediaStorageService.PreparedMediaPath(Path.of("tmp/optimized-video.mp4"), ".mp4");
     }
 }

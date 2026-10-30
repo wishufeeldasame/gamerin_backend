@@ -68,6 +68,12 @@ app:
         max-concurrency: ${APP_MEDIA_VIDEO_OPTIMIZATION_MAX_CONCURRENCY:1}
         acquire-timeout-ms: ${APP_MEDIA_VIDEO_OPTIMIZATION_ACQUIRE_TIMEOUT_MS:5000}
         timeout-ms: ${APP_MEDIA_VIDEO_OPTIMIZATION_TIMEOUT_MS:60000}
+      # 게시물 영상 비동기 재인코딩(워커). 작업 입력은 job-dir(기본 java.io.tmpdir 아래)에 둔다.
+      processing:
+        worker-enabled: ${APP_MEDIA_VIDEO_PROCESSING_WORKER_ENABLED:true}
+        preset: ${APP_MEDIA_VIDEO_PROCESSING_PRESET:veryfast}
+        timeout-ms: ${APP_MEDIA_VIDEO_PROCESSING_TIMEOUT_MS:600000}
+        poll-delay-ms: ${APP_MEDIA_VIDEO_PROCESSING_POLL_DELAY_MS:2000}
   post:
     cleanup:
       hard-delete-after: ${POST_CLEANUP_HARD_DELETE_AFTER:24h}
