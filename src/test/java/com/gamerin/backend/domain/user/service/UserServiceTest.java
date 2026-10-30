@@ -3,6 +3,7 @@ package com.gamerin.backend.domain.user.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
@@ -220,7 +222,7 @@ class UserServiceTest {
                 "/uploads/profile-images/" + userId + "/profile/avatar.jpg"
         );
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(userRepository.findActiveByIdForUpdate(userId)).thenReturn(Optional.of(user));
         when(mediaUploadSecurityService.prepareProfileAvatarImage(file)).thenReturn(preparedFile);
         when(mediaStorageService.storeProfileImage(eq(userId), eq("profile"), eq(preparedFile))).thenReturn(storedFile);
 
@@ -231,6 +233,30 @@ class UserServiceTest {
         assertThat(response.sizeBytes()).isEqualTo(preparedFile.bytes().length);
         assertThat(user.getProfile().getProfileImageUrl()).isEqualTo("/uploads/profile-images/" + userId + "/profile/avatar.jpg");
         verify(lightweightSecurityScanService).assertFileClean(file);
+    }
+
+    @Test
+    void uploadProfileImagePreparesImageBeforeAcquiringUserLock() throws Exception {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "me", "Me");
+        MockMultipartFile file = new MockMultipartFile("file", "avatar.jpg", "image/jpeg", "image".getBytes());
+        MediaStorageService.PreparedMediaFile preparedFile =
+                new MediaStorageService.PreparedMediaFile("compressed".getBytes(), ".jpg");
+        MediaStorageService.StoredFile storedFile = new MediaStorageService.StoredFile(
+                Path.of("uploads/profile-images/" + userId + "/profile/avatar.jpg"),
+                "/uploads/profile-images/" + userId + "/profile/avatar.jpg"
+        );
+
+        when(userRepository.findActiveByIdForUpdate(userId)).thenReturn(Optional.of(user));
+        when(mediaUploadSecurityService.prepareProfileAvatarImage(file)).thenReturn(preparedFile);
+        when(mediaStorageService.storeProfileImage(eq(userId), eq("profile"), eq(preparedFile))).thenReturn(storedFile);
+
+        userService.uploadProfileImage(userId, ProfileImageTarget.PROFILE, file);
+
+        InOrder inOrder = inOrder(lightweightSecurityScanService, mediaUploadSecurityService, userRepository);
+        inOrder.verify(lightweightSecurityScanService).assertFileClean(file);
+        inOrder.verify(mediaUploadSecurityService).prepareProfileAvatarImage(file);
+        inOrder.verify(userRepository).findActiveByIdForUpdate(userId);
     }
 
     @Test
@@ -247,7 +273,7 @@ class UserServiceTest {
                 "/uploads/profile-images/" + userId + "/cover/cover.jpg"
         );
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(userRepository.findActiveByIdForUpdate(userId)).thenReturn(Optional.of(user));
         when(mediaUploadSecurityService.prepareProfileCoverImage(file)).thenReturn(preparedFile);
         when(mediaStorageService.storeProfileImage(eq(userId), eq("cover"), eq(preparedFile))).thenReturn(storedFile);
 
@@ -273,7 +299,7 @@ class UserServiceTest {
                 "/uploads/profile-images/" + userId + "/cover/cover.jpg"
         );
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(userRepository.findActiveByIdForUpdate(userId)).thenReturn(Optional.of(user));
         when(mediaUploadSecurityService.prepareProfileCoverImage(file)).thenReturn(preparedFile);
         when(mediaStorageService.storeProfileImage(eq(userId), eq("cover"), eq(preparedFile))).thenReturn(storedFile);
 
@@ -303,7 +329,7 @@ class UserServiceTest {
                 "/uploads/profile-images/" + userId + "/profile/avatar.jpg"
         );
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(userRepository.findActiveByIdForUpdate(userId)).thenReturn(Optional.of(user));
         when(mediaUploadSecurityService.prepareProfileAvatarImage(file)).thenReturn(preparedFile);
         when(mediaStorageService.storeProfileImage(eq(userId), eq("profile"), eq(preparedFile))).thenReturn(storedFile);
 
@@ -324,7 +350,6 @@ class UserServiceTest {
     @Test
     void uploadProfileImageRejectsAvatarLargerThanTwoMegabytes() throws Exception {
         UUID userId = UUID.randomUUID();
-        User user = savedUser(userId, "me", "Me");
         MockMultipartFile file = new MockMultipartFile(
                 "file",
                 "avatar.jpg",
@@ -332,12 +357,11 @@ class UserServiceTest {
                 new byte[(2 * 1024 * 1024) + 1]
         );
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> userService.uploadProfileImage(userId, ProfileImageTarget.PROFILE, file)
                 )
                 .hasMessageContaining("2MB 이하");
+        verify(userRepository, never()).findActiveByIdForUpdate(any());
         verify(lightweightSecurityScanService, never()).assertFileClean(any());
         verify(mediaStorageService, never()).storeProfileImage(any(), any(), any());
     }
@@ -347,7 +371,7 @@ class UserServiceTest {
         UUID userId = UUID.randomUUID();
         User user = savedUser(userId, "me", "Me");
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(userRepository.findActiveByIdForUpdate(userId)).thenReturn(Optional.of(user));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> userService.updateProfile(
@@ -372,7 +396,7 @@ class UserServiceTest {
         UUID otherUserId = UUID.randomUUID();
         User user = savedUser(userId, "me", "Me");
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(userRepository.findActiveByIdForUpdate(userId)).thenReturn(Optional.of(user));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> userService.updateProfile(

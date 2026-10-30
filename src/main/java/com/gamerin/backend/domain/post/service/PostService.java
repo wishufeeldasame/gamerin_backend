@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -451,6 +453,7 @@ public class PostService {
             }
 
             postMediaRepository.saveAll(mediaToSave);
+            deleteFilesOnRollback(storedFiles);
         } catch (Exception ex) {
             storedFiles.forEach(mediaStorageService::deleteQuietly);
             if (ex instanceof ResponseStatusException responseStatusException) {
@@ -458,6 +461,22 @@ public class PostService {
             }
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to upload media files.", ex);
         }
+    }
+
+    // 응답 조립이나 COMMIT이 실패해도 저장된 파일이 고아로 남지 않게 한다.
+    private void deleteFilesOnRollback(List<MediaStorageService.StoredFile> storedFiles) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                // STATUS_UNKNOWN은 커밋됐을 수 있으므로 파일을 유지한다.
+                if (status == STATUS_ROLLED_BACK) {
+                    storedFiles.forEach(mediaStorageService::deleteQuietly);
+                }
+            }
+        });
     }
 
     private void validateCreateRequest(String content) {
