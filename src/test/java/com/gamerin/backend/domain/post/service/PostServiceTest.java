@@ -30,6 +30,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -518,6 +520,49 @@ class PostServiceTest {
         assertThat(savedMedia.get(1).getMediaUrl()).endsWith("/b.jpg");
         verify(mediaStorageService, never()).deleteQuietly(any(MediaStorageService.StoredFile.class));
         verify(mediaStorageService, never()).deleteQuietly(any(MediaStorageService.PreparedMediaPath.class));
+    }
+
+    @Test
+    void createMultipartDeletesStoredImagesOnlyWhenTransactionRolledBack() throws Exception {
+        UUID userId = UUID.randomUUID();
+        UUID postId = UUID.randomUUID();
+        User user = savedUser(userId, "tester", "Tester");
+        MediaStorageService.StoredFile storedA = new MediaStorageService.StoredFile(
+                Path.of("uploads/post-media/a.jpg"), "http://localhost:8080/uploads/post-media/a.jpg");
+        MediaStorageService.StoredFile storedB = new MediaStorageService.StoredFile(
+                Path.of("uploads/post-media/b.jpg"), "http://localhost:8080/uploads/post-media/b.jpg");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.save(any(Post.class))).thenAnswer(invocation -> {
+            Post post = invocation.getArgument(0);
+            ReflectionTestUtils.setField(post, "id", postId);
+            return post;
+        });
+        when(postResponseAssembler.toPostDetail(any(Post.class), any(UUID.class))).thenReturn(postDetailResponse(postId));
+        when(mediaUploadSecurityService.prepareImage(any(MultipartFile.class))).thenReturn(preparedImage());
+        when(mediaStorageService.storePostMedia(any(MediaStorageService.PreparedMediaFile.class)))
+                .thenReturn(storedA)
+                .thenReturn(storedB);
+
+        CreateMultipartPostRequest request = new CreateMultipartPostRequest();
+        request.setContent("image post");
+        request.setMediaFiles(List.of(imageFile("a.jpg"), imageFile("b.jpg")));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            postService.create(CustomUserPrincipal.from(user), request);
+            List<TransactionSynchronization> synchronizations = TransactionSynchronizationManager.getSynchronizations();
+
+            synchronizations.forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_COMMITTED));
+            synchronizations.forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_UNKNOWN));
+            verify(mediaStorageService, never()).deleteQuietly(any(MediaStorageService.StoredFile.class));
+
+            synchronizations.forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+            verify(mediaStorageService).deleteQuietly(storedA);
+            verify(mediaStorageService).deleteQuietly(storedB);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test
