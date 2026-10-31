@@ -2,6 +2,7 @@ package com.gamerin.backend.domain.report.repository;
 
 import com.gamerin.backend.domain.report.entity.Report;
 import com.gamerin.backend.domain.report.entity.ReportReasonCode;
+import com.gamerin.backend.domain.report.entity.ReportStage;
 import com.gamerin.backend.domain.report.entity.ReportStatus;
 import com.gamerin.backend.domain.report.entity.ReportTargetType;
 import org.springframework.data.domain.Page;
@@ -22,7 +23,8 @@ public interface ReportRepository extends
                 JpaRepository<Report, UUID> {
 
         // 동일 유저의 동일 대상 중복 신고 방지 검증
-        boolean existsByReporterIdAndTargetTypeAndTargetId(UUID reporterId, ReportTargetType targetType, UUID targetId);
+        boolean existsByReporterIdAndTargetTypeAndTargetIdAndStage(UUID reporterId, ReportTargetType targetType,
+                        UUID targetId, ReportStage stage);
 
         // 신고 코드(RPT-1001 등) 단건 조회
         Optional<Report> findByReportCode(String reportCode);
@@ -53,13 +55,14 @@ public interface ReportRepository extends
                         @Param("keyword") String keyword,
                         Pageable pageable);
 
-        // MENTORING 신고는 신청 ID로 접수되므로 신청의 프로그램 기준으로 일괄 집계 (N+1 방지용)
+        // [신청 건 신고만 집계] MENTORING 신고 중 targetId가 신청 건 ID인 것을 신청 건의 프로그램별로 일괄 집계 (N+1 방지)
+        // 프로그램 ID로 직접 접수된 신고는 포함하지 않는다. 합산은 AdminMentoringService.countReportsByProgramIds가 담당한다.
         @Query("SELECT a.program.id AS programId, COUNT(r) AS cnt " +
                         "FROM Report r JOIN MentoringApplication a ON a.id = r.targetId " +
                         "WHERE r.targetType = com.gamerin.backend.domain.report.entity.ReportTargetType.MENTORING " +
                         "AND a.program.id IN :programIds " +
                         "GROUP BY a.program.id")
-        List<Object[]> countMentoringReportsByProgramIdIn(@Param("programIds") List<UUID> programIds);
+        List<Object[]> countApplicationReportsByProgramIdIn(@Param("programIds") List<UUID> programIds);
 
         // 신고 원클릭 처리 동시성 제어용 비관적 쓰기 락 조회
         @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -71,18 +74,21 @@ public interface ReportRepository extends
         @Query("SELECT r FROM Report r WHERE r.reportCode = :reportCode")
         Optional<Report> findByReportCodeForUpdate(@Param("reportCode") String reportCode);
 
-        // 특정 대상(멘토링 신청 건 등)에 대해 특정 상태 목록(예: RECEIVED, IN_REVIEW 미결 상태)의 신고가 존재하는지 확인
-        // -> 7일 자동 정산 스케줄러에서 분쟁(이의제기) 진행 중인 신청 건의 정산을 보류할 때 사용
-        boolean existsByTargetTypeAndTargetIdAndStatusIn(
+        // 특정 신고자가 특정 대상에 대해 접수한 신고 중 지정한 상태(예: RECEIVED, IN_REVIEW 미결 상태)의 신고가 존재하는지 확인
+        // -> 7일 자동 정산 스케줄러에서 멘티가 제기한 분쟁(이의제기)이 진행 중인 신청 건의 정산을 보류할 때 사용
+        // (멘토가 낸 신고는 에스크로 환불/정산과 무관하므로 정산 보류 조건에서 제외한다)
+        boolean existsByTargetTypeAndTargetIdAndReporterIdAndStatusIn(
                         ReportTargetType targetType,
                         UUID targetId,
+                        UUID reporterId,
                         List<ReportStatus> statuses);
 
-        // 프로그램 ID 자체(targetId = programId)로 직접 접수된 MENTORING 신고 건수 일괄 집계 (N+1 방지용)
+        // [프로그램 직접 신고만 집계] targetId = programId로 직접 접수된 MENTORING 신고 건수 일괄 집계 (N+1 방지용)
+        // 신청 건 신고는 포함하지 않는다. 합산은 AdminMentoringService.countReportsByProgramIds가 담당한다.
         @Query("SELECT r.targetId AS programId, COUNT(r) AS cnt " +
                         "FROM Report r " +
                         "WHERE r.targetType = com.gamerin.backend.domain.report.entity.ReportTargetType.MENTORING " +
                         "AND r.targetId IN :programIds " +
                         "GROUP BY r.targetId")
-        List<Object[]> countDirectMentoringReportsByProgramIdIn(@Param("programIds") List<UUID> programIds);
+        List<Object[]> countProgramDirectReportsByProgramIdIn(@Param("programIds") List<UUID> programIds);
 }

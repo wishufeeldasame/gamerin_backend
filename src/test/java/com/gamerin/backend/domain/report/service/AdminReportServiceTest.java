@@ -23,6 +23,7 @@ import com.gamerin.backend.domain.report.entity.PenaltyType;
 import com.gamerin.backend.domain.report.entity.Report;
 import com.gamerin.backend.domain.report.entity.ReportCount;
 import com.gamerin.backend.domain.report.entity.ReportReasonCode;
+import com.gamerin.backend.domain.report.entity.ReportStage;
 import com.gamerin.backend.domain.report.entity.ReportStatus;
 import com.gamerin.backend.domain.report.entity.ReportTargetType;
 import com.gamerin.backend.domain.report.repository.ReportCountRepository;
@@ -342,9 +343,14 @@ class AdminReportServiceTest {
         ReflectionTestUtils.setField(mentoringApplication, "id", mentoringApplicationId);
         mentoringApplication.setProgram(mentoringProgram);
         mentoringApplication.setMentee(menteeUser);
+        // 신고 가능 상태(ONGOING/FINISHED)를 기본 픽스처로 사용한다.
+        mentoringApplication.setStatus(ApplicationStatus.ONGOING);
 
         org.mockito.Mockito.lenient()
                 .when(mentoringApplicationRepository.findById(mentoringApplicationId))
+                .thenReturn(Optional.of(mentoringApplication));
+        org.mockito.Mockito.lenient()
+                .when(mentoringApplicationRepository.findByIdForUpdate(mentoringApplicationId))
                 .thenReturn(Optional.of(mentoringApplication));
     }
 
@@ -393,6 +399,8 @@ class AdminReportServiceTest {
     @DisplayName("[#79] 멘티가 신청 건을 신고하면 멘토가 피신고자로 식별되고 제재도 멘토에게만 부과된다")
     void resolveMentoringReport_byMentee_sanctionsMentor() {
         setUpMentoringApplication();
+        mentoringApplication.setStatus(ApplicationStatus.ONGOING);
+        mentoringApplication.setPaymentStatus(PaymentStatus.ESCROW_HELD);
 
         AdminReportDetailResponse response = resolveMentoringReportWithSuspension(mentoringReportBy(menteeUser));
 
@@ -437,8 +445,262 @@ class AdminReportServiceTest {
         verify(reportRepository).saveAndFlush(any(Report.class));
     }
 
+    // ================= [락 선행 로드: 신청 건 → 신고 순서 검증] =================
+
+    /** 신청 건 리포지토리에 대해 해당 ID로 가장 먼저 호출된 메서드 이름 */
+    private String firstApplicationRepositoryCallFor(UUID applicationId) {
+        return org.mockito.Mockito.mockingDetails(mentoringApplicationRepository).getInvocations().stream()
+                .filter(invocation -> invocation.getArguments().length > 0
+                        && applicationId.equals(invocation.getArguments()[0]))
+                .map(invocation -> invocation.getMethod().getName())
+                .findFirst()
+                .orElse(null);
+    }
+
+    @Test
+    @DisplayName("[락 순서] 신청 건 신고 접수는 신청 건을 락 조회로 먼저 로드한 뒤 신고를 저장한다")
+    void createMentoringReport_locksApplicationBeforeInsertingReport() {
+        setUpMentoringApplication();
+        mentoringApplication.setStatus(ApplicationStatus.FINISHED);
+        given(userRepository.findById(menteeUser.getId())).willReturn(Optional.of(menteeUser));
+        given(reportRepository.saveAndFlush(any(Report.class))).willAnswer(invocation -> {
+            Report saved = invocation.getArgument(0);
+            ReflectionTestUtils.setField(saved, "id", reportId);
+            given(reportRepository.findById(reportId)).willReturn(Optional.of(saved));
+            return saved;
+        });
+        given(reportCountRepository.findByTargetTypeAndTargetId(ReportTargetType.MENTORING, mentoringApplicationId))
+                .willReturn(Optional.of(ReportCount.create(ReportTargetType.MENTORING, mentoringApplicationId)));
+
+        reportService.createReport(CustomUserPrincipal.from(menteeUser), new ReportCreateRequest(
+                ReportTargetType.MENTORING, mentoringApplicationId, ReportReasonCode.OTHER, "멘토 잠수"));
+
+        assertThat(firstApplicationRepositoryCallFor(mentoringApplicationId)).isEqualTo("findByIdForUpdate");
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(mentoringApplicationRepository, reportRepository);
+        inOrder.verify(mentoringApplicationRepository).findByIdForUpdate(mentoringApplicationId);
+        inOrder.verify(reportRepository).saveAndFlush(any(Report.class));
+    }
+
+    @Test
+    @DisplayName("[락 순서] 신고 판정 시 신청 건은 락 조회로 처음 로드되어 락 없는 findById가 앞서지 않는다")
+    void resolveMentoringReport_loadsApplicationWithLockFirst() {
+        setUpMentoringApplication();
+        mentoringApplication.setStatus(ApplicationStatus.FINISHED);
+        mentoringApplication.setPaymentStatus(PaymentStatus.ESCROW_HELD);
+
+        Report menteeReport = mentoringReportBy(menteeUser);
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(menteeReport));
+        given(reportRepository.findById(reportId)).willReturn(Optional.of(menteeReport));
+        given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
+        given(reportRepository.countByTargetTypeAndTargetId(eq(ReportTargetType.USER), any(UUID.class)))
+                .willReturn(0L);
+        given(userPenaltyService.getUserPenalties(any(UUID.class), any(Pageable.class)))
+                .willReturn(new PageImpl<>(List.of()));
+
+        reportService.resolveReport(adminId, reportId.toString(), new AdminReportResolutionRequest(
+                ReportStatus.RESOLVED, false, null, "멘토 미진행 확인으로 환불 처리", null));
+
+        assertThat(firstApplicationRepositoryCallFor(mentoringApplicationId)).isEqualTo("findByIdForUpdate");
+        verify(adminMentoringService).forceRefund(adminId, mentoringApplicationId, "멘토 미진행 확인으로 환불 처리");
+    }
+
     // ================= [멘토링 이의제기(신고) 에스크로 연동 및 프로그램 신고 검증] =================
 
+    // ================= [환불/정산 수행 결과 명시 (silent no-op 방지)] =================
+
+    private AdminReportDetailResponse resolveMentoringReport(Report mentoringReport, ReportStatus decision) {
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(mentoringReport));
+        org.mockito.Mockito.lenient().when(reportRepository.findById(reportId)).thenReturn(Optional.of(mentoringReport));
+        given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
+        org.mockito.Mockito.lenient().when(reportRepository.countByTargetTypeAndTargetId(eq(ReportTargetType.USER), any(UUID.class)))
+                .thenReturn(0L);
+        org.mockito.Mockito.lenient().when(userPenaltyService.getUserPenalties(any(UUID.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        return reportService.resolveReport(adminId, reportId.toString(), new AdminReportResolutionRequest(
+                decision, false, null, "처리 사유", null));
+    }
+
+    @Test
+    @DisplayName("[#3] 멘티 신고 RESOLVED로 환불되면 응답과 감사 로그에 REFUNDED가 남는다")
+    void resolveMentoringReport_refund_reportsRefundedOutcome() {
+        setUpMentoringApplication();
+        mentoringApplication.setStatus(ApplicationStatus.ONGOING);
+        mentoringApplication.setPaymentStatus(PaymentStatus.ESCROW_HELD);
+
+        AdminReportDetailResponse response = resolveMentoringReport(mentoringReportBy(menteeUser),
+                ReportStatus.RESOLVED);
+
+        assertThat(response.escrowResult().outcome()).isEqualTo(AdminReportDetailResponse.EscrowOutcome.REFUNDED);
+        verify(adminMentoringService).forceRefund(adminId, mentoringApplicationId, "처리 사유");
+        org.mockito.ArgumentCaptor<AdminAuditLog> captor = org.mockito.ArgumentCaptor.forClass(AdminAuditLog.class);
+        verify(adminAuditLogRepository, atLeast(1)).save(captor.capture());
+        assertThat(captor.getAllValues()).anySatisfy(log -> assertThat(log.getDetails()).contains("REFUNDED"));
+    }
+
+    @Test
+    @DisplayName("[#3] 멘티 신고 RESOLVED인데 에스크로 보관 상태가 아니면 409로 거절되고 환불·정산이 일어나지 않는다")
+    void resolveMentoringReport_resolvedButNotEscrowHeld_conflict() {
+        setUpMentoringApplication();
+        mentoringApplication.setStatus(ApplicationStatus.COMPLETED);
+        mentoringApplication.setPaymentStatus(PaymentStatus.SETTLED);
+
+        assertThatThrownBy(() -> resolveMentoringReport(mentoringReportBy(menteeUser), ReportStatus.RESOLVED))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        verify(adminMentoringService, never()).forceRefund(any(), any(), any());
+        verify(adminMentoringService, never()).forceSettle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("[#3] 멘토가 낸 신고는 환불/정산 대상이 아님을 NOT_PERFORMED로 명시하고 신고만 처리한다")
+    void resolveMentoringReport_byMentor_reportsNotPerformed() {
+        setUpMentoringApplication();
+        mentoringApplication.setStatus(ApplicationStatus.FINISHED);
+        mentoringApplication.setPaymentStatus(PaymentStatus.ESCROW_HELD);
+
+        AdminReportDetailResponse response = resolveMentoringReport(mentoringReportBy(mentorUser),
+                ReportStatus.RESOLVED);
+
+        assertThat(response.escrowResult().outcome())
+                .isEqualTo(AdminReportDetailResponse.EscrowOutcome.NOT_PERFORMED);
+        verify(adminMentoringService, never()).forceRefund(any(), any(), any());
+        verify(adminMentoringService, never()).forceSettle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("[#3] 진행 중(ONGOING) 건 멘티 신고를 REJECTED하면 정산 없이 NOT_PERFORMED로 명시된다")
+    void resolveMentoringReport_rejectedOngoing_reportsNotPerformed() {
+        setUpMentoringApplication();
+        mentoringApplication.setStatus(ApplicationStatus.ONGOING);
+        mentoringApplication.setPaymentStatus(PaymentStatus.ESCROW_HELD);
+
+        AdminReportDetailResponse response = resolveMentoringReport(mentoringReportBy(menteeUser),
+                ReportStatus.REJECTED);
+
+        assertThat(response.escrowResult().outcome())
+                .isEqualTo(AdminReportDetailResponse.EscrowOutcome.NOT_PERFORMED);
+        verify(adminMentoringService, never()).forceSettle(any(), any(), any());
+    }
+
+    // ================= [신고 단계(stage)별 재신고 허용] =================
+
+    private void stubReportSaveForMentoring() {
+        given(reportRepository.saveAndFlush(any(Report.class))).willAnswer(invocation -> {
+            Report saved = invocation.getArgument(0);
+            ReflectionTestUtils.setField(saved, "id", reportId);
+            given(reportRepository.findById(reportId)).willReturn(Optional.of(saved));
+            return saved;
+        });
+        given(reportCountRepository.findByTargetTypeAndTargetId(ReportTargetType.MENTORING, mentoringApplicationId))
+                .willReturn(Optional.of(ReportCount.create(ReportTargetType.MENTORING, mentoringApplicationId)));
+    }
+
+    @Test
+    @DisplayName("[#4] ONGOING 단계 신고가 이미 있으면 같은 단계 재신고는 409로 거절된다")
+    void createMentoringReport_sameStage_conflict() {
+        setUpMentoringApplication();
+        mentoringApplication.setStatus(ApplicationStatus.ONGOING);
+        given(userRepository.findById(menteeUser.getId())).willReturn(Optional.of(menteeUser));
+        given(reportRepository.existsByReporterIdAndTargetTypeAndTargetIdAndStage(
+                menteeUser.getId(), ReportTargetType.MENTORING, mentoringApplicationId, ReportStage.ONGOING))
+                .willReturn(true);
+
+        assertThatThrownBy(() -> reportService.createReport(CustomUserPrincipal.from(menteeUser),
+                new ReportCreateRequest(ReportTargetType.MENTORING, mentoringApplicationId,
+                        ReportReasonCode.OTHER, "중복 신고")))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        verify(reportRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("[#4] ONGOING 단계 신고가 반려·종결된 뒤에도 FINISHED 단계에서는 다시 신고할 수 있다")
+    void createMentoringReport_afterOngoingReport_allowedInFinishedStage() {
+        setUpMentoringApplication();
+        mentoringApplication.setStatus(ApplicationStatus.FINISHED);
+        given(userRepository.findById(menteeUser.getId())).willReturn(Optional.of(menteeUser));
+        given(reportRepository.existsByReporterIdAndTargetTypeAndTargetIdAndStage(
+                menteeUser.getId(), ReportTargetType.MENTORING, mentoringApplicationId, ReportStage.FINISHED))
+                .willReturn(false);
+        stubReportSaveForMentoring();
+
+        reportService.createReport(CustomUserPrincipal.from(menteeUser),
+                new ReportCreateRequest(ReportTargetType.MENTORING, mentoringApplicationId,
+                        ReportReasonCode.OTHER, "멘토 일방 종료"));
+
+        org.mockito.ArgumentCaptor<Report> captor = org.mockito.ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStage()).isEqualTo(ReportStage.FINISHED);
+        verify(reportRepository, never()).existsByReporterIdAndTargetTypeAndTargetIdAndStage(
+                any(), any(), any(), eq(ReportStage.ONGOING));
+    }
+
+    @Test
+    @DisplayName("[#4] 진행 단계(APPLIED/ACCEPTED/ONGOING) 신고는 ONGOING 단계로 접수된다")
+    void createMentoringReport_beforeFinished_isOngoingStage() {
+        setUpMentoringApplication();
+        mentoringApplication.setStatus(ApplicationStatus.ONGOING);
+        given(userRepository.findById(menteeUser.getId())).willReturn(Optional.of(menteeUser));
+        stubReportSaveForMentoring();
+
+        reportService.createReport(CustomUserPrincipal.from(menteeUser),
+                new ReportCreateRequest(ReportTargetType.MENTORING, mentoringApplicationId,
+                        ReportReasonCode.OTHER, "멘토 잠수"));
+
+        org.mockito.ArgumentCaptor<Report> captor = org.mockito.ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStage()).isEqualTo(ReportStage.ONGOING);
+    }
+
+    @Test
+    @DisplayName("[#9] 프로그램 직접 신고 상세는 프로그램이 숨김(소프트 삭제)되면 contentHidden이 true다")
+    void getAdminReportDetail_programDirectReport_contentHiddenReflectsProgramDeletion() {
+        setUpMentoringApplication();
+        mentoringProgram.softDelete();
+
+        Report programReport = Report.create(reporter, ReportTargetType.MENTORING, mentoringProgramId,
+                "프로그램 스냅샷", ReportReasonCode.PROFANITY, "부적절한 프로그램");
+        ReflectionTestUtils.setField(programReport, "id", reportId);
+        ReflectionTestUtils.setField(programReport, "reportCode", "RPT-3001");
+        ReflectionTestUtils.setField(programReport, "createdAt", OffsetDateTime.now());
+        ReflectionTestUtils.setField(programReport, "updatedAt", OffsetDateTime.now());
+
+        given(reportRepository.findById(reportId)).willReturn(Optional.of(programReport));
+        given(mentoringApplicationRepository.findById(mentoringProgramId)).willReturn(Optional.empty());
+        given(mentoringProgramRepository.findById(mentoringProgramId)).willReturn(Optional.of(mentoringProgram));
+        org.mockito.Mockito.lenient()
+                .when(reportRepository.countByTargetTypeAndTargetId(eq(ReportTargetType.USER), any(UUID.class)))
+                .thenReturn(0L);
+        org.mockito.Mockito.lenient()
+                .when(userPenaltyService.getUserPenalties(any(UUID.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        AdminReportDetailResponse response = reportService.getAdminReportDetail(reportId.toString());
+
+        assertThat(response.contentHidden()).isTrue();
+    }
+
+    @Test
+    @DisplayName("[#9] 신청 건 신고 상세의 contentHidden은 항상 false다")
+    void getAdminReportDetail_applicationReport_contentHiddenAlwaysFalse() {
+        setUpMentoringApplication();
+        mentoringProgram.softDelete();
+
+        given(reportRepository.findById(reportId)).willReturn(Optional.of(mentoringReportBy(menteeUser)));
+        org.mockito.Mockito.lenient()
+                .when(reportRepository.countByTargetTypeAndTargetId(eq(ReportTargetType.USER), any(UUID.class)))
+                .thenReturn(0L);
+        org.mockito.Mockito.lenient()
+                .when(userPenaltyService.getUserPenalties(any(UUID.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        AdminReportDetailResponse response = reportService.getAdminReportDetail(reportId.toString());
+
+        assertThat(response.contentHidden()).isFalse();
+    }
     @Test
     @DisplayName("멘티가 에스크로 보관(ESCROW_HELD) 신청 건을 이의제기(신고)하고 어드민이 RESOLVED 판정 시 멘티에게 강제 환불된다")
     void resolveMentoringReport_byMentee_resolved_triggersForceRefund() {
@@ -509,6 +771,24 @@ class AdminReportServiceTest {
     }
 
     @Test
+    @DisplayName("[#5] 신청(APPLIED)·수락(ACCEPTED) 상태 신청 건은 신고할 수 없고 사유와 함께 409로 거절된다")
+    void createMentoringReport_beforeOngoing_conflict() {
+        for (ApplicationStatus status : List.of(ApplicationStatus.APPLIED, ApplicationStatus.ACCEPTED)) {
+            setUpMentoringApplication();
+            mentoringApplication.setStatus(status);
+            given(userRepository.findById(menteeUser.getId())).willReturn(Optional.of(menteeUser));
+
+            assertThatThrownBy(() -> reportService.createReport(CustomUserPrincipal.from(menteeUser),
+                    new ReportCreateRequest(ReportTargetType.MENTORING, mentoringApplicationId,
+                            ReportReasonCode.OTHER, "아직 시작 전")))
+                    .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
+                        assertThat(e.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                        assertThat(e.getReason()).contains(status.name());
+                    });
+        }
+        verify(reportRepository, never()).saveAndFlush(any());
+    }
+    @Test
     @DisplayName("이미 정산 완료(COMPLETED)된 신청 건에 대해서는 신고(이의제기)를 접수할 수 없다")
     void createMentoringReport_whenAlreadyCompleted_rejected() {
         setUpMentoringApplication();
@@ -523,7 +803,7 @@ class AdminReportServiceTest {
                         ReportReasonCode.OTHER,
                         "이미 완료된 멘토링 뒤늦은 신고")))
                 .isInstanceOfSatisfying(ResponseStatusException.class,
-                        e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+                        e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
 
         verify(reportRepository, never()).saveAndFlush(any());
     }
@@ -576,7 +856,7 @@ class AdminReportServiceTest {
     @DisplayName("멘토링 프로그램 신고를 RESOLVED 및 콘텐츠 숨김 체크로 판정하면 프로그램 강제 숨김(hideProgram)이 호출된다")
     void resolveMentoringProgramReport_withHideContent_triggersHideProgram() {
         setUpMentoringApplication();
-        given(mentoringApplicationRepository.findById(mentoringProgramId)).willReturn(Optional.empty());
+        given(mentoringApplicationRepository.findByIdForUpdate(mentoringProgramId)).willReturn(Optional.empty());
         given(mentoringProgramRepository.findByIdAndDeletedAtIsNull(mentoringProgramId))
                 .willReturn(Optional.of(mentoringProgram));
         given(mentoringProgramRepository.findById(mentoringProgramId))

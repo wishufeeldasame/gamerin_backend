@@ -28,6 +28,7 @@ import com.gamerin.backend.domain.report.dto.response.UserPenaltyResponse;
 import com.gamerin.backend.domain.report.entity.Report;
 import com.gamerin.backend.domain.report.entity.ReportCount;
 import com.gamerin.backend.domain.report.entity.ReportReasonCode;
+import com.gamerin.backend.domain.report.entity.ReportStage;
 import com.gamerin.backend.domain.report.entity.ReportStatus;
 import com.gamerin.backend.domain.report.entity.ReportTargetType;
 import com.gamerin.backend.domain.report.repository.ReportCountRepository;
@@ -49,14 +50,21 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * 신고 서비스.
+ *
+ * <p>락 순서 규칙 (모든 경로에서 준수): 멘토링 신청 건(mentoring_applications) → 신고(reports) → report_counts → posts → post_comments.
+ * 신청 건은 반드시 락 조회(findByIdForUpdate)로 처음 로드해야 한다. 락 없이 먼저 로드하면 영속성 컨텍스트의 stale 엔티티로
+ * 환불/정산 상태를 판단하게 된다.
+ * (resolveReport는 신고 락 후 신청 건 락을 잡지만, 신고 행은 서로 달라 교착 위험이 낮다. 신고 락을 잡은 채 다른 신고 행을 잠그는 경로는 추가하지 말 것.)
+ */
 @Service
 @Transactional(readOnly = true)
 public class ReportService {
 
-    // 멘토링 신청 건에 대해 신고(이의제기)가 가능한 활성 상태 목록 (이미 정산 완료/취소/거절된 건은 제외)
+    // 멘토링 신청 건 신고(이의제기) 가능 상태: 진행 중(ONGOING)과 종료 보고(FINISHED)만 허용한다.
+    // APPLIED/ACCEPTED는 멘티가 취소할 수 있어 분쟁 대상이 아니며, COMPLETED/CANCELLED/REJECTED는 이미 종결된 건이다.
     private static final List<ApplicationStatus> REPORTABLE_APPLICATION_STATUSES = List.of(
-            ApplicationStatus.APPLIED,
-            ApplicationStatus.ACCEPTED,
             ApplicationStatus.ONGOING,
             ApplicationStatus.FINISHED);
 
@@ -73,34 +81,6 @@ public class ReportService {
     private final DirectMessageRepository directMessageRepository;
     private final ReportCountInitializer reportCountInitializer;
     private final UserPenaltyService userPenaltyService;
-
-    public ReportService(
-            ReportRepository reportRepository,
-            ReportCountRepository reportCountRepository,
-            SystemConfigRepository systemConfigRepository,
-            UserRepository userRepository,
-            PostRepository postRepository,
-            PostCommentRepository postCommentRepository,
-            AdminAuditLogRepository adminAuditLogRepository,
-            MentoringApplicationRepository mentoringApplicationRepository,
-            DirectMessageRepository directMessageRepository,
-            ReportCountInitializer reportCountInitializer,
-            UserPenaltyService userPenaltyService) {
-        this(
-                reportRepository,
-                reportCountRepository,
-                systemConfigRepository,
-                userRepository,
-                postRepository,
-                postCommentRepository,
-                adminAuditLogRepository,
-                mentoringApplicationRepository,
-                null,
-                null,
-                directMessageRepository,
-                reportCountInitializer,
-                userPenaltyService);
-    }
 
     @Autowired
     public ReportService(
@@ -159,14 +139,30 @@ public class ReportService {
         User reporter = userRepository.findById(principal.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신고자 유저 정보를 찾을 수 없습니다."));
 
+        // 0. 멘토링 신청 건 신고는 신청 건 행을 먼저 잠근다 (락 순서: 신청 건 → 신고).
+        // 이후 validateTargetExists/createTargetSnippet의 findById는 락 걸린 같은 인스턴스를 반환하므로
+        // 락 안에서 상태를 검증하게 되고, 자동 정산(SettlementProcessor)과 직렬화된다.
+        // 신청 건이 아니면(프로그램 직접 신고) 빈 결과이며 기존 흐름을 그대로 탄다.
+        // 신청 건 신고는 단계(ONGOING/FINISHED)별로 1건씩 허용하므로, 락 안에서 읽은 신청 상태로 신고 단계를 결정한다.
+        // 신청 건이 아니면(프로그램 직접 신고 등) 빈 결과이며 GENERAL 단계로 기존 흐름을 그대로 탄다.
+        ReportStage stage = ReportStage.GENERAL;
+        if (request.targetType() == ReportTargetType.MENTORING) {
+            stage = mentoringApplicationRepository.findByIdForUpdate(request.targetId())
+                    .map(application -> application.getStatus() == ApplicationStatus.FINISHED
+                            ? ReportStage.FINISHED
+                            : ReportStage.ONGOING)
+                    .orElse(ReportStage.GENERAL);
+        }
+
         // 1. 존재하지 않거나 삭제된 대상 신고 검증 및 권한 확인 (404 예외)
         validateTargetExists(reporter.getId(), request.targetType(), request.targetId());
 
         // 2. 중복 신고 검증 (409 예외)
-        boolean alreadyReported = reportRepository.existsByReporterIdAndTargetTypeAndTargetId(
+        boolean alreadyReported = reportRepository.existsByReporterIdAndTargetTypeAndTargetIdAndStage(
                 reporter.getId(),
                 request.targetType(),
-                request.targetId());
+                request.targetId(),
+                stage);
         if (alreadyReported) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 해당 콘텐츠/유저에 대해 신고를 접수하셨습니다.");
         }
@@ -181,7 +177,8 @@ public class ReportService {
                 request.targetId(),
                 targetSnippet,
                 request.reasonCode(),
-                request.details());
+                request.details(),
+                stage);
         try {
             reportRepository.saveAndFlush(report);
         } catch (DataIntegrityViolationException e) {
@@ -281,8 +278,7 @@ public class ReportService {
                 : null;
 
         // 3. 콘텐츠 숨김 여부 (이슈 #76: 읽기 전용 트랜잭션에서 행 잠금 FOR UPDATE 실행 방지를 위해 비잠금 조회 사용)
-        boolean isHidden = reportCountRepository
-                .existsByTargetTypeAndTargetIdAndIsHiddenTrue(report.getTargetType(), report.getTargetId());
+        boolean isHidden = resolveContentHidden(report);
 
         return new AdminReportDetailResponse(
                 ReportResponse.from(report),
@@ -361,8 +357,9 @@ public class ReportService {
         }
 
         // 2-1. 멘토링 신고 판정 연동 (신청 건 이의제기 시 에스크로 강제 환불/정산, 프로그램 신고 시 프로그램 숨김)
+        AdminReportDetailResponse.EscrowResult escrowResult = null;
         if (report.getTargetType() == ReportTargetType.MENTORING) {
-            handleMentoringReportResolution(adminId, report, request);
+            escrowResult = handleMentoringReportResolution(adminId, report, request);
         }
 
         // 3. 피신고자 제재 부여 (처리 완료이고 제재 유형이 선택된 경우)
@@ -386,6 +383,10 @@ public class ReportService {
                 request.reason(),
                 request.internalMemo() != null ? ", 내부메모: " + request.internalMemo() : "");
 
+        if (escrowResult != null) {
+            logDetails = logDetails + escrowResult.auditSuffix();
+        }
+
         adminAuditLogRepository.save(AdminAuditLog.create(
                 admin,
                 actionType,
@@ -394,7 +395,7 @@ public class ReportService {
                 null,
                 logDetails));
 
-        return getAdminReportDetail(reportIdOrCode);
+        return getAdminReportDetail(reportIdOrCode).withEscrowResult(escrowResult);
     }
 
     /**
@@ -403,40 +404,56 @@ public class ReportService {
      * RESOLVED(인용) 시 멘티에게 강제 환불, REJECTED(기각) 및 FINISHED 상태 시 멘토에게 강제 정산
      * - 프로그램(MentoringProgram) 신고: RESOLVED + hideTargetContent 체크 시 프로그램 강제 숨김
      */
-    private void handleMentoringReportResolution(
+    private AdminReportDetailResponse.EscrowResult handleMentoringReportResolution(
             UUID adminId,
             Report report,
             AdminReportResolutionRequest request) {
-        if (adminMentoringService == null) {
-            return;
-        }
-
         UUID targetId = report.getTargetId();
-        MentoringApplication application = mentoringApplicationRepository.findById(targetId).orElse(null);
+        // 락 선행 로드: 이 트랜잭션에서 신청 건을 처음 읽는 지점이므로 반드시 비관적 락으로 조회한다.
+        // (락 없이 먼저 읽으면 영속성 컨텍스트에 stale 엔티티가 남아 forceRefund/forceSettle의 상태 검사가 무력화된다.)
+        MentoringApplication application = mentoringApplicationRepository.findByIdForUpdate(targetId).orElse(null);
 
         if (application != null) {
             boolean reportedByMentee = application.getMentee() != null
                     && report.getReporter() != null
                     && application.getMentee().getId().equals(report.getReporter().getId());
 
-            if (reportedByMentee && application.getPaymentStatus() == PaymentStatus.ESCROW_HELD) {
-                if (request.decision() == ReportStatus.RESOLVED) {
-                    adminMentoringService.forceRefund(adminId, application.getId(), request.reason());
-                } else if (request.decision() == ReportStatus.REJECTED
-                        && application.getStatus() == ApplicationStatus.FINISHED) {
-                    adminMentoringService.forceSettle(adminId, application.getId(), request.reason());
-                }
+            if (!reportedByMentee) {
+                // 멘토가 낸 신고는 에스크로(환불/정산) 대상이 아니다. 어드민이 환불됐다고 오해하지 않도록 결과를 명시한다.
+                return AdminReportDetailResponse.EscrowResult.notPerformed(
+                        "멘토가 접수한 신고는 환불/정산 대상이 아니어서 에스크로 조치가 수행되지 않았습니다.");
             }
-            return;
+
+            boolean escrowHeld = application.getPaymentStatus() == PaymentStatus.ESCROW_HELD;
+
+            if (request.decision() == ReportStatus.RESOLVED) {
+                if (!escrowHeld) {
+                    // 인용(RESOLVED)인데 환불할 수 없는 상태면 조용히 넘어가지 않고 거절한다 (전체 트랜잭션 롤백).
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "환불할 수 없는 신청 건입니다. 에스크로 보관(ESCROW_HELD) 상태가 아닙니다. 현재 결제상태: "
+                                    + application.getPaymentStatus());
+                }
+                adminMentoringService.forceRefund(adminId, application.getId(), request.reason());
+                return AdminReportDetailResponse.EscrowResult.refunded();
+            }
+
+            // REJECTED(기각)
+            if (escrowHeld && application.getStatus() == ApplicationStatus.FINISHED) {
+                adminMentoringService.forceSettle(adminId, application.getId(), request.reason());
+                return AdminReportDetailResponse.EscrowResult.settled();
+            }
+            return AdminReportDetailResponse.EscrowResult.notPerformed(
+                    "기각되었으나 정산 조건(종료 보고 + 에스크로 보관)이 아니어서 정산되지 않았습니다. 신청 상태: "
+                            + application.getStatus() + ", 결제상태: " + application.getPaymentStatus());
         }
 
         if (request.decision() == ReportStatus.RESOLVED
-                && request.hideTargetContent()
-                && mentoringProgramRepository != null) {
+                && request.hideTargetContent()) {
             mentoringProgramRepository.findByIdAndDeletedAtIsNull(targetId)
                     .ifPresent(
                             program -> adminMentoringService.hideProgram(adminId, program.getId(), request.reason()));
         }
+        return null;
     }
 
     // ================= [어드민 숨김 콘텐츠 관리] =================
@@ -514,6 +531,24 @@ public class ReportService {
         }
     }
 
+    /**
+     * 신고 대상 콘텐츠의 숨김 여부.
+     * 게시글/댓글은 report_counts의 숨김 플래그, 멘토링 프로그램 직접 신고는 프로그램 소프트 삭제 여부로 판단한다.
+     * (신청 건 신고는 숨길 콘텐츠가 없으므로 항상 false)
+     */
+    private boolean resolveContentHidden(Report report) {
+        if (report.getTargetType() == ReportTargetType.MENTORING) {
+            if (mentoringApplicationRepository.findById(report.getTargetId()).isPresent()) {
+                return false;
+            }
+            return mentoringProgramRepository.findById(report.getTargetId())
+                    .map(program -> program.isDeleted())
+                    .orElse(false);
+        }
+        return reportCountRepository
+                .existsByTargetTypeAndTargetIdAndIsHiddenTrue(report.getTargetType(), report.getTargetId());
+    }
+
     private AdminReportDetailResponse.ReportUserSummary createReporterSummary(User user) {
         long reportsCount = reportRepository.countByTargetTypeAndTargetId(ReportTargetType.USER, user.getId());
         List<UserPenaltyResponse> penalties = userPenaltyService.getUserPenalties(user.getId(), PageRequest.of(0, 5))
@@ -542,11 +577,9 @@ public class ReportService {
             case MESSAGE -> directMessageRepository.findById(targetId).map(DirectMessage::getSender).orElse(null);
             case MENTORING -> mentoringApplicationRepository.findById(targetId)
                     .map(app -> mentoringCounterpart(app, report.getReporter().getId()))
-                    .orElseGet(() -> mentoringProgramRepository != null
-                            ? mentoringProgramRepository.findById(targetId)
+                    .orElseGet(() -> mentoringProgramRepository.findById(targetId)
                                     .map(program -> program.getMentor() != null ? program.getMentor().getUser() : null)
-                                    .orElse(null)
-                            : null);
+                                    .orElse(null));
         };
     }
 
@@ -585,10 +618,18 @@ public class ReportService {
             // 1) 신청 건(MentoringApplication)인 경우: 참여자(멘토·멘티)이고 진행/종료보고 상태일 때만 허용
             // 2) 프로그램(MentoringProgram)인 경우: 삭제되지 않은 프로그램이고 본인 프로그램이 아닐 때 허용
             case MENTORING -> mentoringApplicationRepository.findById(targetId)
-                    .map(app -> mentoringCounterpart(app, reporterId) != null
-                            && REPORTABLE_APPLICATION_STATUSES.contains(app.getStatus()))
-                    .orElseGet(() -> mentoringProgramRepository != null
-                            && mentoringProgramRepository.findByIdAndDeletedAtIsNull(targetId)
+                    .map(app -> {
+                        if (mentoringCounterpart(app, reporterId) == null) {
+                            return false;
+                        }
+                        if (!REPORTABLE_APPLICATION_STATUSES.contains(app.getStatus())) {
+                            // 참여자지만 신고할 수 없는 상태: 사유를 알려 주기 위해 404가 아닌 409로 거절한다.
+                            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                    "진행 중 또는 종료 보고된 멘토링만 신고할 수 있습니다. 현재 상태: " + app.getStatus());
+                        }
+                        return true;
+                    })
+                    .orElseGet(() -> mentoringProgramRepository.findByIdAndDeletedAtIsNull(targetId)
                                     .map(program -> program.getMentor() != null
                                             && program.getMentor().getUser() != null
                                             && !program.getMentor().getUser().getId().equals(reporterId))
@@ -624,11 +665,9 @@ public class ReportService {
                     .orElse("메시지 (ID: " + targetId + ")");
             case MENTORING -> mentoringApplicationRepository.findById(targetId)
                     .map(app -> "멘토링 신청 (프로그램: " + (app.getProgram() != null ? app.getProgram().getTitle() : "") + ")")
-                    .orElseGet(() -> mentoringProgramRepository != null
-                            ? mentoringProgramRepository.findById(targetId)
+                    .orElseGet(() -> mentoringProgramRepository.findById(targetId)
                                     .map(program -> "멘토링 프로그램: " + program.getTitle())
-                                    .orElse("멘토링 신청 건 (ID: " + targetId + ")")
-                            : "멘토링 신청 건 (ID: " + targetId + ")");
+                                    .orElse("멘토링 신청 건 (ID: " + targetId + ")"));
         };
     }
 

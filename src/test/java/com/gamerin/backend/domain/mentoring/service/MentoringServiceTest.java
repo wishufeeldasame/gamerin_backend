@@ -753,9 +753,10 @@ class MentoringServiceTest {
                                 mockReportRepo);
 
                 when(mentoringApplicationRepository.findByIdForUpdate(appId)).thenReturn(Optional.of(app));
-                when(mockReportRepo.existsByTargetTypeAndTargetIdAndStatusIn(
+                when(mockReportRepo.existsByTargetTypeAndTargetIdAndReporterIdAndStatusIn(
                                 eq(com.gamerin.backend.domain.report.entity.ReportTargetType.MENTORING),
                                 eq(appId),
+                                eq(menteeId),
                                 eq(List.of(
                                                 com.gamerin.backend.domain.report.entity.ReportStatus.RECEIVED,
                                                 com.gamerin.backend.domain.report.entity.ReportStatus.IN_REVIEW))))

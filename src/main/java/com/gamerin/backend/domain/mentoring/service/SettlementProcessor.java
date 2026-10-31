@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -66,16 +67,20 @@ public class SettlementProcessor {
                         return;
                 }
 
-                // [추가] 해당 신청 건에 대해 처리되지 않은 신고(이의제기)가 존재하면 자동 정산을 보류한다.
-                boolean hasUnresolvedReport = reportRepository.existsByTargetTypeAndTargetIdAndStatusIn(
+                // 멘티가 제기한 미결 신고(이의제기)가 있으면 자동 정산을 보류한다.
+                // 멘토가 낸 신고는 환불/정산과 무관하므로 보류 사유가 아니다.
+                boolean hasUnresolvedReport = reportRepository.existsByTargetTypeAndTargetIdAndReporterIdAndStatusIn(
                                 ReportTargetType.MENTORING,
                                 application.getId(),
+                                application.getMentee().getId(),
                                 UNRESOLVED_REPORT_STATUSES);
                 if (hasUnresolvedReport) {
-                        log.info("미결 신고(이의제기)가 존재하여 자동 정산을 보류합니다 - 신청 ID: {}", application.getId());
+                        // 장기 미결 모니터링용: 종료 보고 이후 경과 일수를 남겨 운영자가 보류 건을 추적할 수 있게 한다.
+                        long heldDays = Duration.between(application.getUpdatedAt(), OffsetDateTime.now()).toDays();
+                        log.warn("멘티의 미결 신고(이의제기)로 자동 정산을 보류합니다 - 신청 ID: {}, 종료 보고 후 경과: {}일",
+                                        application.getId(), heldDays);
                         return;
                 }
-
                 // 1. 상태 변경
                 application.setStatus(ApplicationStatus.COMPLETED);
                 application.setPaymentStatus(PaymentStatus.SETTLED);

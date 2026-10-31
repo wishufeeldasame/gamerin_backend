@@ -65,6 +65,10 @@ public class Report {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
+    private ReportStage stage = ReportStage.GENERAL;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
     private ReportStatus status;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -88,7 +92,20 @@ public class Report {
             ReportReasonCode reasonCode,
             String details
     ) {
+        return create(reporter, targetType, targetId, targetSnippet, reasonCode, details, ReportStage.GENERAL);
+    }
+
+    public static Report create(
+            User reporter,
+            ReportTargetType targetType,
+            UUID targetId,
+            String targetSnippet,
+            ReportReasonCode reasonCode,
+            String details,
+            ReportStage stage
+    ) {
         Report report = new Report();
+        report.stage = stage;
         report.reporter = reporter;
         report.targetType = targetType;
         report.targetId = targetId;
@@ -146,6 +163,10 @@ public class Report {
 
     public String getDetails() {
         return details;
+    }
+
+    public ReportStage getStage() {
+        return stage;
     }
 
     public ReportStatus getStatus() {
