@@ -2,6 +2,7 @@ package com.gamerin.backend.domain.report.dto.response;
 
 import com.gamerin.backend.domain.report.entity.Report;
 import com.gamerin.backend.domain.report.entity.ReportReasonCode;
+import com.gamerin.backend.domain.report.entity.ReportStage;
 import com.gamerin.backend.domain.report.entity.ReportStatus;
 import com.gamerin.backend.domain.report.entity.ReportTargetType;
 
@@ -24,6 +25,7 @@ public record ReportResponse(
         String reasonLabel,
         String details,
         ReportStatus status,
+        ReportStage stage,
         UUID assignedAdminId,
         String assignedAdminNickname,
         OffsetDateTime createdAt,
@@ -41,6 +43,7 @@ public record ReportResponse(
                     report.getReasonCode().getDescription(), // reasonCode.getDescription() 사용
                     report.getDetails(),
                     report.getStatus(),
+                    report.getStage(),
                     report.getAssignedAdmin() != null ? report.getAssignedAdmin().getId() : null,
                     report.getAssignedAdmin() != null ? report.getAssignedAdmin().getNickname() : null,
                     report.getCreatedAt(),
