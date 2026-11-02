@@ -16,6 +16,8 @@ import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.entity.UserStatus;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -24,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -32,6 +35,7 @@ import java.util.regex.Pattern;
 public class LocalAuthService {
     // SignUpRequest·SocialSignUpRequest의 handle 규칙과 동일하게 유지한다
     private static final Pattern HANDLE_PATTERN = Pattern.compile("^[a-z0-9_]{3,20}$");
+    private static final Logger log = LoggerFactory.getLogger(LocalAuthService.class);
 
 
     private final UserRepository userRepository;
@@ -45,6 +49,7 @@ public class LocalAuthService {
     private final EmailVerificationService emailVerificationService;
     private final long passwordResetExpirationMinutes;
     private final MembershipService membershipService;
+    private final long refreshReuseGraceSeconds;
     private final LoginFailureTracker loginFailureTracker = new LoginFailureTracker();
 
     public LocalAuthService(
@@ -58,7 +63,8 @@ public class LocalAuthService {
             PasswordResetMailService passwordResetMailService,
             EmailVerificationService emailVerificationService,
             @Value("${app.auth.password-reset.expiration-minutes:30}") long passwordResetExpirationMinutes,
-            MembershipService membershipService) {
+            MembershipService membershipService,
+            @Value("${app.auth.refresh-token.reuse-grace-seconds:30}") long refreshReuseGraceSeconds) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.passwordResetTokenRepository = passwordResetTokenRepository;
@@ -70,6 +76,7 @@ public class LocalAuthService {
         this.emailVerificationService = emailVerificationService;
         this.passwordResetExpirationMinutes = passwordResetExpirationMinutes;
         this.membershipService = membershipService;
+        this.refreshReuseGraceSeconds = refreshReuseGraceSeconds;
     }
 
     @Transactional(readOnly = true)
@@ -163,6 +170,9 @@ public class LocalAuthService {
 
     /**
      * 리프레시 토큰으로 Access Token / Refresh Token 재발급
+     * - 토큰 행을 비관적 잠금으로 조회해 같은 토큰의 동시 요청 중 하나만 회전에 성공한다.
+     * - 회전으로 폐기된 토큰이 유예 시간 안에 다시 오면 다른 탭의 동시 refresh로 보고 409만 반환한다
+     *   (401이면 컨트롤러가 이미 새로 받은 쿠키를 지운다). 유예 시간이 지나 다시 오면 탈취로 보고 사용자의 토큰을 모두 폐기한다.
      * - noRollbackFor: 401(ResponseStatusException)이 발생하더라도 롤백하지 않고
      * 비활성/만료 계정의 리프레시 토큰 폐기(revoke) 상태를 DB에 정상 커밋(영속화)합니다.
      */
@@ -173,10 +183,17 @@ public class LocalAuthService {
         }
 
         String tokenHash = tokenService.sha256(rawRefreshToken);
-        RefreshToken savedToken = refreshTokenRepository.findByTokenHashAndRevokedAtIsNull(tokenHash)
+        RefreshToken savedToken = refreshTokenRepository.findByTokenHashForUpdate(tokenHash)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "유효하지 않은 리프레시 토큰입니다."));
 
-        if (savedToken.isExpired() || savedToken.isRevoked()) {
+        if (savedToken.isRotated()) {
+            handleRotatedTokenReuse(savedToken);
+        }
+        if (savedToken.isRevoked()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "유효하지 않은 리프레시 토큰입니다.");
+        }
+
+        if (savedToken.isExpired()) {
             savedToken.revoke();
             refreshTokenRepository.saveAndFlush(savedToken); // DB에 폐기 상태 즉시 반영
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "만료된 리프레시 토큰입니다.");
@@ -187,15 +204,35 @@ public class LocalAuthService {
 
         // status != ACTIVE (SUSPENDED, DELETED 등)이거나 탈퇴(deletedAt != null) 계정인 경우 재발급
         // 차단
-        if (user.getStatus() != UserStatus.ACTIVE || user.getDeletedAt() != null) {
+        if (!isActive(user)) {
             savedToken.revoke(); // 보안 정책: 비활성 계정의 리프레시 토큰은 즉시 폐기
             refreshTokenRepository.saveAndFlush(savedToken); // 예외가 던져져도 롤백되지 않고 DB에 폐기 상태 영속화
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "사용자 계정이 활성 상태가 아닙니다.");
         }
 
-        savedToken.revoke();
+        savedToken.rotate();
         refreshTokenRepository.saveAndFlush(savedToken);
         return tokenService.issueTokens(user);
+    }
+
+    // 회전된 토큰의 재사용. 항상 예외로 끝난다.
+    private void handleRotatedTokenReuse(RefreshToken reusedToken) {
+        UUID userId = reusedToken.getUserId();
+        boolean withinGrace = !reusedToken.getRotatedAt()
+                .isBefore(OffsetDateTime.now().minusSeconds(refreshReuseGraceSeconds));
+        if (withinGrace && userRepository.findById(userId).filter(this::isActive).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "리프레시 토큰이 이미 갱신되었습니다. 잠시 후 다시 시도해주세요.");
+        }
+
+        List<RefreshToken> activeTokens = refreshTokenRepository.findAllByUserIdAndRevokedAtIsNull(userId);
+        activeTokens.forEach(RefreshToken::revoke);
+        refreshTokenRepository.flush();
+        log.warn("Refresh token reuse detected; revoked {} active refresh tokens. userId={}", activeTokens.size(), userId);
+        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "재사용된 리프레시 토큰입니다. 다시 로그인해주세요.");
+    }
+
+    private boolean isActive(User user) {
+        return user.getStatus() == UserStatus.ACTIVE && user.getDeletedAt() == null;
     }
 
     public void logout(String rawRefreshToken) {

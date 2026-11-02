@@ -71,6 +71,9 @@ app:
   auth:
     password-reset:
       expiration-minutes: 30
+    refresh-token:
+      # 회전된 refresh 토큰이 이 시간 안에 다시 오면 여러 탭의 동시 갱신으로 보고 409만 반환한다. 이후 재사용은 탈취로 보고 전체 폐기한다.
+      reuse-grace-seconds: 30
 
 pubg:
   api:

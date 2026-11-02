@@ -99,7 +99,8 @@ class LocalAuthServiceTest {
                                 passwordResetMailService,
                                 emailVerificationService,
                                 30L,
-                                membershipService);
+                                membershipService,
+                                30L);
         }
 
         @ParameterizedTest
@@ -363,7 +364,7 @@ class LocalAuthServiceTest {
                 TokenService.AuthResult authResult = authResult(userId, "tester", "Tester");
 
                 when(tokenService.sha256("raw-refresh-token")).thenReturn("hashed-refresh-token");
-                when(refreshTokenRepository.findByTokenHashAndRevokedAtIsNull("hashed-refresh-token"))
+                when(refreshTokenRepository.findByTokenHashForUpdate("hashed-refresh-token"))
                                 .thenReturn(Optional.of(refreshToken));
                 when(userRepository.findById(userId)).thenReturn(Optional.of(user));
                 when(tokenService.issueTokens(user)).thenReturn(authResult);
@@ -371,7 +372,102 @@ class LocalAuthServiceTest {
                 TokenService.AuthResult result = localAuthService.refresh("raw-refresh-token");
 
                 assertThat(refreshToken.isRevoked()).isTrue();
+                assertThat(refreshToken.isRotated()).isTrue();
                 assertThat(result).isEqualTo(authResult);
+        }
+
+        @Test
+        void refreshReturnsConflictForRotatedTokenWithinGraceWithoutRevokingOthers() {
+                UUID userId = UUID.randomUUID();
+                User user = savedUser(userId, "tester@example.com", "tester", "Tester", "encoded-password");
+                RefreshToken rotatedToken = issuedToken(userId, "hashed-refresh-token");
+                rotatedToken.rotate();
+
+                when(tokenService.sha256("raw-refresh-token")).thenReturn("hashed-refresh-token");
+                when(refreshTokenRepository.findByTokenHashForUpdate("hashed-refresh-token"))
+                                .thenReturn(Optional.of(rotatedToken));
+                when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+
+                assertThatThrownBy(() -> localAuthService.refresh("raw-refresh-token"))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                                .isEqualTo(HttpStatus.CONFLICT.value());
+
+                verify(refreshTokenRepository, never()).findAllByUserIdAndRevokedAtIsNull(any());
+                verify(tokenService, never()).issueTokens(any(User.class));
+        }
+
+        @Test
+        void refreshRevokesAllUserTokensWhenRotatedTokenIsReusedAfterGrace() {
+                UUID userId = UUID.randomUUID();
+                RefreshToken rotatedToken = issuedToken(userId, "hashed-refresh-token");
+                rotatedToken.rotate();
+                ReflectionTestUtils.setField(rotatedToken, "rotatedAt", OffsetDateTime.now().minusMinutes(5));
+                RefreshToken activeToken = issuedToken(userId, "active-token");
+                RefreshToken otherActiveToken = issuedToken(userId, "other-active-token");
+
+                when(tokenService.sha256("raw-refresh-token")).thenReturn("hashed-refresh-token");
+                when(refreshTokenRepository.findByTokenHashForUpdate("hashed-refresh-token"))
+                                .thenReturn(Optional.of(rotatedToken));
+                when(refreshTokenRepository.findAllByUserIdAndRevokedAtIsNull(userId))
+                                .thenReturn(List.of(activeToken, otherActiveToken));
+
+                assertThatThrownBy(() -> localAuthService.refresh("raw-refresh-token"))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                                .isEqualTo(HttpStatus.UNAUTHORIZED.value());
+
+                assertThat(activeToken.isRevoked()).isTrue();
+                assertThat(otherActiveToken.isRevoked()).isTrue();
+                verify(refreshTokenRepository).flush();
+                verify(tokenService, never()).issueTokens(any(User.class));
+        }
+
+        @Test
+        void refreshRevokesAllUserTokensWhenRotatedTokenOfInactiveUserIsReusedWithinGrace() {
+                UUID userId = UUID.randomUUID();
+                User user = savedUser(userId, "tester@example.com", "tester", "Tester", "encoded-password");
+                ReflectionTestUtils.setField(user, "status", UserStatus.SUSPENDED);
+                RefreshToken rotatedToken = issuedToken(userId, "hashed-refresh-token");
+                rotatedToken.rotate();
+                RefreshToken activeToken = issuedToken(userId, "active-token");
+
+                when(tokenService.sha256("raw-refresh-token")).thenReturn("hashed-refresh-token");
+                when(refreshTokenRepository.findByTokenHashForUpdate("hashed-refresh-token"))
+                                .thenReturn(Optional.of(rotatedToken));
+                when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+                when(refreshTokenRepository.findAllByUserIdAndRevokedAtIsNull(userId))
+                                .thenReturn(List.of(activeToken));
+
+                assertThatThrownBy(() -> localAuthService.refresh("raw-refresh-token"))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                                .isEqualTo(HttpStatus.UNAUTHORIZED.value());
+
+                assertThat(activeToken.isRevoked()).isTrue();
+        }
+
+        @Test
+        void refreshRejectsTokenRevokedWithoutRotationWithoutRevokingOthers() {
+                UUID userId = UUID.randomUUID();
+                RefreshToken loggedOutToken = issuedToken(userId, "hashed-refresh-token");
+                loggedOutToken.revoke();
+
+                when(tokenService.sha256("raw-refresh-token")).thenReturn("hashed-refresh-token");
+                when(refreshTokenRepository.findByTokenHashForUpdate("hashed-refresh-token"))
+                                .thenReturn(Optional.of(loggedOutToken));
+
+                assertThatThrownBy(() -> localAuthService.refresh("raw-refresh-token"))
+                                .isInstanceOf(ResponseStatusException.class)
+                                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                                .isEqualTo(HttpStatus.UNAUTHORIZED.value());
+
+                verify(refreshTokenRepository, never()).findAllByUserIdAndRevokedAtIsNull(any());
+                verify(tokenService, never()).issueTokens(any(User.class));
+        }
+
+        private static RefreshToken issuedToken(UUID userId, String tokenHash) {
+                return RefreshToken.issue(userId, tokenHash, OffsetDateTime.now().plusDays(1), null, null);
         }
 
         @Test
@@ -613,7 +709,7 @@ class LocalAuthServiceTest {
                                 null);
 
                 when(tokenService.sha256("raw-refresh-token")).thenReturn("hashed-refresh-token");
-                when(refreshTokenRepository.findByTokenHashAndRevokedAtIsNull("hashed-refresh-token"))
+                when(refreshTokenRepository.findByTokenHashForUpdate("hashed-refresh-token"))
                                 .thenReturn(Optional.of(refreshToken));
                 when(userRepository.findById(userId)).thenReturn(Optional.of(user));
 
@@ -643,7 +739,7 @@ class LocalAuthServiceTest {
                                 null);
 
                 when(tokenService.sha256("raw-refresh-token")).thenReturn("hashed-refresh-token");
-                when(refreshTokenRepository.findByTokenHashAndRevokedAtIsNull("hashed-refresh-token"))
+                when(refreshTokenRepository.findByTokenHashForUpdate("hashed-refresh-token"))
                                 .thenReturn(Optional.of(refreshToken));
                 when(userRepository.findById(userId)).thenReturn(Optional.of(user));
 
@@ -671,7 +767,7 @@ class LocalAuthServiceTest {
                                 null);
 
                 when(tokenService.sha256("raw-refresh-token")).thenReturn("hashed-refresh-token");
-                when(refreshTokenRepository.findByTokenHashAndRevokedAtIsNull("hashed-refresh-token"))
+                when(refreshTokenRepository.findByTokenHashForUpdate("hashed-refresh-token"))
                                 .thenReturn(Optional.of(refreshToken));
                 when(userRepository.findById(userId)).thenReturn(Optional.of(user));
 

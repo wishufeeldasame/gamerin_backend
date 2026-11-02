@@ -69,6 +69,11 @@ controller는 모두 `/api/v1/...` 아래에 있으며, 도메인 이름과 URL�
 
 - Stateless JWT. 보호된 API는 `Authorization: Bearer <access token>`을 사용한다.
 - Access token 만료 기본 1800초, refresh token 기본 1209600초(14일). Refresh token은 HttpOnly 쿠키(기본 이름 `refresh_token`)로 전달되며 `POST /api/v1/auth/refresh`로 갱신한다.
+- Refresh token은 갱신할 때마다 회전한다. `LocalAuthService.refresh`가 토큰 행을 비관적 잠금으로 조회하므로 같은 토큰의 동시 요청은 하나만 성공한다.
+  - 회전된 토큰이 `app.auth.refresh-token.reuse-grace-seconds`(기본 30초) 안에 다시 오면 다른 탭의 동시 갱신으로 보고 `409`만 반환한다. `401`과 달리 refresh 쿠키를 지우지 않는다.
+  - 유예 시간이 지난 뒤 다시 오거나 계정이 비활성이면 탈취로 보고 해당 사용자의 활성 refresh token을 모두 폐기한 뒤 `401`을 반환한다.
+  - 로그아웃·비밀번호 변경·제재로 폐기된 토큰은 `401`만 반환한다(`refresh_tokens.rotated_at`으로 회전 폐기와 구분).
+  - 발급 시 `refresh_tokens.ip_address`(`getRemoteAddr()`, 운영은 `forward-headers-strategy: framework` 반영)와 `user_agent`(최대 512자)를 기록한다.
 - 메시지 SSE는 `POST /api/v1/messages/stream-token`으로 발급한 전용 HttpOnly 쿠키로 인증한다.
 - `/api/v1/admin/**`는 `ADMIN` 역할이 필요하다.
 - `/api/**` 인증 실패는 JSON 401을 반환한다.
@@ -93,7 +98,7 @@ controller는 모두 `/api/v1/...` 아래에 있으며, 도메인 이름과 URL�
 - 기본 활성 프로필은 `local`이라 `src/main/resources/application-local.yaml`이 필요하다. 이 파일은 비밀 설정이며 git에서 제외된다. 구조는 `application-local.example.yaml`을 참고해 직접 작성한다.
 - 예제의 `ddl-auto: create`는 로컬 DB 스키마를 재생성할 수 있다. 사용 전 대상 DB를 확인한다.
 - `BackendApplicationTests`(`@SpringBootTest`)의 실행 환경 요건은 `확인 필요`.
-- 조건부 테스트: PostgreSQL 동시성 테스트는 `HASHTAG_POSTGRES_TEST_URL`, `BOOKMARK_POSTGRES_TEST_URL`, `NOTIFICATION_POSTGRES_TEST_URL`이 설정돼야 실행되고, `R6DataLiveIntegrationTest`는 `R6DATA_LIVE_TEST=true`일 때 실행된다. 조건이 맞지 않아 건너뛴 테스트는 통과로 보지 않는다.
+- 조건부 테스트: PostgreSQL 동시성 테스트는 `HASHTAG_POSTGRES_TEST_URL`, `BOOKMARK_POSTGRES_TEST_URL`, `NOTIFICATION_POSTGRES_TEST_URL`, `REFRESH_TOKEN_POSTGRES_TEST_URL`이 설정돼야 실행되고, `R6DataLiveIntegrationTest`는 `R6DATA_LIVE_TEST=true`일 때 실행된다. 조건이 맞지 않아 건너뛴 테스트는 통과로 보지 않는다.
 - 테스트 JVM 설정(`build.gradle`): `-Xmx2048m`, `forkEvery = 30`.
 
 ## 설정 프로필과 환경변수
@@ -129,7 +134,7 @@ controller는 모두 `/api/v1/...` 아래에 있으며, 도메인 이름과 URL�
 | `PUBG_API_KEY`, `RIOT_API_KEY` | 빈 값 |
 | `R6DATA_API_KEY` / `_BASE_URL` / `_CONNECT_TIMEOUT` / `_READ_TIMEOUT` | 빈 값 / `https://api.r6data.com` / `3s` / `10s` |
 
-공통 설정(`application.yaml`)에서 읽는 변수: `SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE`(기본 `500MB`), `SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE`(기본 `530MB`), `APP_HASHTAG_BACKFILL_ENABLED`(`false`), `APP_HASHTAG_BACKFILL_BATCH_SIZE`(`200`), `KAKAOPAY_SECRET_KEY`, `KAKAOPAY_CID`(비어 있으면 결제 준비 거부), `KAKAOPAY_CANCEL_ENABLED`(`false`), `OPENAI_MODERATION_FFMPEG_TIMEOUT_MS`(`15000`).
+공통 설정(`application.yaml`)에서 읽는 변수: `SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE`(기본 `500MB`), `SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE`(기본 `530MB`), `APP_HASHTAG_BACKFILL_ENABLED`(`false`), `APP_HASHTAG_BACKFILL_BATCH_SIZE`(`200`), `KAKAOPAY_SECRET_KEY`, `KAKAOPAY_CID`(비어 있으면 결제 준비 거부), `KAKAOPAY_CANCEL_ENABLED`(`false`), `OPENAI_MODERATION_FFMPEG_TIMEOUT_MS`(`15000`). 환경변수 없이 공통 설정에 고정된 값: `app.auth.refresh-token.reuse-grace-seconds`(`30`).
 
 주의: `application-prod.yaml`에는 `kakaopay.*` 블록이 없고 공통 설정의 값을 상속한다. 운영 환경변수는 `../docker/docker-compose.yml`의 `backend.environment`와 대조해야 한다. `RIOT_API_KEY`가 Compose 주입 목록에 있는지, 실제로 주입되는지는 `확인 필요`.
 
@@ -186,7 +191,7 @@ sudo chown -R 10001:10001 ~/capstone/data/uploads ~/capstone/data/tmp
 - `ddl-auto`는 공통/운영 모두 `validate`다. 스키마 변경은 반드시 새 migration으로 한다.
 - 이미 적용된 migration 파일을 수정하거나 버전 번호를 재사용하지 않는다.
 - **새 migration은 홀수 버전만 사용**하며, 작업 브랜치와 병합 대상의 최대 버전보다 큰 미사용 홀수 번호를 고른다. 짝수 번호 공백은 정상이다.
-- 현재 존재하는 버전(작성 시점): V1–V19, V21, V23, V24, V25, V27, V29, V35. 새 번호 선택 전 목록을 다시 확인한다.
+- 현재 존재하는 버전(작성 시점): V1–V19, V21, V23–V25, V27, V29, V31, V33, V35, V37, V39–V43, V45, V47–V49, V51. 새 번호 선택 전 목록을 다시 확인한다.
 - native SQL, 제약조건, 인덱스, locking 같은 PostgreSQL 동작은 H2 결과만으로 확정하지 않는다.
 
 ## Swagger
