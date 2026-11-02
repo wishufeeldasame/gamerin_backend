@@ -7,8 +7,10 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -25,11 +27,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -130,6 +135,9 @@ class PostServiceTest {
     @Mock
     private ReportCountRepository reportCountRepository;
 
+    @Mock
+    private PlatformTransactionManager transactionManager;
+
     private Clock clock;
 
     private PostService postService;
@@ -158,6 +166,7 @@ class PostServiceTest {
                 postVideoJobService,
                 membershipService,
                 reportCountRepository,
+                new TransactionTemplate(transactionManager),
                 clock,
                 TEST_MAX_VIDEO_FILE_SIZE_BYTES);
     }
@@ -707,7 +716,6 @@ class PostServiceTest {
         Post post = savedPost(postId, user);
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
-        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
         doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                 "Content violates moderation policy: harassment"))
                 .when(contentModerationService)
@@ -721,6 +729,9 @@ class PostServiceTest {
                 .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY.value());
 
+        // 사용자 검증 트랜잭션 1회뿐이고 검열 거절 뒤에는 쓰기 트랜잭션을 열지 않는다.
+        verify(transactionManager, times(1)).getTransaction(any());
+        verify(postRepository, never()).findActiveByIdForUpdate(any());
         verify(postCommentRepository, never()).save(any());
     }
 
@@ -758,6 +769,15 @@ class PostServiceTest {
         verify(postCommentRepository).save(commentCaptor.capture());
         verify(notificationCommandService).createComment(commentCaptor.getValue(), post, actor);
         verify(mentionService).attachToComment(commentCaptor.getValue());
+        // 검열은 게시물 행 잠금보다 먼저 수행된다.
+        // 검열 전 사용자 검증은 짧은 트랜잭션으로 끝나고, 쓰기 트랜잭션은 검열 뒤에 시작된다.
+        InOrder inOrder = inOrder(transactionManager, userRepository, contentModerationService, postRepository);
+        inOrder.verify(transactionManager).getTransaction(any());
+        inOrder.verify(userRepository).findByIdAndDeletedAtIsNull(actorId);
+        inOrder.verify(transactionManager).commit(any());
+        inOrder.verify(contentModerationService).assertTextAllowed("hello");
+        inOrder.verify(transactionManager).getTransaction(any());
+        inOrder.verify(postRepository).findActiveByIdForUpdate(postId);
         assertThat(actual).isEqualTo(response);
         assertThat(post.getCommentCount()).isEqualTo(1);
     }
@@ -861,13 +881,21 @@ class PostServiceTest {
         assertThat(post.getContent()).isEqualTo("new #valorant @friend2");
         assertThat(post.getEditCount()).isEqualTo(1);
         verify(textSecurityService).assertTextSafe("new #valorant @friend2");
-        verify(contentModerationService).assertTextAllowed("new #valorant @friend2");
+        // 검열은 게시물 행 잠금보다 먼저 수행된다.
+        // 검열 전 사용자 검증은 짧은 트랜잭션으로 끝나고, 쓰기 트랜잭션은 검열 뒤에 시작된다.
+        InOrder inOrder = inOrder(transactionManager, userRepository, contentModerationService, postRepository);
+        inOrder.verify(transactionManager).getTransaction(any());
+        inOrder.verify(userRepository).findByIdAndDeletedAtIsNull(userId);
+        inOrder.verify(transactionManager).commit(any());
+        inOrder.verify(contentModerationService).assertTextAllowed("new #valorant @friend2");
+        inOrder.verify(transactionManager).getTransaction(any());
+        inOrder.verify(postRepository).findActiveByIdForUpdate(postId);
         verify(hashtagService).syncForPost(post);
         verify(mentionService).attachToPost(post);
     }
 
     @Test
-    void updateDoesNotDeductEditCountOrRunModerationWhenNormalizedContentIsUnchanged() {
+    void updateDoesNotDeductEditCountWhenNormalizedContentIsUnchanged() {
         UUID userId = UUID.randomUUID();
         UUID postId = UUID.randomUUID();
         User author = savedUser(userId, "author", "Author");
@@ -888,8 +916,7 @@ class PostServiceTest {
 
         assertThat(actual).isSameAs(response);
         assertThat(post.getEditCount()).isZero();
-        verify(textSecurityService, never()).assertTextSafe(any());
-        verify(contentModerationService, never()).assertTextAllowed(any());
+        verify(contentModerationService).assertTextAllowed("same content");
         verify(hashtagService, never()).syncForPost(any());
         verify(mentionService, never()).attachToPost(any());
     }
@@ -1024,10 +1051,6 @@ class PostServiceTest {
         Post post = savedEditablePost(postId, author, "original", FIXED_NOW.minusMinutes(15));
 
         when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(author));
-        when(postRepository.findActiveByIdForUpdate(postId)).thenReturn(Optional.of(post));
-        when(reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId))
-                .thenReturn(false);
-        when(membershipService.isActive(userId)).thenReturn(true);
         doThrow(new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                 "Content violates moderation policy: violence"))
                 .when(contentModerationService)
@@ -1043,6 +1066,9 @@ class PostServiceTest {
 
         assertThat(post.getContent()).isEqualTo("original");
         assertThat(post.getEditCount()).isZero();
+        // 사용자 검증 트랜잭션 1회뿐이고 검열 거절 뒤에는 쓰기 트랜잭션을 열지 않는다.
+        verify(transactionManager, times(1)).getTransaction(any());
+        verify(postRepository, never()).findActiveByIdForUpdate(any());
         verify(hashtagService, never()).syncForPost(any());
         verify(mentionService, never()).attachToPost(any());
     }
