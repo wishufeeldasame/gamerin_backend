@@ -12,6 +12,7 @@ import com.gamerin.backend.domain.mentoring.entity.*;
 import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.report.repository.ReportRepository;
 import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.entity.User;
@@ -68,6 +69,9 @@ class AdminMentoringServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private NotificationCommandService notificationCommandService;
 
     @InjectMocks
     private AdminMentoringService adminMentoringService;
@@ -251,17 +255,21 @@ class AdminMentoringServiceTest {
                 .willReturn(programPage);
         // 서비스는 일괄 집계 메서드를 사용하므로 Object[] 형태로 stub
         List<Object[]> sessionRows = new java.util.ArrayList<>();
-        sessionRows.add(new Object[]{programId, 8L});
+        sessionRows.add(new Object[] { programId, 8L });
         List<Object[]> reportRows = new java.util.ArrayList<>();
-        reportRows.add(new Object[]{programId, 2L});
+        reportRows.add(new Object[] { programId, 2L });
+        List<Object[]> directReportRows = new java.util.ArrayList<>();
+        directReportRows.add(new Object[] { programId, 1L });
         given(mentoringApplicationRepository.countByProgramIdIn(List.of(programId)))
                 .willReturn(sessionRows);
-        given(reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)))
+        given(reportRepository.countApplicationReportsByProgramIdIn(List.of(programId)))
                 .willReturn(reportRows);
-
+        given(reportRepository.countProgramDirectReportsByProgramIdIn(List.of(programId)))
+                .willReturn(directReportRows);
 
         // when
-        Page<AdminMentoringProgramResponse> result = adminMentoringService.getPrograms(ProgramStatus.ACTIVE, "코칭", pageable);
+        Page<AdminMentoringProgramResponse> result = adminMentoringService.getPrograms(ProgramStatus.ACTIVE, "코칭",
+                pageable);
 
         // then
         assertThat(result).hasSize(1);
@@ -269,7 +277,7 @@ class AdminMentoringServiceTest {
         assertThat(res.title()).isEqualTo("다이아 탈출 맞춤 코칭");
         assertThat(res.mentorNickname()).isEqualTo("프로멘토");
         assertThat(res.sessions()).isEqualTo(8L);
-        assertThat(res.reports()).isEqualTo(2L);
+        assertThat(res.reports()).isEqualTo(3L); // 신청 건 신고 2건 + 프로그램 직접 신고 1건 = 3건
         assertThat(res.rating()).isEqualTo(4.85);
     }
 
@@ -281,11 +289,12 @@ class AdminMentoringServiceTest {
         given(mentoringProgramRepository.findById(programId)).willReturn(Optional.of(program));
         given(mentoringProgramRepository.save(any(MentoringProgram.class))).willAnswer(inv -> inv.getArgument(0));
         given(mentoringApplicationRepository.countByProgramId(programId)).willReturn(5L);
-        given(reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)))
+        given(reportRepository.countApplicationReportsByProgramIdIn(List.of(programId)))
                 .willReturn(List.of());
 
         // when
-        AdminMentoringProgramResponse res = adminMentoringService.updateProgramStatus(adminId, programId, ProgramStatus.CLOSED);
+        AdminMentoringProgramResponse res = adminMentoringService.updateProgramStatus(adminId, programId,
+                ProgramStatus.CLOSED);
 
         // then
         assertThat(res.status()).isEqualTo(ProgramStatus.CLOSED);
@@ -296,6 +305,50 @@ class AdminMentoringServiceTest {
     }
 
     @Test
+    @DisplayName("프로그램 상태 변경 응답의 신고 수도 신청 건 신고와 프로그램 직접 신고를 합산한다")
+    void updateProgramStatus_reportsSumApplicationAndDirectReports() {
+        // given
+        given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
+        given(mentoringProgramRepository.findById(programId)).willReturn(Optional.of(program));
+        given(mentoringProgramRepository.save(any(MentoringProgram.class))).willAnswer(inv -> inv.getArgument(0));
+        given(mentoringApplicationRepository.countByProgramId(programId)).willReturn(5L);
+        List<Object[]> applicationReportRows = new java.util.ArrayList<>();
+        applicationReportRows.add(new Object[] { programId, 2L });
+        List<Object[]> directReportRows = new java.util.ArrayList<>();
+        directReportRows.add(new Object[] { programId, 4L });
+        given(reportRepository.countApplicationReportsByProgramIdIn(List.of(programId)))
+                .willReturn(applicationReportRows);
+        given(reportRepository.countProgramDirectReportsByProgramIdIn(List.of(programId)))
+                .willReturn(directReportRows);
+
+        // when
+        AdminMentoringProgramResponse res = adminMentoringService.updateProgramStatus(adminId, programId,
+                ProgramStatus.CLOSED);
+
+        // then: getPrograms와 같은 합산 규칙(2 + 4)
+        assertThat(res.reports()).isEqualTo(6L);
+    }
+    @Test
+    @DisplayName("진행 중 에스크로 건이 있어도 프로그램 숨김은 성공하고 감사 로그에 진행 중 건 수가 남는다")
+    void hideProgram_withEscrowHeldApplications_allowedAndAudited() {
+        // given
+        given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
+        given(mentoringProgramRepository.findById(programId)).willReturn(Optional.of(program));
+        given(mentoringProgramRepository.save(any(MentoringProgram.class))).willAnswer(inv -> inv.getArgument(0));
+        given(mentoringApplicationRepository.countByProgramId(programId)).willReturn(3L);
+        given(mentoringApplicationRepository.countByProgramIdAndPaymentStatus(programId, PaymentStatus.ESCROW_HELD))
+                .willReturn(2L);
+
+        // when
+        adminMentoringService.hideProgram(adminId, programId, "악성 프로그램");
+
+        // then
+        assertThat(program.isDeleted()).isTrue();
+        org.mockito.ArgumentCaptor<AdminAuditLog> captor = org.mockito.ArgumentCaptor.forClass(AdminAuditLog.class);
+        verify(adminAuditLogRepository).save(captor.capture());
+        assertThat(captor.getValue().getDetails()).contains("진행 중 에스크로 2건");
+    }
+    @Test
     @DisplayName("프로그램 강제 숨김 처리 시 소프트 삭제되고 감사 로그가 적재된다")
     void hideProgram_success() {
         // given
@@ -304,8 +357,8 @@ class AdminMentoringServiceTest {
         given(mentoringProgramRepository.save(any(MentoringProgram.class))).willAnswer(inv -> inv.getArgument(0));
         given(mentoringApplicationRepository.countByProgramId(programId)).willReturn(3L);
         List<Object[]> reportRows = new java.util.ArrayList<>();
-        reportRows.add(new Object[]{programId, 1L});
-        given(reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)))
+        reportRows.add(new Object[] { programId, 1L });
+        given(reportRepository.countApplicationReportsByProgramIdIn(List.of(programId)))
                 .willReturn(reportRows);
 
         // when
@@ -342,7 +395,8 @@ class AdminMentoringServiceTest {
         given(mentoringApplicationRepository.findByIdForUpdate(applicationId)).willReturn(Optional.of(application));
 
         // when
-        MentoringApplicationResponse response = adminMentoringService.forceRefund(adminId, applicationId, "멘토 불참 신고 접수");
+        MentoringApplicationResponse response = adminMentoringService.forceRefund(adminId, applicationId,
+                "멘토 불참 신고 접수");
 
         // then
         assertThat(response).isNotNull();
@@ -356,10 +410,11 @@ class AdminMentoringServiceTest {
                 eq(30000L),
                 eq(TransactionType.MENTORING_REFUND),
                 any(String.class),
-                eq(applicationId)
-        );
+                eq(applicationId));
 
         verify(adminAuditLogRepository, times(1)).save(any(AdminAuditLog.class));
+        verify(notificationCommandService).createMentoringRefunded(application, null, menteeUser);
+        verify(notificationCommandService).createMentoringRefunded(application, null, mentorUser);
     }
 
     @Test
@@ -385,7 +440,8 @@ class AdminMentoringServiceTest {
                 .willReturn(Optional.of(mentorProfile));
 
         // when
-        MentoringApplicationResponse response = adminMentoringService.forceSettle(adminId, applicationId, "세션 정상 진행 확인");
+        MentoringApplicationResponse response = adminMentoringService.forceSettle(adminId, applicationId,
+                "세션 정상 진행 확인");
 
         // then
         assertThat(response).isNotNull();
@@ -402,6 +458,8 @@ class AdminMentoringServiceTest {
                 eq(mentorUser), eq(27000L), eq(TransactionType.SETTLEMENT), any(String.class), eq(applicationId));
         inOrder.verify(mentorProfileRepository).incrementMenteeCount(mentorProfile.getUserId());
         verify(mentorProfileRepository, times(1)).incrementMenteeCount(mentorProfile.getUserId());
+        verify(notificationCommandService).createMentoringCompleted(application, null, mentorUser);
+        verify(notificationCommandService).createMentoringCompleted(application, null, menteeUser);
     }
 
     private void assertMembershipBadgesOmitted(MentoringApplicationResponse response) {

@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.message.service;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
@@ -19,9 +20,11 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -92,6 +95,7 @@ public class MessageService {
     private final SseStreamTokenService sseStreamTokenService;
     private final NotificationCommandService notificationCommandService;
     private final MembershipService membershipService;
+    private final TransactionTemplate transactionTemplate;
 
     public MessageService(
             UserRepository userRepository,
@@ -111,7 +115,8 @@ public class MessageService {
             VideoOptimizationService videoOptimizationService,
             SseStreamTokenService sseStreamTokenService,
             NotificationCommandService notificationCommandService,
-            MembershipService membershipService
+            MembershipService membershipService,
+            TransactionTemplate transactionTemplate
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -131,6 +136,7 @@ public class MessageService {
         this.sseStreamTokenService = sseStreamTokenService;
         this.notificationCommandService = notificationCommandService;
         this.membershipService = membershipService;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @Transactional(readOnly = true)
@@ -210,102 +216,141 @@ public class MessageService {
         return new CursorPageResponse<>(items, buildMessageCursor(pageMessages, hasNext), hasNext);
     }
 
+    // 외부 검열 동안 커넥션을 잡지 않도록 트랜잭션 없이 시작하고, 잠금·쓰기만 transactionTemplate으로 묶는다(바깥 트랜잭션이 있으면 참여).
+    @Transactional(propagation = Propagation.SUPPORTS)
     public MessageResponse sendMessage(
             CustomUserPrincipal principal,
             UUID conversationId,
             SendMessageRequest request
     ) {
-        User viewer = getCurrentUser(principal);
-        MessageConversation conversation = getActiveConversationForUpdate(conversationId);
-        MessageParticipant viewerParticipant = getParticipant(conversationId, viewer.getId());
-        Optional<DirectMessage> sentMessage =
-                findSentMessage(viewer.getId(), conversationId, request.clientMessageId());
-        if (sentMessage.isPresent()) {
-            return toMessageResponse(sentMessage.get(), viewer.getId());
+        // 검열 전 조회는 모두 짧은 트랜잭션 안에서 한다(바깥 범위에서 조회하면 세션이 커넥션을 쥔다).
+        // 잠금 전에 참여자 엔티티를 올리면 검열 중 나가기·재입장 변경이 잠금 뒤 조회에 반영되지 않아 존재 여부만 확인한다.
+        SendPrecheck precheck = transactionTemplate.execute(status -> {
+            UUID id = getCurrentUser(principal).getId();
+            ensureParticipant(conversationId, id);
+            MessageResponse sent = findSentMessage(id, conversationId, request.clientMessageId())
+                    .map(message -> toMessageResponse(message, id))
+                    .orElse(null);
+            return new SendPrecheck(id, sent, sent == null && getSharedPost(request.sharedPostId()) != null);
+        });
+        if (precheck.alreadySent() != null) {
+            return precheck.alreadySent();
         }
+        UUID viewerId = precheck.viewerId();
 
         String content = normalizeContent(request.content());
-        Post sharedPost = getSharedPost(request.sharedPostId());
-        if (content == null && sharedPost == null) {
+        if (content == null && !precheck.hasSharedPost()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message content or shared post is required.");
         }
         validateMessageContent(content);
 
-        DirectMessage savedMessage = saveMessage(
-                conversation,
-                viewer,
-                content != null ? content : "",
-                sharedPost,
-                request.clientMessageId()
-        );
-        markParticipantRead(viewerParticipant);
-        publishMessageCreated(savedMessage);
+        return transactionTemplate.execute(status -> {
+            User viewer = getCurrentUser(principal);
+            MessageConversation conversation = getActiveConversationForUpdate(conversationId);
+            MessageParticipant viewerParticipant = getParticipant(conversationId, viewerId);
 
-        return toMessageResponse(savedMessage, viewer.getId());
-    }
-
-    public MessageResponse sendMultipartMessage(
-            CustomUserPrincipal principal,
-            UUID conversationId,
-            SendMultipartMessageRequest request
-    ) {
-        User viewer = getCurrentUser(principal);
-        MessageConversation conversation = getActiveConversation(conversationId);
-        MessageParticipant viewerParticipant = getParticipant(conversationId, viewer.getId());
-        UUID clientMessageId = request.getClientMessageId();
-        Optional<DirectMessage> alreadySentMessage = findSentMessage(viewer.getId(), conversationId, clientMessageId);
-        if (alreadySentMessage.isPresent()) {
-            return toMessageResponse(alreadySentMessage.get(), viewer.getId());
-        }
-
-        String content = normalizeContent(request.getContent());
-        Post sharedPost = getSharedPost(request.getSharedPostId());
-        List<MultipartFile> attachments = normalizeAttachmentFiles(request.getAttachments());
-        validateAttachments(attachments);
-
-        if (content == null && sharedPost == null && attachments.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message content, shared post, or attachment is required.");
-        }
-        validateMultipartMessageContent(content, attachments);
-        List<PreparedMessageAttachment> preparedAttachments = prepareAttachments(attachments);
-
-        conversation = getActiveConversationForUpdate(conversationId);
-        viewerParticipant = getParticipant(conversationId, viewer.getId());
-
-        List<MessageAttachmentStorageService.StoredFile> storedFiles = new ArrayList<>();
-        try {
             // 검열 중에 같은 키 요청이 먼저 저장됐을 수 있어 대화 잠금 뒤 다시 확인한다.
-            Optional<DirectMessage> sentMessage = findSentMessage(viewer.getId(), conversationId, clientMessageId);
+            Optional<DirectMessage> sentMessage =
+                    findSentMessage(viewerId, conversationId, request.clientMessageId());
             if (sentMessage.isPresent()) {
-                return toMessageResponse(sentMessage.get(), viewer.getId());
+                return toMessageResponse(sentMessage.get(), viewerId);
             }
 
+            Post sharedPost = getSharedPost(request.sharedPostId());
             DirectMessage savedMessage = saveMessage(
                     conversation,
                     viewer,
                     content != null ? content : "",
                     sharedPost,
-                    clientMessageId
+                    request.clientMessageId()
             );
-
-            List<DirectMessageAttachment> messageAttachments = new ArrayList<>();
-            for (int index = 0; index < preparedAttachments.size(); index++) {
-                PreparedMessageAttachment preparedAttachment = preparedAttachments.get(index);
-                MessageAttachmentStorageService.StoredFile storedFile = storePreparedAttachment(preparedAttachment);
-                storedFiles.add(storedFile);
-                messageAttachments.add(DirectMessageAttachment.create(
-                        savedMessage,
-                        preparedAttachment.type(),
-                        preparedAttachment.displayName(),
-                        storedFile.publicUrl(),
-                        index
-                ));
-            }
-
-            directMessageAttachmentRepository.saveAll(messageAttachments);
             markParticipantRead(viewerParticipant);
             publishMessageCreated(savedMessage);
-            return toMessageResponse(savedMessage, viewer.getId());
+
+            return toMessageResponse(savedMessage, viewerId);
+        });
+    }
+
+    // 외부 검열 동안 커넥션을 잡지 않도록 트랜잭션 없이 시작하고, 잠금·쓰기만 transactionTemplate으로 묶는다(바깥 트랜잭션이 있으면 참여).
+    @Transactional(propagation = Propagation.SUPPORTS)
+    public MessageResponse sendMultipartMessage(
+            CustomUserPrincipal principal,
+            UUID conversationId,
+            SendMultipartMessageRequest request
+    ) {
+        UUID clientMessageId = request.getClientMessageId();
+        // 검열 전 조회는 모두 짧은 트랜잭션 안에서 한다(바깥 범위에서 조회하면 세션이 커넥션을 쥔다).
+        // 잠금 전에 참여자 엔티티를 올리면 검열 중 나가기·재입장 변경이 잠금 뒤 조회에 반영되지 않아 존재 여부만 확인한다.
+        SendPrecheck precheck = transactionTemplate.execute(status -> {
+            UUID id = getCurrentUser(principal).getId();
+            ensureParticipant(conversationId, id);
+            MessageResponse sent = findSentMessage(id, conversationId, clientMessageId)
+                    .map(message -> toMessageResponse(message, id))
+                    .orElse(null);
+            return new SendPrecheck(id, sent, sent == null && getSharedPost(request.getSharedPostId()) != null);
+        });
+        if (precheck.alreadySent() != null) {
+            return precheck.alreadySent();
+        }
+        UUID viewerId = precheck.viewerId();
+
+        String content = normalizeContent(request.getContent());
+        List<MultipartFile> attachments = normalizeAttachmentFiles(request.getAttachments());
+        validateAttachments(attachments);
+
+        if (content == null && !precheck.hasSharedPost() && attachments.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Message content, shared post, or attachment is required.");
+        }
+        validateMultipartMessageContent(content, attachments);
+        List<PreparedMessageAttachment> preparedAttachments = prepareAttachments(attachments);
+
+        List<MessageAttachmentStorageService.StoredFile> storedFiles = new ArrayList<>();
+        try {
+            // 커밋 실패 시에도 저장된 파일을 지우도록 try가 템플릿 호출 전체를 감싼다.
+            return transactionTemplate.execute(status -> {
+                User viewer = getCurrentUser(principal);
+                MessageConversation conversation = getActiveConversationForUpdate(conversationId);
+                MessageParticipant viewerParticipant = getParticipant(conversationId, viewerId);
+
+                // 검열 중에 같은 키 요청이 먼저 저장됐을 수 있어 대화 잠금 뒤 다시 확인한다.
+                Optional<DirectMessage> sentMessage = findSentMessage(viewerId, conversationId, clientMessageId);
+                if (sentMessage.isPresent()) {
+                    return toMessageResponse(sentMessage.get(), viewerId);
+                }
+
+                Post sharedPost = getSharedPost(request.getSharedPostId());
+                DirectMessage savedMessage = saveMessage(
+                        conversation,
+                        viewer,
+                        content != null ? content : "",
+                        sharedPost,
+                        clientMessageId
+                );
+
+                List<DirectMessageAttachment> messageAttachments = new ArrayList<>();
+                for (int index = 0; index < preparedAttachments.size(); index++) {
+                    PreparedMessageAttachment preparedAttachment = preparedAttachments.get(index);
+                    MessageAttachmentStorageService.StoredFile storedFile;
+                    try {
+                        storedFile = storePreparedAttachment(preparedAttachment);
+                    } catch (IOException ex) {
+                        throw new UncheckedIOException(ex);
+                    }
+                    storedFiles.add(storedFile);
+                    messageAttachments.add(DirectMessageAttachment.create(
+                            savedMessage,
+                            preparedAttachment.type(),
+                            preparedAttachment.displayName(),
+                            storedFile.publicUrl(),
+                            index
+                    ));
+                }
+
+                directMessageAttachmentRepository.saveAll(messageAttachments);
+                markParticipantRead(viewerParticipant);
+                publishMessageCreated(savedMessage);
+                return toMessageResponse(savedMessage, viewerId);
+            });
         } catch (Exception ex) {
             storedFiles.forEach(messageAttachmentStorageService::deleteQuietly);
             if (ex instanceof ResponseStatusException responseStatusException) {
@@ -1092,6 +1137,9 @@ public class MessageService {
         }
 
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported message attachment file type.");
+    }
+
+    private record SendPrecheck(UUID viewerId, MessageResponse alreadySent, boolean hasSharedPost) {
     }
 
     private record PreparedMessageAttachment(

@@ -1,6 +1,8 @@
 package com.gamerin.backend.domain.post.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -21,6 +23,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
+import javax.sql.DataSource;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -33,21 +37,25 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.membership.entity.UserMembership;
 import com.gamerin.backend.domain.membership.repository.UserMembershipRepository;
+import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
 import com.gamerin.backend.domain.post.dto.request.UpdatePostRequest;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
 import com.gamerin.backend.domain.post.entity.Post;
+import com.gamerin.backend.domain.post.moderation.ContentModerationService;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.post.service.PostService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+import com.zaxxer.hikari.HikariDataSource;
 
 @Tag("postgresql")
 @EnabledIfEnvironmentVariable(named = "HASHTAG_POSTGRES_TEST_URL", matches = ".+")
@@ -73,6 +81,10 @@ class PostEditPostgresConcurrencyTest {
     private TransactionTemplate transactionTemplate;
     @Autowired
     private JdbcTemplate jdbcTemplate;
+    @Autowired
+    private DataSource dataSource;
+    @MockitoSpyBean
+    private ContentModerationService contentModerationService;
 
     @DynamicPropertySource
     static void configurePostgres(DynamicPropertyRegistry registry) {
@@ -189,6 +201,50 @@ class PostEditPostgresConcurrencyTest {
                 from notifications
                 where post_id = ? and recipient_id = ? and type = 'MENTION'
                 """, postId, addedUser.getId())).isEqualTo(1);
+    }
+
+    /**
+     * #130: 외부 검열이 실행되는 동안 풀의 활성 커넥션이 0이어야 한다(검열을 트랜잭션 밖에서 수행).
+     */
+    @Test
+    void createCommentDoesNotHoldConnectionDuringModeration() throws Exception {
+        User author = createActiveMemberUser("cmtauthor");
+        CustomUserPrincipal principal = CustomUserPrincipal.from(author);
+        UUID postId = postService.create(principal, new CreatePostRequest("댓글 대상 게시물")).postId();
+        AtomicInteger activeDuringModeration = recordActiveConnectionsDuringModeration();
+
+        postService.createComment(principal, postId, new CreateCommentRequest("검열 중 커넥션 확인"));
+
+        assertThat(activeDuringModeration.get()).isZero();
+        assertThat(count("select count(*) from post_comments where post_id = ?", postId)).isEqualTo(1);
+    }
+
+    /**
+     * #130: 수정 요청도 검열 구간에는 커넥션을 잡지 않고, 검열 뒤 쓰기는 정상 반영된다.
+     */
+    @Test
+    void updateDoesNotHoldConnectionDuringModeration() throws Exception {
+        User author = createActiveMemberUser("updauthor");
+        CustomUserPrincipal principal = CustomUserPrincipal.from(author);
+        UUID postId = postService.create(principal, new CreatePostRequest("수정 전 본문")).postId();
+        AtomicInteger activeDuringModeration = recordActiveConnectionsDuringModeration();
+
+        postService.update(principal, postId, new UpdatePostRequest("수정 후 본문"));
+
+        assertThat(activeDuringModeration.get()).isZero();
+        Post updatedPost = postRepository.findById(postId).orElseThrow();
+        assertThat(updatedPost.getContent()).isEqualTo("수정 후 본문");
+        assertThat(updatedPost.getEditCount()).isEqualTo(1);
+    }
+
+    private AtomicInteger recordActiveConnectionsDuringModeration() throws SQLException {
+        HikariDataSource hikari = dataSource.unwrap(HikariDataSource.class);
+        AtomicInteger observed = new AtomicInteger(-1);
+        doAnswer(invocation -> {
+            observed.set(hikari.getHikariPoolMXBean().getActiveConnections());
+            return invocation.callRealMethod();
+        }).when(contentModerationService).assertTextAllowed(anyString());
+        return observed;
     }
 
     private User createActiveMemberUser(String handlePrefix) {

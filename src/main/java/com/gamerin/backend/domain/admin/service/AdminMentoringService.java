@@ -11,6 +11,7 @@ import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
 import com.gamerin.backend.domain.mentoring.service.MentoringSettlementCalculator;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.report.entity.ReportTargetType;
 import com.gamerin.backend.domain.report.repository.ReportRepository;
 import com.gamerin.backend.domain.user.entity.TransactionType;
@@ -43,6 +44,7 @@ public class AdminMentoringService {
         private final MileageService mileageService;
         private final AdminAuditLogRepository adminAuditLogRepository;
         private final UserRepository userRepository;
+        private final NotificationCommandService notificationCommandService;
 
         public AdminMentoringService(
                         MentoringApplicationRepository mentoringApplicationRepository,
@@ -51,7 +53,8 @@ public class AdminMentoringService {
                         ReportRepository reportRepository,
                         MileageService mileageService,
                         AdminAuditLogRepository adminAuditLogRepository,
-                        UserRepository userRepository) {
+                        UserRepository userRepository,
+                        NotificationCommandService notificationCommandService) {
                 this.mentoringApplicationRepository = mentoringApplicationRepository;
                 this.mentoringProgramRepository = mentoringProgramRepository;
                 this.mentorProfileRepository = mentorProfileRepository;
@@ -59,6 +62,7 @@ public class AdminMentoringService {
                 this.mileageService = mileageService;
                 this.adminAuditLogRepository = adminAuditLogRepository;
                 this.userRepository = userRepository;
+                this.notificationCommandService = notificationCommandService;
         }
 
         // ================= [1. 멘토링 운영 요약 지표] =================
@@ -170,11 +174,8 @@ public class AdminMentoringService {
                         sessionMap.put((UUID) row[0], (Long) row[1]);
                 }
 
-                // 신고 건수 일괄 조회 (쿼리 1번)
-                Map<UUID, Long> reportMap = new java.util.HashMap<>();
-                for (Object[] row : reportRepository.countMentoringReportsByProgramIdIn(programIds)) {
-                        reportMap.put((UUID) row[0], (Long) row[1]);
-                }
+                // 신고 건수 일괄 조회 (신청 건 기준 신고 + 프로그램 직접 신고 합산)
+                Map<UUID, Long> reportMap = countReportsByProgramIds(programIds);
 
                 return page.map(program -> {
                         long sessions = sessionMap.getOrDefault(program.getId(), 0L);
@@ -240,6 +241,12 @@ public class AdminMentoringService {
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "이미 숨김 처리된 프로그램입니다.");
                 }
 
+                // 진행 중인 에스크로 건이 있어도 어드민 숨김은 허용한다 (악성 프로그램 즉시 차단).
+                // 숨김은 신규 노출/신청만 막고 기존 신청 건의 완료·취소·환불·정산 흐름은 신청 건 기준으로 계속 동작한다.
+                // 후속 관리가 필요하므로 진행 중 에스크로 건 수를 감사 로그에 남긴다.
+                long heldEscrowCount = mentoringApplicationRepository.countByProgramIdAndPaymentStatus(
+                                programId, PaymentStatus.ESCROW_HELD);
+                String escrowNote = heldEscrowCount > 0 ? " [진행 중 에스크로 " + heldEscrowCount + "건]" : "";
                 program.softDelete();
                 MentoringProgram saved = mentoringProgramRepository.save(program);
 
@@ -249,7 +256,7 @@ public class AdminMentoringService {
                                 ReportTargetType.MENTORING,
                                 programId,
                                 null,
-                                String.format("관리자 강제 숨김 처리 (제목: %s, 사유: %s)", program.getTitle(), reason)));
+                                String.format("관리자 강제 숨김 처리 (제목: %s, 사유: %s)", program.getTitle(), reason) + escrowNote));
 
                 long sessions = mentoringApplicationRepository.countByProgramId(saved.getId());
                 long reports = countProgramReports(saved.getId());
@@ -291,6 +298,14 @@ public class AdminMentoringService {
                                 applicationId,
                                 null,
                                 String.format("멘티 환불 금액: %d P, 사유: %s", application.getAppliedMileage(), reason)));
+
+                notificationCommandService.createMentoringRefunded(application, null, application.getMentee());
+                if (application.getProgram() != null
+                                && application.getProgram().getMentor() != null
+                                && application.getProgram().getMentor().getUser() != null) {
+                        notificationCommandService.createMentoringRefunded(
+                                        application, null, application.getProgram().getMentor().getUser());
+                }
 
                 return MentoringApplicationResponse.from(application);
         }
@@ -342,15 +357,36 @@ public class AdminMentoringService {
                                 String.format("멘토 정산 지급 금액: %d P, 수수료: %d P, 사유: %s",
                                                 settlement.payoutAmount(), settlement.feeAmount(), reason)));
 
+                notificationCommandService.createMentoringCompleted(application, null, mentorProfile.getUser());
+                notificationCommandService.createMentoringCompleted(application, null, application.getMentee());
+
                 return MentoringApplicationResponse.from(application);
         }
 
         private long countProgramReports(UUID programId) {
-                return reportRepository.countMentoringReportsByProgramIdIn(List.of(programId)).stream()
-                                .mapToLong(row -> (Long) row[1])
-                                .sum();
+                return countReportsByProgramIds(List.of(programId)).getOrDefault(programId, 0L);
         }
 
+        /**
+         * 프로그램별 신고 수 집계의 유일한 진입점.
+         * 프로그램에 대한 신고는 두 경로로 접수되므로 항상 합산한다.
+         * (1) 해당 프로그램의 신청 건에 대한 신고 (targetId = 신청 건 ID)
+         * (2) 프로그램 자체에 대한 직접 신고 (targetId = 프로그램 ID)
+         * 신고 수가 필요한 모든 곳은 이 메서드만 사용해야 한다 (한쪽을 빠뜨리면 화면마다 숫자가 달라진다).
+         */
+        private Map<UUID, Long> countReportsByProgramIds(List<UUID> programIds) {
+                Map<UUID, Long> reportMap = new java.util.HashMap<>();
+                if (programIds.isEmpty()) {
+                        return reportMap;
+                }
+                for (Object[] row : reportRepository.countApplicationReportsByProgramIdIn(programIds)) {
+                        reportMap.merge((UUID) row[0], (Long) row[1], Long::sum);
+                }
+                for (Object[] row : reportRepository.countProgramDirectReportsByProgramIdIn(programIds)) {
+                        reportMap.merge((UUID) row[0], (Long) row[1], Long::sum);
+                }
+                return reportMap;
+        }
         private User findAdmin(UUID adminId) {
                 return userRepository.findById(adminId)
                                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,

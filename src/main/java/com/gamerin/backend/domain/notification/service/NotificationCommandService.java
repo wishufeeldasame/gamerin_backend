@@ -142,6 +142,10 @@ public class NotificationCommandService {
         createMentoring(NotificationType.MENTORING_COMPLETED, application, actor, recipient);
     }
 
+    public void createMentoringRefunded(MentoringApplication application, User actor, User recipient) {
+        createMentoring(NotificationType.MENTORING_REFUNDED, application, actor, recipient);
+    }
+
     public void createMentoringReview(
             MentoringApplication application,
             MentoringReview review,

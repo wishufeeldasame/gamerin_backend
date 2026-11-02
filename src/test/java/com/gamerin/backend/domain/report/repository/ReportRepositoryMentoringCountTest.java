@@ -57,7 +57,7 @@ class ReportRepositoryMentoringCountTest {
 
     @Test
     @DisplayName("신청 건에 접수된 MENTORING 신고가 해당 프로그램의 신고 건수로 집계된다")
-    void countMentoringReportsByProgramIdIn_aggregatesByApplicationProgram() {
+    void countApplicationReportsByProgramIdIn_aggregatesByApplicationProgram() {
         User reporter = createUser("reporter");
         User mentee = createUser("mentee");
         MentorProfile mentor = createMentorProfile(createUser("mentor"));
@@ -83,7 +83,7 @@ class ReportRepositoryMentoringCountTest {
         entityManager.clear();
 
         Map<UUID, Long> counts = new HashMap<>();
-        for (Object[] row : reportRepository.countMentoringReportsByProgramIdIn(
+        for (Object[] row : reportRepository.countApplicationReportsByProgramIdIn(
                 List.of(programA.getId(), programB.getId(), programWithoutReports.getId()))) {
             counts.put((UUID) row[0], (Long) row[1]);
         }
@@ -94,6 +94,36 @@ class ReportRepositoryMentoringCountTest {
                 .doesNotContainKey(programWithoutReports.getId());
     }
 
+    @Test
+    @DisplayName("프로그램 ID로 직접 접수된 MENTORING 신고만 프로그램별로 집계한다 (신청 건 신고는 제외)")
+    void countProgramDirectReportsByProgramIdIn_aggregatesOnlyDirectProgramReports() {
+        User reporter = createUser("reporter");
+        User mentee = createUser("mentee");
+        MentorProfile mentor = createMentorProfile(createUser("mentor"));
+
+        MentoringProgram programA = createProgram(mentor, "A");
+        MentoringProgram programB = createProgram(mentor, "B");
+        MentoringApplication appA = createApplication(programA, mentee);
+
+        saveReport(reporter, ReportTargetType.MENTORING, programA.getId());
+        saveReport(createUser("reporter2"), ReportTargetType.MENTORING, programA.getId());
+        // 집계 대상 아님: 신청 건 신고, 다른 대상 유형 신고
+        saveReport(reporter, ReportTargetType.MENTORING, appA.getId());
+        saveReport(reporter, ReportTargetType.POST, programA.getId());
+
+        entityManager.flush();
+        entityManager.clear();
+
+        Map<UUID, Long> counts = new HashMap<>();
+        for (Object[] row : reportRepository.countProgramDirectReportsByProgramIdIn(
+                List.of(programA.getId(), programB.getId()))) {
+            counts.put((UUID) row[0], (Long) row[1]);
+        }
+
+        assertThat(counts)
+                .containsEntry(programA.getId(), 2L)
+                .doesNotContainKey(programB.getId());
+    }
     private User createUser(String prefix) {
         User user = User.createLocal(
                 prefix + "_" + UUID.randomUUID() + "@gamerin.com",
