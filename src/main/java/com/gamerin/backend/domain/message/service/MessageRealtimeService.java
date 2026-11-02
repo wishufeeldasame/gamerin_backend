@@ -49,7 +49,7 @@ public class MessageRealtimeService {
 
         try {
             emitter.send(SseEmitter.event().name("connected").data("ok"));
-        } catch (IOException e) {
+        } catch (IOException | IllegalStateException e) {
             removeEmitter(userId, emitter);
         }
 
