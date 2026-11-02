@@ -304,7 +304,8 @@ public class PostVideoJobService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCompletion(int status) {
-                if (status != STATUS_COMMITTED) {
+                // STATUS_UNKNOWN은 커밋됐을 수 있으므로 파일을 유지한다.
+                if (status == STATUS_ROLLED_BACK) {
                     deleteQuietly(inputPath);
                     mediaStorageService.deleteQuietly(storedThumbnail);
                 }

@@ -29,6 +29,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -110,6 +112,39 @@ class PostVideoJobServiceTest {
         assertThat(job.getInputExtension()).isEqualTo(".mov");
         assertThat(Path.of(job.getInputPath())).hasParent(jobDir).hasContent("video");
         verify(storageGuard).ensureCapacity(video.getSize());
+    }
+
+    @Test
+    void enqueueDeletesFilesOnlyWhenTransactionRolledBack() throws Exception {
+        MockMultipartFile video = new MockMultipartFile("mediaFiles", "clip.mp4", "video/mp4", "video".getBytes());
+        MockMultipartFile thumbnail = new MockMultipartFile("thumbnailFile", "t.jpg", "image/jpeg", "img".getBytes());
+        MediaStorageService.PreparedMediaFile preparedThumbnail =
+                new MediaStorageService.PreparedMediaFile("img".getBytes(), ".jpg");
+        MediaStorageService.StoredFile storedThumbnail =
+                new MediaStorageService.StoredFile(Path.of("thumb.jpg"), THUMBNAIL_URL);
+        when(mediaUploadSecurityService.prepareImage(thumbnail)).thenReturn(preparedThumbnail);
+        when(mediaStorageService.storePostMedia(preparedThumbnail)).thenReturn(storedThumbnail);
+        when(jobRepository.save(any(PostVideoJob.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.enqueue(author, "hello", video, thumbnail);
+            ArgumentCaptor<PostVideoJob> saved = ArgumentCaptor.forClass(PostVideoJob.class);
+            verify(jobRepository).save(saved.capture());
+            Path inputPath = Path.of(saved.getValue().getInputPath());
+            List<TransactionSynchronization> synchronizations = TransactionSynchronizationManager.getSynchronizations();
+
+            synchronizations.forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_COMMITTED));
+            synchronizations.forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_UNKNOWN));
+            assertThat(inputPath).exists();
+            verify(mediaStorageService, never()).deleteQuietly(any(MediaStorageService.StoredFile.class));
+
+            synchronizations.forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+            assertThat(inputPath).doesNotExist();
+            verify(mediaStorageService).deleteQuietly(storedThumbnail);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test

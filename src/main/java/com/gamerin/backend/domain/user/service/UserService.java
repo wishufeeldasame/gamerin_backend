@@ -203,7 +203,8 @@ public class UserService {
 
     @Transactional
     public void updateProfile(UUID userId, UpdateProfileRequest request) {
-        User user = userRepository.findByIdAndDeletedAtIsNull(userId)
+        // 동시 업로드가 같은 이전 URL을 읽어 먼저 커밋된 새 파일이 고아가 되지 않도록 사용자 행을 잠근다.
+        User user = userRepository.findActiveByIdForUpdate(userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
 
         if (request.getNickname() != null) {
@@ -265,19 +266,21 @@ public class UserService {
 
     @Transactional
     public ProfileImageUploadResponse uploadProfileImage(UUID userId, ProfileImageTarget target, MultipartFile file) {
-        User user = userRepository.findByIdAndDeletedAtIsNull(userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
-        UserProfile profile = user.getProfile();
-        if (profile == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자 프로필을 찾을 수 없습니다.");
-        }
-
+        // 이미지 검증·가공은 잠금 전에 끝내 행 잠금 시간을 줄인다.
         validateProfileImageUpload(target, file);
         lightweightSecurityScanService.assertFileClean(file);
 
         MediaStorageService.PreparedMediaFile preparedFile = target == ProfileImageTarget.PROFILE
                 ? mediaUploadSecurityService.prepareProfileAvatarImage(file)
                 : mediaUploadSecurityService.prepareProfileCoverImage(file);
+
+        // 동시 업로드가 같은 이전 URL을 읽어 먼저 커밋된 새 파일이 고아가 되지 않도록 사용자 행을 잠근다.
+        User user = userRepository.findActiveByIdForUpdate(userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
+        UserProfile profile = user.getProfile();
+        if (profile == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자 프로필을 찾을 수 없습니다.");
+        }
 
         MediaStorageService.StoredFile storedFile = null;
         try {
