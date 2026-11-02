@@ -77,25 +77,38 @@ class DemoDataSeederPostgresIntegrationTest {
 
     @Test
     void startupSeedCreatesConsistentDemoData() {
-        String passwordHash = jdbcTemplate.queryForObject("select password_hash from users where handle = 'demo01'", String.class);
+        String passwordHash = jdbcTemplate.queryForObject(
+                "select password_hash from users where email = ?", String.class, DemoDataSeeder.email(0));
         assertThat(passwordEncoder.matches(DemoDataSeeder.PASSWORD, passwordHash)).isTrue();
-        assertThat(count("select count(*) from users")).isEqualTo(20);
-        assertThat(count("select count(distinct email) from users where email like '%.test'")).isEqualTo(20);
+        assertThat(count("select count(*) from users")).isEqualTo(10);
+        assertThat(count("select count(distinct email) from users where email like '%@gamerin-demo.test'")).isEqualTo(10);
+        assertThat(count("select count(distinct nickname) from users")).isEqualTo(10);
         assertThat(count("select count(*) from users u join user_profiles p on p.user_id = u.id"
-                + " where p.bio is not null and p.game_stats -> 'PUBG' is not null and p.game_stats -> 'R6' is not null and p.game_stats -> 'LOL' is not null")).isEqualTo(20);
-        assertThat(count("select count(*) from posts")).isEqualTo(100);
+                + " where p.bio is not null and p.game_stats -> 'PUBG' is not null and p.game_stats -> 'R6' is not null and p.game_stats -> 'LOL' is not null")).isEqualTo(10);
 
-        assertEveryUserHas("posts", "author_id", 5);
-        assertEveryUserHas("follows", "follower_id", 5);
-        assertEveryUserHas("post_likes", "user_id", 10);
+        // 게시물·댓글·DM·멘토링 문구는 모두 서로 다르다.
+        assertThat(count("select count(*) from posts")).isEqualTo(30);
+        assertThat(count("select count(distinct content) from posts")).isEqualTo(30);
+        assertThat(count("select count(*) from post_comments")).isEqualTo(30);
+        assertThat(count("select count(distinct content) from post_comments")).isEqualTo(30);
+        assertThat(count("select count(*) from post_comments c join posts p on p.id = c.post_id"
+                + " where c.author_id = p.author_id")).isZero();
+        // 작성 시각이 과거로 분산되어 피드가 한 시점에 몰리지 않는다.
+        assertThat(count("select count(distinct created_at) from posts")).isEqualTo(30);
+        assertThat(count("select count(*) from posts where created_at > now() - interval '1 day'")).isPositive();
+        assertThat(count("select count(*) from posts where created_at < now() - interval '1 day'")).isPositive();
+
+        assertEveryUserHas("posts", "author_id", 3);
         assertEveryUserHas("post_comments", "author_id", 3);
-        assertEveryUserHas("post_reposts", "user_id", 3);
-        assertEveryUserHas("post_shares", "user_id", 2);
+        assertEveryUserHas("follows", "follower_id", 4);
+        assertEveryUserHas("post_likes", "user_id", 8);
+        assertEveryUserHas("post_reposts", "user_id", 2);
+        assertEveryUserHas("post_shares", "user_id", 1);
         assertEveryUserHas("bookmark_collections", "user_id", 2);
-        assertEveryUserHas("post_bookmarks", "user_id", 8);
-        assertThat(count("select count(*) from post_hashtags")).isEqualTo(200);
-        assertThat(count("select count(*) from user_mentions where post_id is not null")).isEqualTo(100);
-        assertThat(count("select count(*) from user_mentions where comment_id is not null")).isEqualTo(60);
+        assertEveryUserHas("post_bookmarks", "user_id", 5);
+        assertThat(count("select count(*) from post_hashtags")).isEqualTo(61);
+        assertThat(count("select count(*) from user_mentions where post_id is not null")).isEqualTo(5);
+        assertThat(count("select count(*) from user_mentions where comment_id is not null")).isEqualTo(2);
 
         // 게시물 집계 카운터와 실제 관계 행 수
         assertThat(count("select count(*) from posts p where"
@@ -104,43 +117,52 @@ class DemoDataSeederPostgresIntegrationTest {
                 + " or p.share_count <> (select count(*) from post_shares s where s.post_id = p.id)")).isZero();
 
         // 북마크 컬렉션 항목은 같은 사용자의 북마크만 참조
-        assertThat(count("select count(*) from bookmark_collection_items")).isEqualTo(120);
+        assertThat(count("select count(*) from bookmark_collection_items")).isEqualTo(40);
         assertThat(count("select count(*) from bookmark_collection_items i"
                 + " join bookmark_collections c on c.id = i.collection_id"
                 + " join post_bookmarks b on b.id = i.post_bookmark_id"
                 + " where c.user_id <> b.user_id")).isZero();
 
         // DM
-        assertThat(count("select count(*) from message_conversations")).isEqualTo(40);
-        assertThat(count("select count(*) from direct_messages")).isEqualTo(160);
-        assertThat(count("select count(*) from direct_messages where shared_post_id is not null")).isEqualTo(40);
-        assertThat(count("select count(distinct sender_id) from direct_messages")).isEqualTo(20);
-        assertThat(count("select count(*) from notifications where type = 'DIRECT_MESSAGE'")).isEqualTo(80);
-        assertThat(count("select count(*) from notifications where type = 'DIRECT_MESSAGE' and read_at is null")).isEqualTo(20);
+        assertThat(count("select count(*) from message_conversations")).isEqualTo(8);
+        assertThat(count("select count(*) from direct_messages")).isEqualTo(34);
+        assertThat(count("select count(*) from direct_messages where shared_post_id is not null")).isEqualTo(4);
+        assertThat(count("select count(distinct content) from direct_messages where shared_post_id is null")).isEqualTo(30);
+        assertThat(count("select count(distinct sender_id) from direct_messages")).isEqualTo(10);
+        assertThat(count("select count(*) from notifications where type = 'DIRECT_MESSAGE'")).isEqualTo(16);
+        assertThat(count("select count(*) from notifications where type = 'DIRECT_MESSAGE' and read_at is null")).isEqualTo(4);
 
         // 멘토링
-        assertThat(count("select count(*) from mentor_profiles")).isEqualTo(5);
+        assertThat(count("select count(*) from mentor_profiles where status = 'ACTIVE'")).isEqualTo(5);
         assertThat(count("select count(*) from mentoring_programs")).isEqualTo(10);
-        assertThat(count("select count(distinct mentee_id) from mentoring_applications")).isEqualTo(20);
+        assertThat(count("select count(distinct title) from mentoring_programs")).isEqualTo(10);
+        assertThat(count("select count(distinct mentee_id) from mentoring_applications")).isEqualTo(10);
+        assertThat(count("select count(distinct message) from mentoring_applications")).isEqualTo(10);
         assertThat(strings("select distinct status from mentoring_applications"))
                 .containsExactlyInAnyOrder("APPLIED", "ACCEPTED", "REJECTED", "ONGOING", "FINISHED", "COMPLETED", "CANCELLED");
         assertThat(strings("select distinct payment_status from mentoring_applications"))
                 .containsExactlyInAnyOrder("ESCROW_HELD", "REFUNDED", "SETTLED");
         long completed = count("select count(*) from mentoring_applications where status = 'COMPLETED'");
         long refunded = count("select count(*) from mentoring_applications where payment_status = 'REFUNDED'");
-        assertThat(completed).isPositive();
+        assertThat(completed).isEqualTo(3);
+        assertThat(refunded).isEqualTo(2);
         assertThat(count("select count(*) from mentoring_reviews")).isEqualTo(completed);
+        assertThat(count("select count(distinct content) from mentoring_reviews")).isEqualTo(completed);
 
+        // MENTORING_REFUNDED 는 관리자 이의제기 처리에서만 생기므로 시드 대상이 아니다.
         assertThat(strings("select distinct type from notifications"))
-                .containsExactlyInAnyOrderElementsOf(Arrays.stream(NotificationType.values()).map(Enum::name).toList());
+                .containsExactlyInAnyOrderElementsOf(Arrays.stream(NotificationType.values())
+                        .filter(type -> type != NotificationType.MENTORING_REFUNDED)
+                        .map(Enum::name)
+                        .toList());
 
         // 마일리지 원장
         Map<String, Long> ledger = jdbcTemplate.queryForList("select type, count(*) as cnt from mileage_transactions group by type")
                 .stream()
                 .collect(Collectors.toMap(row -> (String) row.get("type"), row -> ((Number) row.get("cnt")).longValue()));
         assertThat(ledger).containsOnly(
-                Map.entry("CHARGE", 20L),
-                Map.entry("MENTORING_PAY", 20L),
+                Map.entry("CHARGE", 10L),
+                Map.entry("MENTORING_PAY", 10L),
                 Map.entry("MENTORING_REFUND", refunded),
                 Map.entry("SETTLEMENT", completed)
         );
@@ -156,18 +178,19 @@ class DemoDataSeederPostgresIntegrationTest {
         seeder.run(null);
         assertThat(snapshot()).isEqualTo(before);
 
-        jdbcTemplate.update("update users set handle = 'moved20' where handle = 'demo20'");
+        String lastHandle = DemoDataSeeder.handle(DemoDataSeeder.USER_COUNT - 1);
+        jdbcTemplate.update("update users set handle = 'moved_demo' where handle = ?", lastHandle);
         try {
             assertThatThrownBy(() -> seeder.run(null)).isInstanceOf(IllegalStateException.class);
             assertThat(snapshot()).isEqualTo(before);
         } finally {
-            jdbcTemplate.update("update users set handle = 'demo20' where handle = 'moved20'");
+            jdbcTemplate.update("update users set handle = ? where handle = 'moved_demo'", lastHandle);
         }
     }
 
     private void assertEveryUserHas(String table, String userColumn, long expected) {
         assertThat(count("select count(*) from (select " + userColumn + " from " + table
-                + " group by " + userColumn + " having count(*) = " + expected + ") t")).isEqualTo(20);
+                + " group by " + userColumn + " having count(*) = " + expected + ") t")).isEqualTo(10);
     }
 
     private List<Long> snapshot() {
