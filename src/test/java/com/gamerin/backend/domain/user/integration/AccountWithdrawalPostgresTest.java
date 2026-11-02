@@ -98,6 +98,9 @@ class AccountWithdrawalPostgresTest {
                 """, leaverId, "google-" + leaverId);
         jdbcTemplate.update("insert into mentor_profiles (user_id, about) values (?, 'contact me')", leaverId);
         jdbcTemplate.update("""
+                insert into user_consents (user_id, consent_type, version, agreed_at) values (?, 'TERMS', '1.0', now())
+                """, leaverId);
+        jdbcTemplate.update("""
                 insert into refresh_tokens (user_id, token_hash, expires_at) values (?, ?, now() + interval '1 day')
                 """, leaverId, "hash-" + leaverId);
 
@@ -122,6 +125,8 @@ class AccountWithdrawalPostgresTest {
         assertThat(count("select count(*) from mentor_profiles where user_id = ? and status = 'INACTIVE' and about is null",
                 leaverId)).isEqualTo(1);
         assertThat(count("select count(*) from refresh_tokens where user_id = ? and revoked_at is null", leaverId)).isZero();
+        // 가입 동의 기록은 탈퇴 후에도 보존한다
+        assertThat(count("select count(*) from user_consents where user_id = ?", leaverId)).isEqualTo(1);
 
         // 같은 email/handle로 재가입할 수 있어야 한다
         User rejoined = User.createLocal(originalEmail, originalHandle, "rejoined", "encoded-password");

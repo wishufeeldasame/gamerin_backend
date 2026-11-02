@@ -109,16 +109,18 @@ class EmailVerificationSignUpIntegrationTest {
     }
 
     private Map<String, Object> signUpBody(String handle, String email, String emailVerificationToken) {
-        return Map.of(
-                "handle", handle,
-                "nickname", "Verify Demo",
-                "email", email,
-                "password", "Password1!",
-                "passwordConfirm", "Password1!",
-                "agreedToTerms", true,
-                "agreedToPrivacy", true,
-                "emailVerificationToken", emailVerificationToken
-        );
+        return Map.ofEntries(
+                Map.entry("handle", handle),
+                Map.entry("nickname", "Verify Demo"),
+                Map.entry("email", email),
+                Map.entry("password", "Password1!"),
+                Map.entry("passwordConfirm", "Password1!"),
+                Map.entry("agreedToTerms", true),
+                Map.entry("agreedToPrivacy", true),
+                Map.entry("agreedToAge14", true),
+                Map.entry("termsVersion", "1.0"),
+                Map.entry("privacyVersion", "1.0"),
+                Map.entry("emailVerificationToken", emailVerificationToken));
     }
 
     private String json(Object value) throws Exception {

@@ -19,7 +19,7 @@ import com.gamerin.backend.domain.user.repository.UserWithdrawalRepository;
 
 /**
  * 회원 탈퇴: users 행은 남기고(status=DELETED, deletedAt) 개인정보를 익명화한다.
- * 게시글·댓글·팔로우·북마크·알림·소셜 연동은 정리하고, 좋아요·리포스트·보낸 DM·신고/제재·마일리지 원장은 보존한다.
+ * 게시글·댓글·팔로우·북마크·알림·소셜 연동은 정리하고, 좋아요·리포스트·보낸 DM·신고/제재·마일리지 원장은 보존한다. 가입 동의 기록(user_consents)도 삭제하지 않고 보존한다.
  */
 @Service
 public class AccountWithdrawalService {

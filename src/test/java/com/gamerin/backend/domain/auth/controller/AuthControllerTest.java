@@ -56,6 +56,9 @@ class AuthControllerTest {
                 "Password1!",
                 true,
                 true,
+                true,
+                "1.0",
+                "1.0",
                 "verify-token"
         );
         TokenService.AuthResult authResult = authResult(UUID.randomUUID(), "tester", "Tester");

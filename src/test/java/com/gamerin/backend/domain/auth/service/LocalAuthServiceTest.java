@@ -84,6 +84,9 @@ class LocalAuthServiceTest {
         @Mock
         private EmailVerificationService emailVerificationService;
 
+        @Mock
+        private UserConsentService userConsentService;
+
         private LocalAuthService localAuthService;
 
         @BeforeEach
@@ -100,7 +103,8 @@ class LocalAuthServiceTest {
                                 emailVerificationService,
                                 30L,
                                 membershipService,
-                                30L);
+                                30L,
+                                userConsentService);
         }
 
         @ParameterizedTest
@@ -165,6 +169,9 @@ class LocalAuthServiceTest {
                                 "Password1!",
                                 true,
                                 true,
+                                true,
+                                "1.0",
+                                "1.0",
                                 "verify-token");
                 TokenService.AuthResult authResult = authResult(userId, "test_user", "Tester");
 
@@ -190,6 +197,34 @@ class LocalAuthServiceTest {
                 assertThat(savedUser.getPasswordHash()).isEqualTo("encoded-password");
                 assertThat(result).isEqualTo(authResult);
                 verify(emailVerificationService).consumeSignupToken("test@example.com", "verify-token");
+                verify(userConsentService).validateVersions("1.0", "1.0");
+                verify(userConsentService).recordSignupConsents(userId);
+        }
+
+        @Test
+        void signUpStopsOnVersionMismatchBeforeConsumingVerificationToken() {
+                SignUpRequest request = new SignUpRequest("tester", "Tester", "test@example.com", "Password1!",
+                                "Password1!", true, true, true, "0.9", "1.0", "verify-token");
+                doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "약관이 개정되었습니다."))
+                                .when(userConsentService).validateVersions("0.9", "1.0");
+
+                assertThatThrownBy(() -> localAuthService.signUp(request))
+                                .isInstanceOf(ResponseStatusException.class);
+
+                verifyNoInteractions(emailVerificationService, userRepository, tokenService);
+        }
+
+        @Test
+        void socialSignUpStopsOnVersionMismatchBeforeTouchingSession() {
+                SocialSignUpRequest request = new SocialSignUpRequest("signup-token", "social_user", "Social Nick",
+                                true, true, true, "1.0", "0.9");
+                doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "약관이 개정되었습니다."))
+                                .when(userConsentService).validateVersions("1.0", "0.9");
+
+                assertThatThrownBy(() -> localAuthService.socialSignUp(request))
+                                .isInstanceOf(ResponseStatusException.class);
+
+                verifyNoInteractions(socialSignupSessionRepository, userRepository, tokenService);
         }
 
         @Test
@@ -202,6 +237,9 @@ class LocalAuthServiceTest {
                                 "Password1!",
                                 true,
                                 true,
+                                true,
+                                "1.0",
+                                "1.0",
                                 "bad-token");
 
                 when(userRepository.existsByHandle("tester")).thenReturn(false);
@@ -228,6 +266,9 @@ class LocalAuthServiceTest {
                                 "Password1!",
                                 true,
                                 true,
+                                true,
+                                "1.0",
+                                "1.0",
                                 "verify-token");
 
                 when(userRepository.existsByHandle("tester")).thenReturn(false);
@@ -251,7 +292,10 @@ class LocalAuthServiceTest {
                                 "social_user",
                                 "Social Nick",
                                 true,
-                                true);
+                                true,
+                                true,
+                                "1.0",
+                                "1.0");
                 SocialSignupSession session = SocialSignupSession.create(
                                 "google",
                                 "provider-user-id",
@@ -290,6 +334,7 @@ class LocalAuthServiceTest {
                 assertThat(savedUser.getPasswordHash()).isNull();
                 assertThat(savedSocialAccount.getUserId()).isEqualTo(userId);
                 assertThat(result).isEqualTo(authResult);
+                verify(userConsentService).recordSignupConsents(userId);
         }
 
         @Test
@@ -299,7 +344,10 @@ class LocalAuthServiceTest {
                                 "social_user",
                                 "Social Nick",
                                 true,
-                                true);
+                                true,
+                                true,
+                                "1.0",
+                                "1.0");
                 SocialSignupSession expiredSession = SocialSignupSession.create(
                                 "google",
                                 "provider-user-id",

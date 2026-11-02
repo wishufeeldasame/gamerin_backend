@@ -50,6 +50,7 @@ public class LocalAuthService {
     private final long passwordResetExpirationMinutes;
     private final MembershipService membershipService;
     private final long refreshReuseGraceSeconds;
+    private final UserConsentService userConsentService;
     private final LoginFailureTracker loginFailureTracker = new LoginFailureTracker();
 
     public LocalAuthService(
@@ -64,7 +65,8 @@ public class LocalAuthService {
             EmailVerificationService emailVerificationService,
             @Value("${app.auth.password-reset.expiration-minutes:30}") long passwordResetExpirationMinutes,
             MembershipService membershipService,
-            @Value("${app.auth.refresh-token.reuse-grace-seconds:30}") long refreshReuseGraceSeconds) {
+            @Value("${app.auth.refresh-token.reuse-grace-seconds:30}") long refreshReuseGraceSeconds,
+            UserConsentService userConsentService) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.passwordResetTokenRepository = passwordResetTokenRepository;
@@ -77,6 +79,7 @@ public class LocalAuthService {
         this.passwordResetExpirationMinutes = passwordResetExpirationMinutes;
         this.membershipService = membershipService;
         this.refreshReuseGraceSeconds = refreshReuseGraceSeconds;
+        this.userConsentService = userConsentService;
     }
 
     @Transactional(readOnly = true)
@@ -89,6 +92,7 @@ public class LocalAuthService {
     }
 
     public TokenService.AuthResult signUp(SignUpRequest request) {
+        userConsentService.validateVersions(request.termsVersion(), request.privacyVersion());
         validatePasswordConfirmation(request.password(), request.passwordConfirm());
 
         String handle = normalizeHandle(request.handle());
@@ -106,11 +110,13 @@ public class LocalAuthService {
         User user = User.createLocal(email, handle, request.nickname().trim(), encodedPassword);
         user.setProfile(UserProfile.createDefault(user));
         User savedUser = userRepository.save(user);
+        userConsentService.recordSignupConsents(savedUser.getId());
 
         return tokenService.issueTokens(savedUser); // 토큰 공장 호출
     }
 
     public TokenService.AuthResult socialSignUp(SocialSignUpRequest request) {
+        userConsentService.validateVersions(request.termsVersion(), request.privacyVersion());
         String tokenHash = tokenService.sha256(request.signupToken());
         SocialSignupSession session = socialSignupSessionRepository.findBySignupTokenHash(tokenHash)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "유효하지 않은 가입 토큰입니다."));
@@ -128,6 +134,7 @@ public class LocalAuthService {
         User user = User.createSocialOnly(session.getProviderEmail(), handle, request.nickname().trim());
         user.setProfile(UserProfile.createDefault(user));
         User savedUser = userRepository.save(user);
+        userConsentService.recordSignupConsents(savedUser.getId());
 
         SocialAccount socialAccount = SocialAccount.create(
                 savedUser.getId(), session.getProvider(), session.getProviderUserId(),
