@@ -85,6 +85,7 @@
 - `JwtAuthenticationFilter`는 일반 Bearer 토큰과 메시지 SSE 스트림 전용 HttpOnly cookie 인증 경계를 구분한다.
 - 메시지 SSE는 `POST /api/v1/messages/stream-token`과 `global/security/jwt/SseStreamTokenService.java`의 전용 쿠키 인증을 사용한다.
 - 일반 Bearer 인증과 스트림 전용 인증의 적용 경계를 유지한다.
+- refresh token은 `LocalAuthService.refresh`에서 행 잠금 후 회전하며 `refresh_tokens.rotated_at`으로 회전 폐기를 구분한다. 유예 시간(`app.auth.refresh-token.reuse-grace-seconds`) 안의 재사용은 409, 이후 재사용은 사용자 토큰 전체 폐기 후 401이다. 409는 다른 탭의 새 쿠키를 지우지 않기 위한 계약이므로 프론트 refresh 처리와 함께 확인한다.
 - `SecurityConfig`는 공개 패턴과 활성화된 Swagger/api-docs 경로를 허용하고, 비공개 첨부 및 비활성 Swagger 경로는 차단하며 나머지는 인증을 요구한다.
 - `/api/**` 인증 실패는 JSON 401 응답을 반환하며 Google OAuth 자동 리다이렉트로 처리하지 않는다.
 - Swagger/api-docs는 `springdoc.*.enabled` 설정에 따라 달라지며 운영 프로필의 기본 설정은 비활성이다.
@@ -179,7 +180,7 @@
 - JUnit/Mockito 단위 테스트, JPA 테스트, Spring 통합 테스트가 혼재한다.
 - H2 테스트 의존성이 있지만 전체 테스트가 로컬 설정이나 외부 DB와 무관하다고 가정하지 않는다.
 - `BackendApplicationTests`는 기본 `@SpringBootTest`이므로 프로필·DB 등 실행 환경은 `확인 필요`다.
-- PostgreSQL 동시성 테스트는 `HASHTAG_POSTGRES_TEST_URL`, `BOOKMARK_POSTGRES_TEST_URL`, `NOTIFICATION_POSTGRES_TEST_URL`, `ACCOUNT_WITHDRAWAL_POSTGRES_TEST_URL` 조건으로 활성화된다.
+- PostgreSQL 동시성 테스트는 `HASHTAG_POSTGRES_TEST_URL`, `BOOKMARK_POSTGRES_TEST_URL`, `NOTIFICATION_POSTGRES_TEST_URL`, `ACCOUNT_WITHDRAWAL_POSTGRES_TEST_URL`, `REFRESH_TOKEN_POSTGRES_TEST_URL` 조건으로 활성화된다.
 - 각 테스트의 username/password 환경변수와 스키마 생성·정리 동작을 확인하고 테스트 전용 DB를 사용한다.
 - 조건 미충족으로 건너뛴 테스트를 통과로 보고하지 않는다.
 - `R6DataLiveIntegrationTest`는 `R6DATA_LIVE_TEST=true`일 때 활성화된다. 외부 API 호출 및 필요한 설정을 확인한 뒤 실행한다.
