@@ -31,6 +31,9 @@ public class RefreshToken {
     @Column(name = "revoked_at")
     private OffsetDateTime revokedAt;
 
+    @Column(name = "rotated_at")
+    private OffsetDateTime rotatedAt;
+
     @Column(name = "user_agent", columnDefinition = "TEXT")
     private String userAgent;
 
@@ -78,6 +81,10 @@ public class RefreshToken {
         return revokedAt;
     }
 
+    public OffsetDateTime getRotatedAt() {
+        return rotatedAt;
+    }
+
     public String getUserAgent() { 
         return userAgent;
     }
@@ -96,5 +103,16 @@ public class RefreshToken {
 
     public void revoke() {
         this.revokedAt = OffsetDateTime.now();
+    }
+
+    /** 새 토큰으로 교체되며 폐기된다. 이후 같은 토큰이 다시 오면 재사용으로 판단한다. */
+    public void rotate() {
+        OffsetDateTime now = OffsetDateTime.now();
+        this.revokedAt = now;
+        this.rotatedAt = now;
+    }
+
+    public boolean isRotated() {
+        return rotatedAt != null;
     }
 }
