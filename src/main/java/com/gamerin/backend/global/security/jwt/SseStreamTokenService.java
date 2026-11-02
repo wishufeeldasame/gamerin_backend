@@ -62,6 +62,8 @@ public class SseStreamTokenService {
                 .build();
     }
 
+    // 토큰은 한 번만 쓸 수 있다: 해석에 성공하면 즉시 소비되어 같은 쿠키로 다시 연결할 수 없다.
+    // 재연결은 프론트가 stream-token을 새로 발급받아 수행한다.
     public Optional<UUID> resolve(HttpServletRequest request) {
         if (request.getCookies() == null) {
             return Optional.empty();
@@ -82,12 +84,9 @@ public class SseStreamTokenService {
 
         Instant now = Instant.now();
         cleanupExpired(now);
-        TokenRecord record = tokens.get(token);
-        if (record == null) {
-            return Optional.empty();
-        }
-        if (record.expiresAt().isBefore(now)) {
-            tokens.remove(token);
+        // remove로 조회와 소비를 원자적으로 처리해 동시 요청 중 하나만 토큰을 사용하게 한다.
+        TokenRecord record = tokens.remove(token);
+        if (record == null || record.expiresAt().isBefore(now)) {
             return Optional.empty();
         }
         return Optional.of(record.userId());

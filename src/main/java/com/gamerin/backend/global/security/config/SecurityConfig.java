@@ -38,6 +38,7 @@ import com.gamerin.backend.global.security.jwt.JwtAuthenticationFilter;
 import com.gamerin.backend.global.security.jwt.JwtTokenProvider;
 import com.gamerin.backend.global.security.oauth2.OAuth2SuccessHandler;
 
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -122,6 +123,8 @@ public class SecurityConfig {
                 .formLogin(formLogin -> formLogin.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> {
+                    // ASYNC는 이미 인가를 통과한 원 요청의 재디스패치이며 인증 필터(OncePerRequestFilter)가 다시 돌지 않아 익명이 된다.
+                    auth.dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll();
                     String[] denyAllPatterns = buildDenyAllPatterns(swaggerUiEnabled, apiDocsEnabled);
                     if (denyAllPatterns.length > 0) {
                         auth.requestMatchers(denyAllPatterns).denyAll();
