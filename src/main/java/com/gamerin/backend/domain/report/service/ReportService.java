@@ -222,13 +222,18 @@ public class ReportService {
 
     /**
      * 어드민 전용 신고 처리 상태 단순 변경 (담당 어드민 할당)
+     * - 허용 전이: RECEIVED → IN_REVIEW, IN_REVIEW → IN_REVIEW(담당 관리자 재할당)
+     * - 종결 처리(RESOLVED/REJECTED)는 사유가 필요한 resolve 경로로만 수행한다. (이슈 #135)
      */
     @Transactional
     public ReportResponse updateReportStatus(UUID reportId, ReportStatusUpdateRequest request,
             CustomUserPrincipal principal) {
-        Report report = reportRepository.findById(reportId)
+        // 판정(resolve)과 동시에 실행될 때 종결 여부를 정확히 확인하도록 비관적 락으로 조회한다.
+        Report report = reportRepository.findByIdForUpdate(reportId)
                 .orElseThrow(
                         () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "신고 내역을 찾을 수 없습니다. ID: " + reportId));
+
+        validateStatusChange(report.getStatus(), request.status());
 
         User admin = userRepository.findById(principal.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 유저 정보를 찾을 수 없습니다."));
@@ -293,6 +298,8 @@ public class ReportService {
     @Transactional
     public AdminReportDetailResponse startReportReview(UUID adminId, String reportIdOrCode) {
         Report report = findReportByIdOrCodeForUpdate(reportIdOrCode);
+        validateStatusChange(report.getStatus(), ReportStatus.IN_REVIEW);
+
         User admin = userRepository.findById(adminId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "어드민 계정을 찾을 수 없습니다."));
 
@@ -319,8 +326,13 @@ public class ReportService {
         Report report = findReportByIdOrCodeForUpdate(reportIdOrCode);
 
         // 이미 종결된 신고 중복 처리 방어 (락 획득 후 상태 재확인)
-        if (report.getStatus() == ReportStatus.RESOLVED || report.getStatus() == ReportStatus.REJECTED) {
+        if (report.getStatus().isTerminal()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 처리 완료되었거나 반려된 신고입니다.");
+        }
+
+        // 상태 전이 RECEIVED → IN_REVIEW → RESOLVED/REJECTED 강제 (이슈 #135): 검토 시작 전 신고는 판정할 수 없다.
+        if (report.getStatus() != ReportStatus.IN_REVIEW) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "검토 중(IN_REVIEW)인 신고만 판정할 수 있습니다. 먼저 검토를 시작해 주세요.");
         }
 
         // 허용된 판정 상태 검증
@@ -396,6 +408,26 @@ public class ReportService {
                 logDetails));
 
         return getAdminReportDetail(reportIdOrCode).withEscrowResult(escrowResult);
+    }
+
+    /**
+     * 상태 변경/검토 시작 경로의 상태 전이 검증 (이슈 #135)
+     * - 종결(RESOLVED/REJECTED)된 신고는 되돌릴 수 없다.
+     * - 종결 처리는 사유가 필요한 resolve 경로로만 허용한다.
+     * - 검토 중인 신고를 접수(RECEIVED)로 되돌릴 수 없다.
+     */
+    private void validateStatusChange(ReportStatus current, ReportStatus next) {
+        if (current.isTerminal()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 처리 완료되었거나 반려된 신고는 상태를 변경할 수 없습니다.");
+        }
+        if (next.isTerminal()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "처리 완료/반려는 사유를 입력하는 판정(resolve) 경로로만 처리할 수 있습니다.");
+        }
+        if (next != ReportStatus.IN_REVIEW) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    String.format("허용되지 않은 신고 상태 전이입니다. (%s -> %s)", current, next));
+        }
     }
 
     /**

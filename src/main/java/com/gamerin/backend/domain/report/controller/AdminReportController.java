@@ -57,7 +57,7 @@ public class AdminReportController {
     }
 
     @PatchMapping("/{reportId}/status")
-    @Operation(summary = "신고 상태 변경", description = "신고 건의 상태(RECEIVED, IN_REVIEW, RESOLVED, REJECTED)를 변경하고 담당 어드민을 할당합니다.")
+    @Operation(summary = "신고 상태 변경", description = "접수(RECEIVED)/검토 중(IN_REVIEW) 신고를 IN_REVIEW로 변경하고 담당 어드민을 할당합니다. 종결된 신고의 변경, RECEIVED로의 복귀, RESOLVED/REJECTED 지정은 409로 거부되며 종결 처리는 resolve API를 사용합니다.")
     public ApiResponse<ReportResponse> updateReportStatus(
             @PathVariable UUID reportId,
             @Valid @RequestBody ReportStatusUpdateRequest request,
@@ -81,7 +81,7 @@ public class AdminReportController {
     }
 
     @PostMapping("/{idOrCode}/resolve")
-    @Operation(summary = "신고 원클릭 통합 판정 처리", description = "상태 변경, 콘텐츠 숨김, 유저 제재를 동일 트랜잭션 내에서 일괄 처리합니다.")
+    @Operation(summary = "신고 원클릭 통합 판정 처리", description = "검토 중(IN_REVIEW)인 신고에 대해 상태 변경, 콘텐츠 숨김, 유저 제재를 동일 트랜잭션 내에서 일괄 처리합니다. 접수(RECEIVED) 또는 종결된 신고는 409로 거부됩니다.")
     public ApiResponse<com.gamerin.backend.domain.report.dto.response.AdminReportDetailResponse> resolveReport(
             @PathVariable String idOrCode,
             @Valid @RequestBody com.gamerin.backend.domain.report.dto.request.AdminReportResolutionRequest request,
