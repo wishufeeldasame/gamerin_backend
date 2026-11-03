@@ -1,0 +1,29 @@
+name: Auto assign author
+
+on:
+  issues:
+    types: [opened]
+  # 포크 PR에도 쓰기 토큰이 필요해서 pull_request_target을 쓴다. 코드를 checkout하지 않으므로 안전하다.
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  assign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 봇이 만든 항목과 작성 시 담당자를 이미 지정한 항목은 건너뛴다.
+    if: >-
+      (github.event.issue.user.type || github.event.pull_request.user.type) != 'Bot' &&
+      !(github.event.issue.assignees[0] || github.event.pull_request.assignees[0])
+    steps:
+      - name: Assign author
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.issue.user.login || github.event.pull_request.user.login }}
+        run: gh api "repos/$REPO/issues/$NUMBER/assignees" -f "assignees[]=$AUTHOR" --silent
