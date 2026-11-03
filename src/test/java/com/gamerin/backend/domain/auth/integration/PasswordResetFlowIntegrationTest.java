@@ -54,16 +54,18 @@ class PasswordResetFlowIntegrationTest {
 
         MvcResult signUpResult = mockMvc.perform(post("/api/v1/auth/signup")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of(
-                                "handle", handle,
-                                "nickname", "Reset Demo",
-                                "email", email,
-                                "password", oldPassword,
-                                "passwordConfirm", oldPassword,
-                                "agreedToTerms", true,
-                                "agreedToPrivacy", true,
-                                "emailVerificationToken", emailVerificationToken
-                        ))))
+                        .content(json(Map.ofEntries(
+                                Map.entry("handle", handle),
+                                Map.entry("nickname", "Reset Demo"),
+                                Map.entry("email", email),
+                                Map.entry("password", oldPassword),
+                                Map.entry("passwordConfirm", oldPassword),
+                                Map.entry("agreedToTerms", true),
+                                Map.entry("agreedToPrivacy", true),
+                                Map.entry("agreedToAge14", true),
+                                Map.entry("termsVersion", "1.0"),
+                                Map.entry("privacyVersion", "1.0"),
+                                Map.entry("emailVerificationToken", emailVerificationToken)))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.handle").value(handle))

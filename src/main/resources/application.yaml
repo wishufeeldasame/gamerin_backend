@@ -26,6 +26,9 @@ server:
   port: 8080
 
 app:
+  legal:
+    terms-version: "1.0"
+    privacy-version: "1.0"
   cors:
     allowed-origins:
       - http://localhost:3000
