@@ -220,6 +220,10 @@ class MentoringReportE2EPostgresIntegrationTest {
         // 어드민이 ONGOING 신고를 REJECTED 처리 -> escrowResult.outcome == NOT_PERFORMED
         AdminReportResolutionRequest rejectReq = new AdminReportResolutionRequest(
                 ReportStatus.REJECTED, false, null, "진행 중 단순 오해로 반려", "내부 메모");
+        // 판정은 검토 중(IN_REVIEW) 신고만 허용되므로 먼저 검토를 시작한다. (이슈 #135)
+        mockMvc.perform(post("/api/v1/admin/reports/{idOrCode}/start-review", ongoingReportId)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk());
         mockMvc.perform(post("/api/v1/admin/reports/{idOrCode}/resolve", ongoingReportId)
                         .header("Authorization", "Bearer " + adminToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -251,6 +255,10 @@ class MentoringReportE2EPostgresIntegrationTest {
         // =========================================================================
         AdminReportResolutionRequest resolveReq = new AdminReportResolutionRequest(
                 ReportStatus.RESOLVED, false, null, "멘토 미진행 확인으로 강제 환불", null);
+        // 판정은 검토 중(IN_REVIEW) 신고만 허용되므로 먼저 검토를 시작한다. (이슈 #135)
+        mockMvc.perform(post("/api/v1/admin/reports/{idOrCode}/start-review", finishedReportId)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk());
         mockMvc.perform(post("/api/v1/admin/reports/{idOrCode}/resolve", finishedReportId)
                         .header("Authorization", "Bearer " + adminToken)
                         .contentType(MediaType.APPLICATION_JSON)

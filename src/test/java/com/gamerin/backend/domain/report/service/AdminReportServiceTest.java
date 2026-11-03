@@ -235,6 +235,7 @@ class AdminReportServiceTest {
     @DisplayName("원클릭 판정(RESOLVED) 시 상태 변경, 콘텐츠 숨김(소프트삭제), 피신고자 제재, 감사 로그가 일괄 처리된다")
     void resolveReport_resolved_withSanctionAndContentHide() {
         // given
+        report.updateStatus(ReportStatus.IN_REVIEW, admin);
         AdminReportResolutionRequest request = new AdminReportResolutionRequest(
                 ReportStatus.RESOLVED,
                 true, // hideTargetContent
@@ -277,6 +278,7 @@ class AdminReportServiceTest {
     @DisplayName("원클릭 판정(REJECTED) 시 제재나 숨김 처리 없이 상태만 기각으로 변경된다")
     void resolveReport_rejected_noSanction() {
         // given
+        report.updateStatus(ReportStatus.IN_REVIEW, admin);
         AdminReportResolutionRequest request = new AdminReportResolutionRequest(
                 ReportStatus.REJECTED,
                 false,
@@ -406,6 +408,21 @@ class AdminReportServiceTest {
         assertThat(report.getStatus()).isEqualTo(ReportStatus.RESOLVED);
     }
 
+    @ParameterizedTest
+    @EnumSource(value = ReportStatus.class, names = {"RESOLVED", "REJECTED"})
+    @DisplayName("검토를 시작하지 않은 접수(RECEIVED) 신고는 판정(resolve)할 수 없다 (409)")
+    void resolveReport_receivedReport_conflict(ReportStatus decision) {
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
+
+        assertConflict(() -> reportService.resolveReport(adminId, reportId.toString(),
+                new AdminReportResolutionRequest(decision, false, null, "검토 없이 판정 시도", null)));
+
+        assertThat(report.getStatus()).isEqualTo(ReportStatus.RECEIVED);
+        verify(reportRepository, never()).save(any(Report.class));
+        verify(userPenaltyService, never()).createPenalty(any(), any(), any());
+        verify(adminAuditLogRepository, never()).save(any(AdminAuditLog.class));
+    }
+
     // ================= [이슈 #79] MENTORING 신고의 피신고자는 신고자의 상대방 =================
 
     private UUID mentoringApplicationId;
@@ -461,6 +478,8 @@ class AdminReportServiceTest {
         ReflectionTestUtils.setField(mentoringReport, "reportCode", "RPT-2001");
         ReflectionTestUtils.setField(mentoringReport, "createdAt", OffsetDateTime.now());
         ReflectionTestUtils.setField(mentoringReport, "updatedAt", OffsetDateTime.now());
+        // 판정(resolve)은 검토 중(IN_REVIEW) 신고만 허용되므로 검토 시작 상태로 둔다.
+        ReflectionTestUtils.setField(mentoringReport, "status", ReportStatus.IN_REVIEW);
         return mentoringReport;
     }
 
@@ -968,6 +987,7 @@ class AdminReportServiceTest {
         ReflectionTestUtils.setField(programReport, "reportCode", "RPT-3001");
         ReflectionTestUtils.setField(programReport, "createdAt", OffsetDateTime.now());
         ReflectionTestUtils.setField(programReport, "updatedAt", OffsetDateTime.now());
+        ReflectionTestUtils.setField(programReport, "status", ReportStatus.IN_REVIEW);
 
         given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(programReport));
         given(reportRepository.findById(reportId)).willReturn(Optional.of(programReport));

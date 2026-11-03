@@ -330,6 +330,11 @@ public class ReportService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 처리 완료되었거나 반려된 신고입니다.");
         }
 
+        // 상태 전이 RECEIVED → IN_REVIEW → RESOLVED/REJECTED 강제 (이슈 #135): 검토 시작 전 신고는 판정할 수 없다.
+        if (report.getStatus() != ReportStatus.IN_REVIEW) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "검토 중(IN_REVIEW)인 신고만 판정할 수 있습니다. 먼저 검토를 시작해 주세요.");
+        }
+
         // 허용된 판정 상태 검증
         if (request.decision() != ReportStatus.RESOLVED && request.decision() != ReportStatus.REJECTED) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "처리 결정은 RESOLVED(처리 완료) 또는 REJECTED(반려)만 가능합니다.");
