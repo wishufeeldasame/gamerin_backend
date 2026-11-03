@@ -17,8 +17,10 @@ import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.report.dto.request.AdminReportResolutionRequest;
 import com.gamerin.backend.domain.report.dto.request.ReportCreateRequest;
+import com.gamerin.backend.domain.report.dto.request.ReportStatusUpdateRequest;
 import com.gamerin.backend.domain.report.dto.request.UserPenaltyCreateRequest;
 import com.gamerin.backend.domain.report.dto.response.AdminReportDetailResponse;
+import com.gamerin.backend.domain.report.dto.response.ReportResponse;
 import com.gamerin.backend.domain.report.entity.PenaltyType;
 import com.gamerin.backend.domain.report.entity.Report;
 import com.gamerin.backend.domain.report.entity.ReportCount;
@@ -35,6 +37,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -309,6 +313,97 @@ class AdminReportServiceTest {
         // when & then
         assertThatThrownBy(() -> reportService.getAdminReportDetail("NON-EXISTENT"))
                 .isInstanceOf(ResponseStatusException.class);
+    }
+
+    // ================= [이슈 #135] 신고 상태 전이 제한 =================
+
+    private void assertConflict(org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
+        assertThatThrownBy(call)
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ReportStatus.class, names = {"RESOLVED", "REJECTED"})
+    @DisplayName("종결된 신고는 상태 변경 API로 어떤 상태로도 되돌릴 수 없다 (409)")
+    void updateReportStatus_terminalReport_conflict(ReportStatus terminal) {
+        report.updateStatus(terminal, admin);
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
+
+        for (ReportStatus next : ReportStatus.values()) {
+            assertConflict(() -> reportService.updateReportStatus(
+                    reportId, new ReportStatusUpdateRequest(next), CustomUserPrincipal.from(admin)));
+        }
+
+        assertThat(report.getStatus()).isEqualTo(terminal);
+        verify(adminAuditLogRepository, never()).save(any(AdminAuditLog.class));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ReportStatus.class, names = {"RESOLVED", "REJECTED"})
+    @DisplayName("상태 변경 API로는 사유 없이 신고를 종결할 수 없다 (409)")
+    void updateReportStatus_toTerminal_conflict(ReportStatus terminal) {
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
+
+        assertConflict(() -> reportService.updateReportStatus(
+                reportId, new ReportStatusUpdateRequest(terminal), CustomUserPrincipal.from(admin)));
+
+        assertThat(report.getStatus()).isEqualTo(ReportStatus.RECEIVED);
+        verify(adminAuditLogRepository, never()).save(any(AdminAuditLog.class));
+    }
+
+    @Test
+    @DisplayName("검토 중인 신고를 접수(RECEIVED) 상태로 되돌릴 수 없다 (409)")
+    void updateReportStatus_inReviewToReceived_conflict() {
+        report.updateStatus(ReportStatus.IN_REVIEW, admin);
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
+
+        assertConflict(() -> reportService.updateReportStatus(
+                reportId, new ReportStatusUpdateRequest(ReportStatus.RECEIVED), CustomUserPrincipal.from(admin)));
+
+        assertThat(report.getStatus()).isEqualTo(ReportStatus.IN_REVIEW);
+    }
+
+    @Test
+    @DisplayName("접수된 신고는 상태 변경 API로 IN_REVIEW 전환 및 담당 관리자 할당이 가능하다")
+    void updateReportStatus_receivedToInReview_success() {
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
+        given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
+
+        ReportResponse response = reportService.updateReportStatus(
+                reportId, new ReportStatusUpdateRequest(ReportStatus.IN_REVIEW), CustomUserPrincipal.from(admin));
+
+        assertThat(report.getStatus()).isEqualTo(ReportStatus.IN_REVIEW);
+        assertThat(report.getAssignedAdmin()).isEqualTo(admin);
+        assertThat(response.status()).isEqualTo(ReportStatus.IN_REVIEW);
+        verify(adminAuditLogRepository).save(any(AdminAuditLog.class));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ReportStatus.class, names = {"RESOLVED", "REJECTED"})
+    @DisplayName("종결된 신고는 검토 시작(start-review)으로 다시 열 수 없다 (409)")
+    void startReportReview_terminalReport_conflict(ReportStatus terminal) {
+        report.updateStatus(terminal, admin);
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
+
+        assertConflict(() -> reportService.startReportReview(adminId, reportId.toString()));
+
+        assertThat(report.getStatus()).isEqualTo(terminal);
+        verify(reportRepository, never()).save(any(Report.class));
+        verify(adminAuditLogRepository, never()).save(any(AdminAuditLog.class));
+    }
+
+    @Test
+    @DisplayName("종결된 신고를 다시 판정(resolve)하면 409로 거부된다")
+    void resolveReport_terminalReport_conflict() {
+        report.updateStatus(ReportStatus.RESOLVED, admin);
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(report));
+
+        assertConflict(() -> reportService.resolveReport(adminId, reportId.toString(),
+                new AdminReportResolutionRequest(ReportStatus.REJECTED, false, null, "재판정 시도", null)));
+
+        assertThat(report.getStatus()).isEqualTo(ReportStatus.RESOLVED);
     }
 
     // ================= [이슈 #79] MENTORING 신고의 피신고자는 신고자의 상대방 =================
