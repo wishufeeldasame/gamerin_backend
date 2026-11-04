@@ -256,6 +256,7 @@ public class MessageService {
                 return toMessageResponse(sentMessage.get(), viewerId);
             }
 
+            ensureCounterpartsActive(conversationId, viewerId);
             Post sharedPost = getSharedPost(request.sharedPostId());
             DirectMessage savedMessage = saveMessage(
                     conversation,
@@ -318,6 +319,7 @@ public class MessageService {
                     return toMessageResponse(sentMessage.get(), viewerId);
                 }
 
+                ensureCounterpartsActive(conversationId, viewerId);
                 Post sharedPost = getSharedPost(request.getSharedPostId());
                 DirectMessage savedMessage = saveMessage(
                         conversation,
@@ -868,6 +870,16 @@ public class MessageService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "User is not active.");
         }
         return user;
+    }
+
+    // 기존 대화로 보낼 때도 상대가 탈퇴·정지 상태면 거부한다(대화 생성·공유 경로의 getRecipientUser와 같은 응답).
+    private void ensureCounterpartsActive(UUID conversationId, UUID viewerId) {
+        boolean inactive = messageParticipantRepository.findByConversationId(conversationId).stream()
+                .map(MessageParticipant::getUser)
+                .anyMatch(user -> !user.getId().equals(viewerId) && !user.isActive());
+        if (inactive) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Recipient is not active.");
+        }
     }
 
     private User getRecipientUser(UUID recipientId, String recipientHandle, UUID viewerId) {

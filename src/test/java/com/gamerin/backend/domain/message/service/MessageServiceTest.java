@@ -1212,6 +1212,75 @@ class MessageServiceTest {
         assertThat(response.sharedPost().content()).isEqualTo("삭제된 게시글");
     }
 
+    @Test
+    void sendMessageRejectsWhenCounterpartIsSuspended() {
+        User viewer = user("viewer");
+        User recipient = user("recipient");
+        recipient.suspend();
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        MessageParticipant recipientParticipant = participant(conversation, recipient);
+        stubInactiveCounterpartSend(viewer, conversation, viewerParticipant, recipientParticipant);
+
+        assertThatThrownBy(() -> messageService.sendMessage(
+                CustomUserPrincipal.from(viewer),
+                conversation.getId(),
+                new SendMessageRequest("hello", null)
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Recipient is not active.")
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.BAD_REQUEST.value());
+
+        verify(directMessageRepository, never()).save(any(DirectMessage.class));
+    }
+
+    @Test
+    void sendMultipartMessageRejectsWhenCounterpartWithdrew() throws Exception {
+        User viewer = user("viewer");
+        User recipient = user("recipient");
+        recipient.withdraw();
+        MessageConversation conversation = conversation();
+        MessageParticipant viewerParticipant = participant(conversation, viewer);
+        MessageParticipant recipientParticipant = participant(conversation, recipient);
+        stubInactiveCounterpartSend(viewer, conversation, viewerParticipant, recipientParticipant);
+
+        SendMultipartMessageRequest request = new SendMultipartMessageRequest();
+        request.setContent("hello");
+
+        assertThatThrownBy(() -> messageService.sendMultipartMessage(
+                CustomUserPrincipal.from(viewer),
+                conversation.getId(),
+                request
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Recipient is not active.");
+
+        verify(directMessageRepository, never()).save(any(DirectMessage.class));
+        verify(messageAttachmentStorageService, never()).store(any(MediaStorageService.PreparedMediaFile.class));
+    }
+
+    private void stubInactiveCounterpartSend(
+            User viewer,
+            MessageConversation conversation,
+            MessageParticipant viewerParticipant,
+            MessageParticipant recipientParticipant
+    ) {
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(messageParticipantRepository.existsByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(true);
+        when(messageConversationRepository.findActiveByIdForUpdate(conversation.getId()))
+                .thenReturn(Optional.of(conversation));
+        when(messageParticipantRepository.findByConversationIdAndUserIdAndDeletedAtIsNull(
+                conversation.getId(),
+                viewer.getId()
+        )).thenReturn(Optional.of(viewerParticipant));
+        when(messageParticipantRepository.findByConversationId(conversation.getId()))
+                .thenReturn(List.of(viewerParticipant, recipientParticipant));
+    }
+
     private void stubMultipartMessageSend(
             User viewer,
             MessageConversation conversation,
