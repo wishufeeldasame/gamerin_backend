@@ -76,7 +76,7 @@ public class AdminMentoringService {
                 long activeProgramCount = mentoringProgramRepository
                                 .countByStatusAndDeletedAtIsNull(ProgramStatus.ACTIVE);
 
-                OffsetDateTime startOfMonth = OffsetDateTime.now()
+                OffsetDateTime startOfMonth = OffsetDateTime.now(java.time.ZoneId.of("Asia/Seoul")) // 컨테이너가 UTC여도 월 경계는 KST 기준
                                 .withDayOfMonth(1)
                                 .withHour(0)
                                 .withMinute(0)

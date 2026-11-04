@@ -156,6 +156,20 @@ class AdminMentoringServiceTest {
         assertThat(summary.escrowHeldAmount()).isEqualTo(1260000L);
     }
 
+    @Test
+    @DisplayName("월간 집계 시작 경계는 KST 1일 00:00(+09:00)이다")
+    void getMentoringSummary_monthStartIsKst() {
+        org.mockito.ArgumentCaptor<OffsetDateTime> captor = org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
+        given(mentoringApplicationRepository.countByCreatedAtAfter(captor.capture())).willReturn(0L);
+
+        adminMentoringService.getMentoringSummary();
+
+        OffsetDateTime start = captor.getValue();
+        assertThat(start.getOffset().getTotalSeconds()).isEqualTo(9 * 3600);
+        assertThat(start.getDayOfMonth()).isEqualTo(1);
+        assertThat(start.getHour()).isZero();
+    }
+
     // ================= [2. 멘토 심사 및 관리] =================
 
     @Test
