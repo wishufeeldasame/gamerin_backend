@@ -12,7 +12,9 @@ import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
 import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
 import com.gamerin.backend.domain.message.repository.DirectMessageRepository;
+import com.gamerin.backend.domain.message.entity.DirectMessage;
 import com.gamerin.backend.domain.post.entity.Post;
+import com.gamerin.backend.domain.post.entity.PostComment;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.report.dto.request.AdminReportResolutionRequest;
@@ -1001,5 +1003,87 @@ class AdminReportServiceTest {
                 ReportStatus.RESOLVED, true, null, "부적절한 멘토링 프로그램 숨김 처리", null));
 
         verify(adminMentoringService).hideProgram(adminId, mentoringProgramId, "부적절한 멘토링 프로그램 숨김 처리");
+    }
+
+    // ===== [#134] 본인 대상 신고 차단 =====
+
+    private void assertSelfReportRejected(ReportTargetType type, UUID targetId) {
+        given(userRepository.findById(reporterId)).willReturn(Optional.of(reporter));
+        CustomUserPrincipal principal = CustomUserPrincipal.from(reporter);
+
+        assertThatThrownBy(() -> reportService.createReport(principal,
+                new ReportCreateRequest(type, targetId, ReportReasonCode.PROFANITY, "본인 대상 신고")))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        verify(reportRepository, never()).saveAndFlush(any());
+        verify(reportCountRepository, never()).findByTargetTypeAndTargetId(any(), any());
+    }
+
+    @Test
+    @DisplayName("[#134] 본인 게시글 신고는 400으로 거부된다")
+    void createReport_ownPost_rejected() {
+        Post own = Post.create(reporter, "내 글");
+        given(postRepository.findByIdAndDeletedAtIsNull(postId)).willReturn(Optional.of(own));
+
+        assertSelfReportRejected(ReportTargetType.POST, postId);
+    }
+
+    @Test
+    @DisplayName("[#134] 본인 댓글 신고는 400으로 거부된다")
+    void createReport_ownComment_rejected() {
+        UUID commentId = UUID.randomUUID();
+        PostComment comment = PostComment.create(post, reporter, "내 댓글");
+        given(postCommentRepository.findById(commentId)).willReturn(Optional.of(comment));
+
+        assertSelfReportRejected(ReportTargetType.COMMENT, commentId);
+    }
+
+    @Test
+    @DisplayName("[#134] 본인 계정(USER) 신고는 400으로 거부된다")
+    void createReport_self_rejected() {
+        given(userRepository.findByIdAndDeletedAtIsNull(reporterId)).willReturn(Optional.of(reporter));
+
+        assertSelfReportRejected(ReportTargetType.USER, reporterId);
+    }
+
+    @Test
+    @DisplayName("[#134] 본인이 보낸 메시지 신고는 400으로 거부된다")
+    void createReport_ownMessage_rejected() {
+        UUID messageId = UUID.randomUUID();
+        DirectMessage own = DirectMessage.create(null, reporter, "내가 보낸 메시지", null);
+        given(directMessageRepository.findActiveByIdAndParticipantUserId(messageId, reporterId))
+                .willReturn(Optional.of(own));
+
+        assertSelfReportRejected(ReportTargetType.MESSAGE, messageId);
+    }
+
+    @Test
+    @DisplayName("[#134] 판정 시 피신고자가 신고자 본인이면(기존 접수분) 제재를 부과하지 않는다")
+    void resolveReport_targetIsReporter_skipsPenalty() {
+        UUID messageId = UUID.randomUUID();
+        Report selfReport = Report.create(reporter, ReportTargetType.MESSAGE, messageId, "내 메시지",
+                ReportReasonCode.PROFANITY, "본인 메시지 신고");
+        ReflectionTestUtils.setField(selfReport, "id", reportId);
+        ReflectionTestUtils.setField(selfReport, "reportCode", "RPT-1002");
+        ReflectionTestUtils.setField(selfReport, "createdAt", OffsetDateTime.now());
+        ReflectionTestUtils.setField(selfReport, "updatedAt", OffsetDateTime.now());
+        ReflectionTestUtils.setField(selfReport, "status", ReportStatus.IN_REVIEW);
+
+        given(reportRepository.findByIdForUpdate(reportId)).willReturn(Optional.of(selfReport));
+        given(reportRepository.findById(reportId)).willReturn(Optional.of(selfReport));
+        given(userRepository.findById(adminId)).willReturn(Optional.of(admin));
+        given(directMessageRepository.findById(messageId))
+                .willReturn(Optional.of(DirectMessage.create(null, reporter, "내 메시지", null)));
+        given(reportRepository.countByTargetTypeAndTargetId(eq(ReportTargetType.USER), any(UUID.class)))
+                .willReturn(0L);
+        given(userPenaltyService.getUserPenalties(any(UUID.class), any(Pageable.class)))
+                .willReturn(new PageImpl<>(List.of()));
+
+        reportService.resolveReport(adminId, reportId.toString(), new AdminReportResolutionRequest(
+                ReportStatus.RESOLVED, false, PenaltyType.SUSPENSION_7D, "제재 시도", null));
+
+        verify(userPenaltyService, never()).createPenalty(any(), any(), any());
+        assertThat(selfReport.getStatus()).isEqualTo(ReportStatus.RESOLVED);
     }
 }
