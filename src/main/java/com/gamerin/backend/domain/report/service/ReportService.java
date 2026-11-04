@@ -377,7 +377,8 @@ public class ReportService {
         // 3. 피신고자 제재 부여 (처리 완료이고 제재 유형이 선택된 경우)
         if (request.decision() == ReportStatus.RESOLVED && request.penaltyType() != null) {
             User targetUser = resolveTargetUser(report);
-            if (targetUser != null) {
+            // 신고자 본인이 피신고자로 해석되면(기존 접수분 포함) 제재하지 않는다 (이슈 #134).
+            if (targetUser != null && !targetUser.getId().equals(report.getReporter().getId())) {
                 UserPenaltyCreateRequest penaltyRequest = new UserPenaltyCreateRequest(
                         request.penaltyType(),
                         request.reason(),
@@ -641,12 +642,15 @@ public class ReportService {
      */
     private void validateTargetExists(UUID reporterId, ReportTargetType targetType, UUID targetId) {
         boolean exists = switch (targetType) {
-            case POST -> postRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
+            case POST -> postRepository.findByIdAndDeletedAtIsNull(targetId)
+                    .map(post -> rejectSelfReport(post.getAuthor(), reporterId)).orElse(false);
             // 댓글은 글을 따라간다: 숨김·삭제된 글의 댓글은 신고 대상이 아니다.
             case COMMENT -> postCommentRepository.findById(targetId)
-                    .map(comment -> comment.getDeletedAt() == null && comment.getPost().getDeletedAt() == null)
+                    .map(comment -> comment.getDeletedAt() == null && comment.getPost().getDeletedAt() == null
+                            && rejectSelfReport(comment.getAuthor(), reporterId))
                     .orElse(false);
-            case USER -> userRepository.findByIdAndDeletedAtIsNull(targetId).isPresent();
+            case USER -> userRepository.findByIdAndDeletedAtIsNull(targetId)
+                    .map(user -> rejectSelfReport(user, reporterId)).orElse(false);
             // 1) 신청 건(MentoringApplication)인 경우: 참여자(멘토·멘티)이고 진행/종료보고 상태일 때만 허용
             // 2) 프로그램(MentoringProgram)인 경우: 삭제되지 않은 프로그램이고 본인 프로그램이 아닐 때 허용
             case MENTORING -> mentoringApplicationRepository.findById(targetId)
@@ -666,8 +670,8 @@ public class ReportService {
                                             && program.getMentor().getUser() != null
                                             && !program.getMentor().getUser().getId().equals(reporterId))
                                     .orElse(false));
-            case MESSAGE ->
-                directMessageRepository.findActiveByIdAndParticipantUserId(targetId, reporterId).isPresent();
+            case MESSAGE -> directMessageRepository.findActiveByIdAndParticipantUserId(targetId, reporterId)
+                    .map(message -> rejectSelfReport(message.getSender(), reporterId)).orElse(false);
         };
 
         if (!exists) {
@@ -676,6 +680,14 @@ public class ReportService {
                     : "신고 대상 " + targetType.getDescription() + "이(가) 존재하지 않거나 이미 삭제되었습니다.";
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, message);
         }
+    }
+
+    /** 대상 소유자가 신고자 본인이면 400으로 거부한다 (이슈 #134). 아니면 true. */
+    private boolean rejectSelfReport(User owner, UUID reporterId) {
+        if (owner != null && reporterId.equals(owner.getId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "본인이 작성하거나 본인에 해당하는 대상은 신고할 수 없습니다.");
+        }
+        return true;
     }
 
     /**
