@@ -136,7 +136,7 @@
 - 텍스트·이미지·동영상 검열은 `ContentModerationService`와 OpenAI Moderation 연동을 확인하며 활성화 설정·실패 정책을 임의로 완화하지 않는다.
 - `PostCleanupService`는 설정된 보존 기간이 지난 soft delete 게시물과 실제 파일을 삭제한다. 보존 기간 기본값은 24h이며 기간과 실행 주기는 `app.post.cleanup.*`로 설정한다.
 - 연관 데이터 삭제는 entity와 DB 제약조건도 확인한다.
-- `MentoringScheduler`는 서버 기본 시간대 기준 매일 03시에 자동 정산을 호출한다.
+- `MentoringScheduler`는 `zone = "Asia/Seoul"`로 KST 기준 매일 03시에 자동 정산을 호출한다. 관리자 월간 집계 경계도 KST 기준이다.
 - `bootRun` 등 애플리케이션 실행을 단순 컴파일 확인으로 사용하지 않는다.
 - OpenAI Moderation, PUBG, R6, Riot, 메일 연동은 관련 client/service와 공개 설정을 확인한다.
 - 메일 발송은 `domain/auth/service/PasswordResetMailService.java`와 `EmailVerificationMailService.java`가 담당한다. SMTP가 설정되지 않으면 이메일 인증번호와 비밀번호 재설정 링크는 `local` 프로필에서만 콘솔 로그로 대체하고 그 외 프로필은 발송 실패로 처리한다.

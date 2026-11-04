@@ -24,7 +24,7 @@ public class UserPenaltyScheduler {
      * 매 1분마다 만료 시점이 지난 활성 제재 자동 해제
      * (cron: 매 분 0초 실행)
      */
-    @Scheduled(cron = "0 * * * * *")
+    @Scheduled(cron = "0 * * * * *", zone = "Asia/Seoul")
     public void processExpiredPenalties() {
         try {
             int releasedCount = userPenaltyService.releaseExpiredPenalties();
