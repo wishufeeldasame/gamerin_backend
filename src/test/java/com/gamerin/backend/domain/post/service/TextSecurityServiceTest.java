@@ -45,7 +45,7 @@ class TextSecurityServiceTest {
             "<img src=\"x\" onerror=\"alert(1)\">", "<img src='x' onerror='alert(1)'>",
             "<img\nsrc=x\nonerror=alert(1)>", "<img/src=x/onerror=alert(1)>", "<img src=x\tonerror\n=alert(1)>",
             "<img alt=\">\" onerror=alert(1)>", "<img alt=\"<\" onerror=alert(1)>",
-            "<img src=x onerror=alert(1)", "<img a=b\" c=\">\" src=x onerror=alert(1)>", "<img a = \">\" onerror=1>", "<img alt=\"x onerror=alert(1)", "<div onclick=alert(1)>x</div>",
+            "<img src=x onerror=alert(1)", "<img src=x a=b=\" c='\" >' onerror=alert(1)>", "<img a=b\" c=\">\" src=x onerror=alert(1)>", "<img a = \">\" onerror=1>", "<img alt=\"x onerror=alert(1)", "<div onclick=alert(1)>x</div>",
             "ok <b>hi</b> <a href=# onmouseover=alert(1)>x</a>", "<body onload=alert(1)>", "<!-- --><p onfocus=x>"
     })
     void assertTextSafeRejectsEventHandlerInsideTag(String text) {

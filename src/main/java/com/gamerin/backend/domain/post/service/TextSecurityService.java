@@ -29,31 +29,18 @@ public class TextSecurityService {
         }
     }
 
-    // 따옴표 안의 '>'는 태그 끝이 아니므로(<img alt=">" onerror=...>) 따옴표를 추적한다.
-    // 닫히지 않은 태그/따옴표는 문자열 끝까지를 태그로 보아 보수적으로 차단한다.
+    // 태그 시작(<영문자)부터 첫 '>'까지를 태그로 본다. 단, 그 안에 따옴표가 있으면 값 안의 '>'일 수 있고
+    // HTML 파서의 따옴표 상태를 흉내 내면 우회가 생기므로(Codex 리뷰), 문자열 끝까지를 태그로 보아 보수적으로 차단한다.
+    // 닫히지 않은 태그도 문자열 끝까지 검사한다.
     private boolean containsEventHandlerInTag(String content) {
         var tagStart = TAG_START_PATTERN.matcher(content);
         int from = 0;
         while (tagStart.find(from)) {
             int begin = tagStart.start();
-            int end = begin + 1;
-            char quote = 0;
-            char prev = 0; // 따옴표 밖 직전 비공백 문자: HTML은 '=' 바로 뒤의 따옴표만 값 시작으로 본다.
-            while (end < content.length()) {
-                char c = content.charAt(end);
-                if (quote != 0) {
-                    if (c == quote) {
-                        quote = 0;
-                    }
-                } else if ((c == '"' || c == '\'') && prev == '=') {
-                    quote = c;
-                } else if (c == '>') {
-                    break;
-                }
-                if (quote == 0 && !Character.isWhitespace(c)) {
-                    prev = c;
-                }
-                end++;
+            int end = content.indexOf('>', begin);
+            int quote = indexOfQuote(content, begin);
+            if (end == -1 || (quote != -1 && quote < end)) {
+                end = content.length();
             }
             if (EVENT_HANDLER_PATTERN.matcher(content).region(begin, end).find()) {
                 return true;
@@ -61,6 +48,16 @@ public class TextSecurityService {
             from = end;
         }
         return false;
+    }
+
+    private int indexOfQuote(String content, int from) {
+        for (int i = from; i < content.length(); i++) {
+            char c = content.charAt(i);
+            if (c == '"' || c == '\'') {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private boolean containsDisallowedControlCharacter(String content) {
