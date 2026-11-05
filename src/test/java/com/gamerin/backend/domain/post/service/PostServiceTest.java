@@ -967,6 +967,42 @@ class PostServiceTest {
     }
 
     @Test
+    void getDetailByNumberReturnsSameDetailAsUuidLookup() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "viewer", "Viewer");
+        Post post = Post.create(user, "hello");
+        PostDetailResponse expected = postDetailResponse(UUID.randomUUID());
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findByPostNumberAndDeletedAtIsNull(7L)).thenReturn(Optional.of(post));
+        when(postResponseAssembler.toPostDetail(post, userId)).thenReturn(expected);
+
+        assertThat(postService.getDetailByNumber(CustomUserPrincipal.from(user), 7L)).isSameAs(expected);
+    }
+
+    @Test
+    void getDetailByNumberReturns404WhenPostIsDeletedOrMissing() {
+        UUID userId = UUID.randomUUID();
+        User user = savedUser(userId, "viewer", "Viewer");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(postRepository.findByPostNumberAndDeletedAtIsNull(8L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> postService.getDetailByNumber(CustomUserPrincipal.from(user), 8L))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.NOT_FOUND.value());
+    }
+
+    @Test
+    void getDetailByNumberRequiresAuthentication() {
+        assertThatThrownBy(() -> postService.getDetailByNumber(null, 1L))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.UNAUTHORIZED.value());
+    }
+
+    @Test
     void updateRejectsWhenUserIsNotAuthor() {
         UUID userId = UUID.randomUUID();
         UUID authorId = UUID.randomUUID();
@@ -1128,6 +1164,7 @@ class PostServiceTest {
     private PostDetailResponse postDetailResponse(UUID postId) {
         return new PostDetailResponse(
                 postId,
+                1L,
                 "Tester",
                 "tester",
                 null,

@@ -123,6 +123,7 @@ public class PostResponseAssembler {
 
         return new PostDetailResponse(
                 post.getId(),
+                post.getPostNumber(),
                 post.getAuthor().getNickname(),
                 post.getAuthor().getHandle(),
                 profile != null ? profile.getProfileImageUrl() : null,
@@ -181,6 +182,7 @@ public class PostResponseAssembler {
                 .map(media -> new ProfileMediaItemResponse(
                         media.getId(),
                         media.getPost().getId(),
+                        media.getPost().getPostNumber(),
                         media.getPost().getAuthor().getHandle(),
                         media.getMediaType(),
                         media.getMediaUrl(),
@@ -202,6 +204,7 @@ public class PostResponseAssembler {
         UserProfile profile = post.getAuthor().getProfile();
         return new PostCardResponse(
                 post.getId(),
+                post.getPostNumber(),
                 post.getAuthor().getNickname(),
                 post.getAuthor().getHandle(),
                 profile != null ? profile.getProfileImageUrl() : null,
