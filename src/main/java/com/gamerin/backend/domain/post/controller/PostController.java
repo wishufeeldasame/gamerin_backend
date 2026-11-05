@@ -95,6 +95,13 @@ public class PostController {
         return ApiResponse.ok(postService.getDetail(principal, postId));
     }
 
+    @GetMapping("/by-number/{postNumber}")
+    public ApiResponse<PostDetailResponse> getDetailByNumber(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @PathVariable long postNumber) {
+        return ApiResponse.ok(postService.getDetailByNumber(principal, postNumber));
+    }
+
     @DeleteMapping("/{postId}")
     public ApiResponse<Void> delete(
             @AuthenticationPrincipal CustomUserPrincipal principal,

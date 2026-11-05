@@ -158,6 +158,7 @@ public class NotificationQueryService {
                         )
                         : null,
                 notification.getPost() != null ? notification.getPost().getId() : null,
+                notification.getPost() != null ? notification.getPost().getPostNumber() : null,
                 resolveCommentId(notification),
                 notification.getConversation() != null ? notification.getConversation().getId() : null,
                 notification.getMessage() != null ? notification.getMessage().getId() : null,

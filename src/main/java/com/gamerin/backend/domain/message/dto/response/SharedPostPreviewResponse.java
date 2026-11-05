@@ -5,6 +5,7 @@ import java.util.UUID;
 
 public record SharedPostPreviewResponse(
         UUID postId,
+        Long postNumber,
         String author,
         String authorHandle,
         String content,

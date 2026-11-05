@@ -358,6 +358,14 @@ public class PostService {
         return postResponseAssembler.toPostDetail(post, user.getId());
     }
 
+    @Transactional(readOnly = true)
+    public PostDetailResponse getDetailByNumber(CustomUserPrincipal principal, long postNumber) {
+        User user = getCurrentUser(principal);
+        Post post = postRepository.findByPostNumberAndDeletedAtIsNull(postNumber)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found."));
+        return postResponseAssembler.toPostDetail(post, user.getId());
+    }
+
     public void like(CustomUserPrincipal principal, UUID postId) {
         User user = lockCurrentUser(principal);
         Post post = getActivePostForUpdate(postId);
@@ -410,7 +418,7 @@ public class PostService {
         postShareRepository.save(PostShare.create(post, user, target));
         post.increaseShareCount();
 
-        return new ShareResponse(post.getId(), post.getShareCount());
+        return new ShareResponse(post.getId(), post.getPostNumber(), post.getShareCount());
     }
 
     // 외부 검열 동안 커넥션을 잡지 않도록 트랜잭션 없이 시작하고, 잠금·쓰기만 transactionTemplate으로 묶는다(바깥 트랜잭션이 있으면 참여).

@@ -8,6 +8,7 @@ import com.gamerin.backend.domain.repost.dto.response.ReposterInfoResponse;
 
 public record PostDetailResponse(
                 UUID postId,
+                Long postNumber,
                 String author,
                 String authorHandle,
                 String authorProfileImageUrl,
@@ -32,6 +33,7 @@ public record PostDetailResponse(
 
         public PostDetailResponse(
                         UUID postId,
+                Long postNumber,
                         String author,
                         String authorHandle,
                         String authorProfileImageUrl,
@@ -51,6 +53,7 @@ public record PostDetailResponse(
                         OffsetDateTime createdAt) {
                 this(
                                 postId,
+                                postNumber,
                                 author,
                                 authorHandle,
                                 authorProfileImageUrl,

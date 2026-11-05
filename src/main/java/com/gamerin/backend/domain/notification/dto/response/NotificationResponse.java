@@ -8,6 +8,7 @@ public record NotificationResponse(
         String type,
         NotificationActorResponse actor,
         UUID postId,
+        Long postNumber,
         UUID commentId,
         UUID conversationId,
         UUID messageId,

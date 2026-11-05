@@ -103,6 +103,7 @@ public class MessageResponseAssembler {
         if (post.getDeletedAt() != null) {
             return new SharedPostPreviewResponse(
                     post.getId(),
+                    post.getPostNumber(),
                     DELETED_POST_PLACEHOLDER,
                     "",
                     DELETED_POST_PLACEHOLDER,
@@ -112,6 +113,7 @@ public class MessageResponseAssembler {
 
         return new SharedPostPreviewResponse(
                 post.getId(),
+                post.getPostNumber(),
                 post.getAuthor().getNickname(),
                 post.getAuthor().getHandle(),
                 post.getContent() != null ? post.getContent() : "Shared post",

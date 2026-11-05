@@ -20,6 +20,8 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
 
     Optional<Post> findByIdAndDeletedAtIsNull(UUID id);
 
+    Optional<Post> findByPostNumberAndDeletedAtIsNull(Long postNumber);
+
     @Query("""
         select p
         from Post p

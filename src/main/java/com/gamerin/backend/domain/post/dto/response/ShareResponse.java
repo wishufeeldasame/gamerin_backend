@@ -4,6 +4,7 @@ import java.util.UUID;
 
 public record ShareResponse(
         UUID postId,
+        Long postNumber,
         long shares
 ) {
 }
