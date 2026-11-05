@@ -1,0 +1,24 @@
+$kind: http-request
+method: POST
+url: '{{baseUrl}}/api/v1/payments/kakao/approve'
+order: 14000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "orderId": "{{orderId}}",
+      "pgToken": "dummy"
+    }
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{userBToken}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('HTTP 403', () => pm.response.to.have.status(403));

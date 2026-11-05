@@ -68,7 +68,9 @@ public class MessageResponseAssembler {
                 attachments.stream()
                         .map(this::toAttachment)
                         .toList(),
-                toSharedPost(message.getSharedPost())
+                toSharedPost(message.getSharedPost()),
+                // 재시도 키는 보낸 사람 화면의 임시 메시지 대조에만 쓰므로 상대에게 노출하지 않는다.
+                mine ? message.getClientMessageId() : null
         );
     }
 
@@ -80,7 +82,8 @@ public class MessageResponseAssembler {
                 "@" + user.getHandle(),
                 user.getRole().name(),
                 isOnline(user),
-                profile != null ? profile.getProfileImageUrl() : null
+                profile != null ? profile.getProfileImageUrl() : null,
+                false
         );
     }
 
@@ -100,6 +103,7 @@ public class MessageResponseAssembler {
         if (post.getDeletedAt() != null) {
             return new SharedPostPreviewResponse(
                     post.getId(),
+                    post.getPostNumber(),
                     DELETED_POST_PLACEHOLDER,
                     "",
                     DELETED_POST_PLACEHOLDER,
@@ -109,6 +113,7 @@ public class MessageResponseAssembler {
 
         return new SharedPostPreviewResponse(
                 post.getId(),
+                post.getPostNumber(),
                 post.getAuthor().getNickname(),
                 post.getAuthor().getHandle(),
                 post.getContent() != null ? post.getContent() : "Shared post",

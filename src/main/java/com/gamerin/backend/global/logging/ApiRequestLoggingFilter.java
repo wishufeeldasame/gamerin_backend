@@ -59,7 +59,8 @@ public class ApiRequestLoggingFilter extends OncePerRequestFilter {
         details.put("operation", request.getMethod() + " " + path);
         details.put("statusCode", response.getStatus());
         details.put("durationMs", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
-        details.put("clientIp", resolveClientIp(request));
+        // 클라이언트가 보낸 X-Forwarded-For 대신 신뢰 프록시 반영 후의 접속 주소를 쓴다 (RateLimitFilter와 같은 기준)
+        details.put("clientIp", request.getRemoteAddr());
 
         String userId = resolveAuthenticatedUserId();
         if (userId != null) {
@@ -133,13 +134,5 @@ public class ApiRequestLoggingFilter extends OncePerRequestFilter {
             return "oauth2";
         }
         return "api";
-    }
-
-    private String resolveClientIp(HttpServletRequest request) {
-        String forwardedFor = request.getHeader("X-Forwarded-For");
-        if (forwardedFor != null && !forwardedFor.isBlank()) {
-            return forwardedFor.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
     }
 }

@@ -1,0 +1,29 @@
+$kind: http-request
+method: POST
+url: '{{baseUrl}}/api/v1/payments/kakao/ready'
+order: 5000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "productCode": "CHARGE_1",
+      "requestId": "{{$guid}}"
+    }
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{userAToken}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('HTTP 400', () => pm.response.to.have.status(400));
+      pm.test('오류 형식 { success:false, message }', () => {
+        const b = pm.response.json();
+        pm.expect(b.success).to.eql(false);
+        pm.expect(b.message).to.be.a('string');
+      });

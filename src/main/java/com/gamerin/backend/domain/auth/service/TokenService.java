@@ -8,6 +8,11 @@ import com.gamerin.backend.global.security.jwt.JwtTokenProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -21,6 +26,9 @@ import java.util.List;
 @Service
 @Transactional
 public class TokenService {
+
+    static final int MAX_USER_AGENT_LENGTH = 512;
+    static final int MAX_IP_ADDRESS_LENGTH = 45;
 
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenRepository refreshTokenRepository;
@@ -46,12 +54,13 @@ public class TokenService {
         );
 
         String refreshToken = generateOpaqueToken();
+        HttpServletRequest request = currentRequest();
         RefreshToken refreshTokenEntity = RefreshToken.issue(
                 user.getId(),
                 sha256(refreshToken),
                 OffsetDateTime.now().plusSeconds(refreshTokenExpirationSeconds),
-                null,
-                null
+                request == null ? null : truncate(request.getHeader("User-Agent"), MAX_USER_AGENT_LENGTH),
+                request == null ? null : truncate(request.getRemoteAddr(), MAX_IP_ADDRESS_LENGTH)
         );
         refreshTokenRepository.save(refreshTokenEntity);
 
@@ -64,6 +73,20 @@ public class TokenService {
         );
 
         return new AuthResult(response, refreshToken, refreshTokenExpirationSeconds);
+    }
+
+    // 발급 요청의 접속 주소와 User-Agent를 기록한다. X-Forwarded-For는 직접 읽지 않고,
+    // 운영(prod)에서는 forward-headers-strategy: framework가 신뢰 프록시 기준으로 반영한 getRemoteAddr()를 쓴다(RateLimitFilter와 같은 기준).
+    private HttpServletRequest currentRequest() {
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        return attributes instanceof ServletRequestAttributes servletAttributes ? servletAttributes.getRequest() : null;
+    }
+
+    private static String truncate(String value, int maxLength) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
     }
 
     // 랜덤 토큰 생성

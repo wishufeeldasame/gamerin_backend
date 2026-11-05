@@ -1,0 +1,38 @@
+$kind: http-request
+method: POST
+url: '{{baseUrl}}/api/v1/auth/signup'
+order: 1000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "handle": "{{userAHandle}}",
+      "nickname": "결제테스트A",
+      "email": "{{userAHandle}}@example.com",
+      "password": "{{signupPassword}}",
+      "passwordConfirm": "{{signupPassword}}",
+      "agreedToTerms": true,
+      "agreedToPrivacy": true
+    }
+auth:
+  type: noauth
+scripts:
+  - type: beforeRequest
+    language: text/javascript
+    code: |-
+      const suffix = pm.variables.replaceIn('{{$guid}}').replace(/-/g, '').slice(0, 10);
+      pm.collectionVariables.set('userAHandle', 'paya' + suffix);
+      // 공개 레포에 고정 비밀번호를 두지 않는다. 실행 중에만 쓰는 로컬 변수라 파일에 저장되지 않는다.
+      pm.variables.set('signupPassword', 'Pw1!' + pm.variables.replaceIn('{{$guid}}').replace(/-/g, '').slice(0, 16));
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('가입 200 + accessToken', () => {
+        pm.response.to.have.status(200);
+        const data = pm.response.json().data;
+        pm.expect(data.accessToken).to.be.a('string').and.not.empty;
+        pm.collectionVariables.set('userAToken', data.accessToken);
+      });

@@ -6,11 +6,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +27,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.follow.entity.Follow;
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.membership.service.MembershipService;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -40,11 +44,17 @@ class FollowServiceTest {
     @Mock
     private FollowRepository followRepository;
 
+    @Mock
+    private NotificationCommandService notificationCommandService;
+
+    @Mock
+    private MembershipService membershipService;
+
     private FollowService followService;
 
     @BeforeEach
     void setUp() {
-        followService = new FollowService(userRepository, followRepository);
+        followService = new FollowService(userRepository, followRepository, notificationCommandService, membershipService);
     }
 
     @Test
@@ -52,7 +62,7 @@ class FollowServiceTest {
         UUID userId = UUID.randomUUID();
         User user = savedUser(userId, "tester", "Tester");
 
-        when(userRepository.findByIdAndDeletedAtIsNull(userId)).thenReturn(Optional.of(user));
+        when(userRepository.findActiveByIdForUpdate(userId)).thenReturn(Optional.of(user));
         when(userRepository.findByHandleAndDeletedAtIsNull("tester")).thenReturn(Optional.of(user));
 
         assertThatThrownBy(() -> followService.follow(CustomUserPrincipal.from(user), "tester"))
@@ -70,32 +80,72 @@ class FollowServiceTest {
         User follower = savedUser(followerId, "me", "Me");
         User followee = savedUser(followeeId, "other", "Other");
 
-        when(userRepository.findByIdAndDeletedAtIsNull(followerId)).thenReturn(Optional.of(follower));
+        when(userRepository.findActiveByIdForUpdate(followerId)).thenReturn(Optional.of(follower));
         when(userRepository.findByHandleAndDeletedAtIsNull("other")).thenReturn(Optional.of(followee));
         when(followRepository.existsByFollowerIdAndFolloweeId(followerId, followeeId)).thenReturn(false);
+        when(followRepository.saveAndFlush(any(Follow.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         followService.follow(CustomUserPrincipal.from(follower), "other");
 
-        verify(followRepository).saveAndFlush(any(Follow.class));
+        var followCaptor = org.mockito.ArgumentCaptor.forClass(Follow.class);
+        verify(followRepository).saveAndFlush(followCaptor.capture());
+        verify(notificationCommandService).createFollow(followCaptor.getValue(), follower, followee);
     }
 
     @Test
-    void followIgnoresDuplicateCreatedByConcurrentRequest() {
+    void followDoesNotSwallowUnexpectedIntegrityViolation() {
         UUID followerId = UUID.randomUUID();
         UUID followeeId = UUID.randomUUID();
         User follower = savedUser(followerId, "me", "Me");
         User followee = savedUser(followeeId, "other", "Other");
 
-        when(userRepository.findByIdAndDeletedAtIsNull(followerId)).thenReturn(Optional.of(follower));
+        when(userRepository.findActiveByIdForUpdate(followerId)).thenReturn(Optional.of(follower));
         when(userRepository.findByHandleAndDeletedAtIsNull("other")).thenReturn(Optional.of(followee));
-        when(followRepository.existsByFollowerIdAndFolloweeId(followerId, followeeId))
-                .thenReturn(false, true);
+        when(followRepository.existsByFollowerIdAndFolloweeId(followerId, followeeId)).thenReturn(false);
         when(followRepository.saveAndFlush(any(Follow.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate follow"));
 
-        followService.follow(CustomUserPrincipal.from(follower), "other");
+        assertThatThrownBy(() -> followService.follow(CustomUserPrincipal.from(follower), "other"))
+                .isInstanceOf(DataIntegrityViolationException.class);
 
         verify(followRepository).saveAndFlush(any(Follow.class));
+        verify(notificationCommandService, never()).createFollow(any(), any(), any());
+    }
+
+    @Test
+    void followDoesNotCreateNotificationWhenRelationshipAlreadyExists() {
+        UUID followerId = UUID.randomUUID();
+        UUID followeeId = UUID.randomUUID();
+        User follower = savedUser(followerId, "me", "Me");
+        User followee = savedUser(followeeId, "other", "Other");
+
+        when(userRepository.findActiveByIdForUpdate(followerId)).thenReturn(Optional.of(follower));
+        when(userRepository.findByHandleAndDeletedAtIsNull("other")).thenReturn(Optional.of(followee));
+        when(followRepository.existsByFollowerIdAndFolloweeId(followerId, followeeId)).thenReturn(true);
+
+        followService.follow(CustomUserPrincipal.from(follower), "other");
+
+        verify(followRepository, never()).saveAndFlush(any(Follow.class));
+        verify(notificationCommandService, never()).createFollow(any(), any(), any());
+    }
+
+    @Test
+    void unfollowRemovesNotificationAndRelationshipWhenPresent() {
+        UUID followerId = UUID.randomUUID();
+        UUID followeeId = UUID.randomUUID();
+        User follower = savedUser(followerId, "me", "Me");
+        User followee = savedUser(followeeId, "other", "Other");
+        Follow follow = Follow.create(follower, followee);
+
+        when(userRepository.findActiveByIdForUpdate(followerId)).thenReturn(Optional.of(follower));
+        when(userRepository.findByHandleAndDeletedAtIsNull("other")).thenReturn(Optional.of(followee));
+        when(followRepository.findByFollowerIdAndFolloweeId(followerId, followeeId))
+                .thenReturn(Optional.of(follow));
+
+        followService.unfollow(CustomUserPrincipal.from(follower), "other");
+
+        verify(notificationCommandService).removeFollow(followerId, followeeId);
+        verify(followRepository).delete(follow);
     }
 
     @Test
@@ -117,6 +167,7 @@ class FollowServiceTest {
         when(followRepository.findAllWithUsersByIdIn(List.of(followId))).thenReturn(List.of(follow));
         when(followRepository.findFolloweeIdsByFollowerIdAndFolloweeIdIn(eq(viewerId), any()))
                 .thenReturn(List.of(followerId));
+        when(membershipService.findActiveUserIds(Set.of(followerId))).thenReturn(Set.of(followerId));
 
         CursorPageResponse<?> response = followService.getFollowers(
                 CustomUserPrincipal.from(viewer),
@@ -132,9 +183,12 @@ class FollowServiceTest {
                 .hasFieldOrPropertyWithValue("handle", "fan")
                 .hasFieldOrPropertyWithValue("nickname", "Fan")
                 .hasFieldOrPropertyWithValue("isFollowing", true)
+                .hasFieldOrPropertyWithValue("membershipBadge", true)
                 .hasFieldOrPropertyWithValue("followedAt", followedAt);
         assertThat(response.hasNext()).isFalse();
         assertThat(response.nextCursor()).isNull();
+        verify(membershipService).findActiveUserIds(Set.of(followerId));
+        verify(membershipService, never()).isActive(any());
     }
 
     @Test
@@ -170,6 +224,7 @@ class FollowServiceTest {
 
         assertThat(firstPage.items()).hasSize(1);
         assertThat(firstPage.items().get(0).handle()).isEqualTo("first");
+        assertThat(firstPage.items().get(0).membershipBadge()).isFalse();
         assertThat(firstPage.hasNext()).isTrue();
         assertThat(firstPage.nextCursor()).isNotBlank();
         assertThat(firstPage.nextCursor()).doesNotContain("|");
@@ -180,6 +235,57 @@ class FollowServiceTest {
         assertThat(secondPage.items().get(0).handle()).isEqualTo("second");
         assertThat(secondPage.hasNext()).isFalse();
         assertThat(secondPage.nextCursor()).isNull();
+    }
+
+    @Test
+    void getFollowingClampsFrontendRequestedPageSizeToMaximum() {
+        UUID viewerId = UUID.randomUUID();
+        UUID targetId = UUID.randomUUID();
+        User viewer = savedUser(viewerId, "viewer", "Viewer");
+        User target = savedUser(targetId, "target", "Target");
+
+        when(userRepository.findByIdAndDeletedAtIsNull(viewerId)).thenReturn(Optional.of(viewer));
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(target));
+        when(followRepository.findFollowingPageIds(targetId, 51)).thenReturn(List.of());
+
+        var response = followService.getFollowing(
+                CustomUserPrincipal.from(viewer),
+                "target",
+                null,
+                100
+        );
+
+        assertThat(response.items()).isEmpty();
+        assertThat(response.hasNext()).isFalse();
+        assertThat(response.nextCursor()).isNull();
+        verify(followRepository).findFollowingPageIds(targetId, 51);
+        verifyNoInteractions(membershipService);
+    }
+
+    @Test
+    void followingMembershipBatchIncludesViewerEvenThoughFollowingFlagExcludesSelf() {
+        User viewer = savedUser(UUID.randomUUID(), "viewer", "Viewer");
+        User target = savedUser(UUID.randomUUID(), "target", "Target");
+        User other = savedUser(UUID.randomUUID(), "other", "Other");
+        OffsetDateTime followedAt = OffsetDateTime.parse("2026-10-15T00:00:00Z");
+        Follow viewerFollow = savedFollow(UUID.randomUUID(), target, viewer, followedAt);
+        Follow otherFollow = savedFollow(UUID.randomUUID(), target, other, followedAt.minusHours(1));
+        List<UUID> ids = List.of(viewerFollow.getId(), otherFollow.getId());
+        when(userRepository.findByIdAndDeletedAtIsNull(viewer.getId())).thenReturn(Optional.of(viewer));
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(target));
+        when(followRepository.findFollowingPageIds(target.getId(), 21))
+                .thenReturn(ids.stream().map(UUID::toString).toList());
+        when(followRepository.findAllWithUsersByIdIn(ids)).thenReturn(List.of(viewerFollow, otherFollow));
+        when(membershipService.findActiveUserIds(Set.of(viewer.getId(), other.getId())))
+                .thenReturn(Set.of(viewer.getId()));
+
+        var response = followService.getFollowing(CustomUserPrincipal.from(viewer), "target", null, 20);
+
+        assertThat(response.items()).extracting(item -> item.membershipBadge()).containsExactly(true, false);
+        assertThat(response.items().getFirst().isFollowing()).isFalse();
+        verify(membershipService).findActiveUserIds(Set.of(viewer.getId(), other.getId()));
+        verify(membershipService, never()).isActive(any());
+        verify(followRepository).findFolloweeIdsByFollowerIdAndFolloweeIdIn(viewer.getId(), Set.of(other.getId()));
     }
 
     private User savedUser(UUID id, String handle, String nickname) {

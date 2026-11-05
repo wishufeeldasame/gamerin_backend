@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -25,16 +26,19 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamerin.backend.domain.post.filter.PostUploadConcurrencyFilter;
 import com.gamerin.backend.domain.user.service.CustomUserDetailsService;
 import com.gamerin.backend.global.logging.ApiRequestLoggingFilter;
 import com.gamerin.backend.global.logging.JsonLogContext;
+import com.gamerin.backend.global.security.filter.UserSuspensionFilter;
 import com.gamerin.backend.global.security.jwt.JwtAuthenticationFilter;
 import com.gamerin.backend.global.security.jwt.JwtTokenProvider;
 import com.gamerin.backend.global.security.oauth2.OAuth2SuccessHandler;
 
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -42,6 +46,7 @@ import jakarta.servlet.http.HttpServletResponse;
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 public class SecurityConfig {
 
     private static final String[] PUBLIC_PATTERNS = {
@@ -54,6 +59,8 @@ public class SecurityConfig {
             "/api/v1/auth/find-password",
             "/api/v1/auth/reset-password",
             "/api/v1/auth/availability/**",
+            "/api/v1/auth/email-verifications",
+            "/api/v1/auth/email-verifications/confirm",
             "/oauth2/**",
             "/login/oauth2/**",
             "/uploads/**"
@@ -81,9 +88,11 @@ public class SecurityConfig {
     private final boolean swaggerUiEnabled;
     private final boolean apiDocsEnabled;
     private final PostUploadConcurrencyFilter postUploadConcurrencyFilter;
+    private final UserSuspensionFilter userSuspensionFilter;
 
     public SecurityConfig(
             JwtAuthenticationFilter jwtAuthenticationFilter,
+            UserSuspensionFilter userSuspensionFilter,
             JwtTokenProvider jwtTokenProvider,
             CustomUserDetailsService customUserDetailsService,
             OAuth2SuccessHandler oAuth2SuccessHandler,
@@ -94,6 +103,7 @@ public class SecurityConfig {
             @Value("${springdoc.api-docs.enabled:true}") boolean apiDocsEnabled
     ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.userSuspensionFilter = userSuspensionFilter;
         this.jwtTokenProvider = jwtTokenProvider;
         this.customUserDetailsService = customUserDetailsService;
         this.oAuth2SuccessHandler = oAuth2SuccessHandler;
@@ -113,14 +123,30 @@ public class SecurityConfig {
                 .formLogin(formLogin -> formLogin.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> {
+                    // ASYNC는 이미 인가를 통과한 원 요청의 재디스패치이며 인증 필터(OncePerRequestFilter)가 다시 돌지 않아 익명이 된다.
+                    auth.dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll();
                     String[] denyAllPatterns = buildDenyAllPatterns(swaggerUiEnabled, apiDocsEnabled);
                     if (denyAllPatterns.length > 0) {
                         auth.requestMatchers(denyAllPatterns).denyAll();
                     }
                     auth.requestMatchers(buildPermitAllPatterns(swaggerUiEnabled, apiDocsEnabled)).permitAll()
+                            .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                             .anyRequest().authenticated();
                 })
                 .exceptionHandling(exception -> exception
+                        // 403 권한 없음 예외 발생 시 커스텀 JSON 응답 출력
+                        .accessDeniedHandler((request, response, accessDeniedException) -> {
+                            String message = "Access is denied due to insufficient permissions.";
+                            JsonLogContext.setFailureReason(request, message);
+                            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                            response.setContentType("application/json;charset=UTF-8");
+                            Map<String, Object> errorResponse = Map.of(
+                                    "success", false,
+                                    "message", "해당 리소스에 대한 접근 권한이 없습니다."
+                            );
+                            response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
+                        })
+                        // 401 인증 필요/토큰 만료 시 커스텀 JSON 응답 출력
                         .defaultAuthenticationEntryPointFor(
                                 (request, response, authException) -> response
                                         .sendError(HttpServletResponse.SC_FORBIDDEN),
@@ -134,11 +160,9 @@ public class SecurityConfig {
                                     Map<String, Object> errorResponse = Map.of(
                                             "success", false,
                                             "message", "인증이 필요하거나 토큰이 만료되었습니다."
-
-                                );
+                                    );
 
                                     response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
-
                                 },
                                 new AntPathRequestMatcher("/api/**"))
                         .defaultAuthenticationEntryPointFor(
@@ -148,6 +172,7 @@ public class SecurityConfig {
                 .oauth2Login(oauth2 -> oauth2.successHandler(oAuth2SuccessHandler))
                 .addFilterBefore(new RateLimitFilter(objectMapper), UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(userSuspensionFilter, JwtAuthenticationFilter.class)
                 .addFilterAfter(
                         new PrivateUploadStaticPathDenyFilter(jwtTokenProvider, customUserDetailsService),
                         JwtAuthenticationFilter.class)
@@ -301,5 +326,18 @@ public class SecurityConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
+    }
+    
+    /**
+     * UserSuspensionFilter의 서블릿 컨테이너 자동 등록 비활성화
+     * (Spring Security 보안 체인 내부에서만 정확한 순서로 동작하도록 이중 등록 방지)
+     */
+    @Bean
+    public FilterRegistrationBean<UserSuspensionFilter> disableUserSuspensionFilterAutoRegistration(
+            UserSuspensionFilter filter
+    ) {
+        FilterRegistrationBean<UserSuspensionFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 }

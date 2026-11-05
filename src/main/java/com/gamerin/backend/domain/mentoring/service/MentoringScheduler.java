@@ -12,7 +12,7 @@ public class MentoringScheduler {
         this.mentoringService = mentoringService;
     }
 
-    @Scheduled(cron = "0 0 3 * * *")
+    @Scheduled(cron = "0 0 3 * * *", zone = "Asia/Seoul")
     public void autoSettlementJob() {
         System.out.println("자동 정산 스케줄러 시작...");
         mentoringService.processAutoSettlement();

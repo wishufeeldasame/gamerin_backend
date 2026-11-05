@@ -82,6 +82,13 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
             setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
             targetUrl = buildLoginSuccessUrl();
 
+        } else if (!isEmailVerified(oAuth2User)) {
+            // Google이 확인하지 않은 이메일로는 신규 가입·기존 계정 연동을 허용하지 않는다
+            targetUrl = UriComponentsBuilder.fromUriString(frontendBaseUrl)
+                    .path("/login")
+                    .queryParam("error", "email_not_verified")
+                    .build().toUriString();
+
         } else {
             // [Case B: 소셜 연동 정보가 없음] -> 이메일 중복 체크를 통해 통합 가입 시도
             Optional<User> existingUserOpt = userRepository.findByEmail(email);
@@ -117,6 +124,12 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         }
 
         getRedirectStrategy().sendRedirect(request, response, targetUrl);
+    }
+
+    private boolean isEmailVerified(OAuth2User oAuth2User) {
+        // userinfo 응답에 따라 Boolean 또는 문자열로 올 수 있다
+        Object emailVerified = oAuth2User.getAttribute("email_verified");
+        return "true".equals(String.valueOf(emailVerified));
     }
 
     private void processLogin(User user, SocialAccount socialAccount, HttpServletResponse response) {

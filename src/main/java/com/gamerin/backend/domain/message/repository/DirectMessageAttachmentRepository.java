@@ -35,6 +35,7 @@ public interface DirectMessageAttachmentRepository extends JpaRepository<DirectM
               where participant.conversation = conversation
                 and participant.user.id = :userId
                 and participant.deletedAt is null
+                and (participant.clearedAt is null or dm.createdAt > participant.clearedAt)
           )
         """)
     Optional<DirectMessageAttachment> findAccessibleActiveById(

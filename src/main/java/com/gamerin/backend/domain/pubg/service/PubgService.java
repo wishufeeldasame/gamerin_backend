@@ -1,11 +1,17 @@
 package com.gamerin.backend.domain.pubg.service;
 
+import com.gamerin.backend.domain.game.model.GameType;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.UUID;
 
+import com.gamerin.backend.domain.game.model.GameStatsMode;
+import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
 import com.gamerin.backend.domain.pubg.client.PubgApiClient;
 import com.gamerin.backend.domain.pubg.dto.request.PubgConnectRequest;
 import com.gamerin.backend.domain.pubg.dto.response.PubgConnectionResponse;
 import com.gamerin.backend.domain.pubg.dto.response.PubgSummaryResponse;
+import com.gamerin.backend.domain.pubg.exception.NoRankedRecordException;
 import com.gamerin.backend.domain.pubg.model.NormalStats;
 import com.gamerin.backend.domain.pubg.model.RankedStats;
 import com.gamerin.backend.domain.user.entity.User;
@@ -14,28 +20,32 @@ import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
-@Transactional
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
 public class PubgService {
 
-    private static final String GAME_NAME = "PUBG";
-    private static final String RANKED_MODE = "squad-tpp";
+    private static final String GAME_NAME = GameType.PUBG.name();
+    private static final String RANKED_MODE = "squad";
     private static final String NORMAL_MODE = "squad";
 
     private final UserRepository userRepository;
     private final PubgApiClient pubgApiClient;
+    private final GameStatsPersistenceService gameStatsPersistenceService;
 
-    public PubgService(UserRepository userRepository, PubgApiClient pubgApiClient) {
+    public PubgService(UserRepository userRepository, PubgApiClient pubgApiClient,
+            GameStatsPersistenceService gameStatsPersistenceService) {
         this.userRepository = userRepository;
         this.pubgApiClient = pubgApiClient;
+        this.gameStatsPersistenceService = gameStatsPersistenceService;
     }
 
     public PubgConnectionResponse connect(CustomUserPrincipal principal, PubgConnectRequest request) {
         User user = getCurrentUser(principal);
-        UserProfile profile = getCurrentProfile(user);
+        getCurrentProfile(user);
 
         String playerName = request.playerName();
 
@@ -43,7 +53,7 @@ public class PubgService {
 
         String accountId = pubgApiClient.findAccountId(playerName);
 
-        profile.connectPubg(playerName, accountId);
+        gameStatsPersistenceService.updateConnection(user.getId(), current -> current.connectPubg(playerName, accountId));
         return new PubgConnectionResponse(true, playerName);
     }
 
@@ -63,37 +73,51 @@ public class PubgService {
         UserProfile profile = getCurrentProfile(user);
 
         if (!profile.hasConnectedPubg()) {
-            return new PubgSummaryResponse(GAME_NAME, null, 0.0, 0, 0, false);
+            return disconnectedResponse();
         }
 
         String accountId = profile.getPubgAccountId();
         if (accountId == null) {
-            return new PubgSummaryResponse(GAME_NAME, null, 0.0, 0, 0, false);
+            return disconnectedResponse();
         }
+        String playerName = profile.getPubgPlayerName();
+        long connectionVersion = profile.getGameConnectionVersion(GAME_NAME);
 
         String seasonId = pubgApiClient.findCurrentSeasonId();
 
+        RankedStats rankedStats;
         try {
-            RankedStats rankedStats = pubgApiClient.getRankedStats(accountId, seasonId, RANKED_MODE);
-            PubgSummaryResponse response = toRankedSummary(rankedStats);
-            profile.updatePubgSummary(response.tierLabel(), response.kda(), response.winRate(), response.games());
+            rankedStats = pubgApiClient.getRankedStats(accountId, seasonId, RANKED_MODE);
+        } catch (NoRankedRecordException e) {
+            NormalStats normalStats = pubgApiClient.getNormalStats(accountId, seasonId, NORMAL_MODE);
+            PubgSummaryResponse response = toNormalSummary(playerName, normalStats);
+            saveSummary(user.getId(), accountId, connectionVersion, response);
             return response;
-        } catch (ResponseStatusException e) {
-            if (e.getStatusCode().value() != HttpStatus.NOT_FOUND.value()) {
-                throw e;
-            }
         }
 
-        NormalStats normalStats = pubgApiClient.getNormalStats(accountId, seasonId, NORMAL_MODE);
-        PubgSummaryResponse response = toNormalSummary(normalStats);
-        profile.updatePubgSummary(response.tierLabel(), response.kda(), response.winRate(), response.games());
+        PubgSummaryResponse response = toRankedSummary(playerName, rankedStats);
+        saveSummary(user.getId(), accountId, connectionVersion, response);
         return response;
+    }
+
+    private void saveSummary(UUID userId, String accountId, long connectionVersion, PubgSummaryResponse response) {
+        gameStatsPersistenceService.updateSummary(
+                userId, GAME_NAME, connectionVersion,
+                current -> current.hasConnectedPubg() && accountId.equals(current.getPubgAccountId()),
+                current -> current.updatePubgSummary(
+                        response.tierLabel(),
+                        response.kd(),
+                        response.winRate(),
+                        response.matches(),
+                        response.statsMode()
+                )
+        );
     }
 
     public void disconnect(CustomUserPrincipal principal) {
         User user = getCurrentUser(principal);
-        UserProfile profile = getCurrentProfile(user);
-        profile.disconnectPubg();
+        getCurrentProfile(user);
+        gameStatsPersistenceService.updateConnection(user.getId(), UserProfile::disconnectPubg);
     }
 
     private User getCurrentUser(CustomUserPrincipal principal) {
@@ -101,7 +125,7 @@ public class PubgService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication is required.");
         }
 
-        return userRepository.findById(principal.getUserId())
+        return userRepository.findWithProfileById(principal.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
     }
 
@@ -123,37 +147,52 @@ public class PubgService {
         return tier + " " + subTier;
     }
 
-    private double round1(double value) {
-        return Math.round(value * 10.0) / 10.0;
+    private Double truncate2(Double value) {
+        if (value == null) {
+            return null;
+        }
+        return BigDecimal.valueOf(value)
+                .setScale(2, RoundingMode.DOWN)
+                .doubleValue();
     }
 
-    private PubgSummaryResponse toRankedSummary(RankedStats stats) {
-        int games = stats.roundsPlayed();
-        int wins = stats.wins();
-        int winRate = games == 0 ? 0 : (int) Math.round((wins * 100.0) / games);
+    private PubgSummaryResponse toRankedSummary(String playerName, RankedStats stats) {
+        int matches = stats.roundsPlayed();
 
         return new PubgSummaryResponse(
                 GAME_NAME,
+                true,
+                playerName,
                 toTierLabel(stats.currentTier(), stats.currentSubTier()),
-                round1(stats.kda()),
-                winRate,
-                games,
-                true
+                truncate2(stats.kd()),
+                calculateWinRate(stats.wins(), matches),
+                matches,
+                GameStatsMode.RANKED
         );
     }
 
-    private PubgSummaryResponse toNormalSummary(NormalStats stats) {
-        int games = stats.roundsPlayed();
-        int wins = stats.wins();
-        int winRate = games == 0 ? 0 : (int) Math.round((wins * 100.0) / games);
-
+    private PubgSummaryResponse toNormalSummary(String playerName, NormalStats stats) {
+        Integer matches = stats.roundsPlayed();
         return new PubgSummaryResponse(
                 GAME_NAME,
+                true,
+                playerName,
                 null,
-                round1(stats.kda()),
-                winRate,
-                games,
-                true
+                truncate2(stats.kd()),
+                calculateWinRate(stats.wins(), matches),
+                matches,
+                matches == null || matches <= 0 ? null : GameStatsMode.NORMAL
         );
+    }
+
+    private Integer calculateWinRate(Integer wins, Integer matches) {
+        if (wins == null || matches == null || matches <= 0 || wins < 0 || wins > matches) {
+            return null;
+        }
+        return (int) Math.round(wins * 100.0 / matches);
+    }
+
+    private PubgSummaryResponse disconnectedResponse() {
+        return new PubgSummaryResponse(GAME_NAME, false, null, null, null, null, null, null);
     }
 }

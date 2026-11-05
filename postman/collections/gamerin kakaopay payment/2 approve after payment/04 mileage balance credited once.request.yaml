@@ -1,0 +1,15 @@
+$kind: http-request
+method: GET
+url: '{{baseUrl}}/api/v1/mileage/me/balance'
+order: 4000
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{userAToken}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('HTTP 200', () => pm.response.to.have.status(200));
+      pm.test('잔액 10,000', () => pm.expect(pm.response.json().data.currentBalance).to.eql(10000));

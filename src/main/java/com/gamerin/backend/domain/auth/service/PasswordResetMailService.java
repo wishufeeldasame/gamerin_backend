@@ -5,6 +5,8 @@ import java.util.Map;
 import com.gamerin.backend.global.logging.JsonConsoleLogger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.mail.MailException;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -19,19 +21,23 @@ public class PasswordResetMailService {
     private final String passwordResetPath;
     private final String fromAddress;
     private final String mailHost;
+    private final boolean consoleFallbackEnabled;
 
     public PasswordResetMailService(
             ObjectProvider<JavaMailSender> mailSenderProvider,
             @Value("${app.frontend.base-url:http://localhost:3000}") String frontendBaseUrl,
             @Value("${app.frontend.password-reset-path:/auth/reset-password}") String passwordResetPath,
             @Value("${app.mail.from-address:no-reply@gamerin.local}") String fromAddress,
-            @Value("${spring.mail.host:}") String mailHost
+            @Value("${spring.mail.host:}") String mailHost,
+            Environment environment
     ) {
         this.mailSender = mailSenderProvider.getIfAvailable();
         this.frontendBaseUrl = frontendBaseUrl;
         this.passwordResetPath = passwordResetPath;
         this.fromAddress = fromAddress;
         this.mailHost = mailHost;
+        // 토큰이 포함된 재설정 링크 로그는 로컬 개발에서만 허용한다
+        this.consoleFallbackEnabled = environment.acceptsProfiles(Profiles.of("local"));
     }
 
     public void sendPasswordResetMail(String recipientEmail, String resetToken) {
@@ -42,6 +48,12 @@ public class PasswordResetMailService {
                 .toUriString();
 
         if (mailSender == null || mailHost == null || mailHost.isBlank()) {
+            if (!consoleFallbackEnabled) {
+                JsonConsoleLogger.failure("auth.password_reset_mail.sent", "mail_sender_not_configured", Map.of(
+                        "recipientEmail", maskEmail(recipientEmail)
+                ));
+                throw new IllegalStateException("이메일 발송 설정이 없어 비밀번호 재설정 메일을 보낼 수 없습니다.");
+            }
             JsonConsoleLogger.success("auth.password_reset_link.generated", Map.of(
                     "delivery", "console",
                     "reason", "mail_sender_not_configured",

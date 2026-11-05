@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.auth.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gamerin.backend.domain.auth.service.EmailVerificationMailService;
 import com.gamerin.backend.domain.auth.service.PasswordResetMailService;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
@@ -39,6 +40,9 @@ class PasswordResetFlowIntegrationTest {
     @MockitoBean
     private PasswordResetMailService passwordResetMailService;
 
+    @MockitoBean
+    private EmailVerificationMailService emailVerificationMailService;
+
     @Test
     void passwordResetFlowInvalidatesOldCredentialsAndAllowsNewPassword() throws Exception {
         String handle = "reset" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
@@ -46,17 +50,22 @@ class PasswordResetFlowIntegrationTest {
         String oldPassword = "Password1!";
         String newPassword = "NewPassword1!";
 
+        String emailVerificationToken = verifyEmail(email);
+
         MvcResult signUpResult = mockMvc.perform(post("/api/v1/auth/signup")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of(
-                                "handle", handle,
-                                "nickname", "Reset Demo",
-                                "email", email,
-                                "password", oldPassword,
-                                "passwordConfirm", oldPassword,
-                                "agreedToTerms", true,
-                                "agreedToPrivacy", true
-                        ))))
+                        .content(json(Map.ofEntries(
+                                Map.entry("handle", handle),
+                                Map.entry("nickname", "Reset Demo"),
+                                Map.entry("email", email),
+                                Map.entry("password", oldPassword),
+                                Map.entry("passwordConfirm", oldPassword),
+                                Map.entry("agreedToTerms", true),
+                                Map.entry("agreedToPrivacy", true),
+                                Map.entry("agreedToAge14", true),
+                                Map.entry("termsVersion", "1.0"),
+                                Map.entry("privacyVersion", "1.0"),
+                                Map.entry("emailVerificationToken", emailVerificationToken)))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.handle").value(handle))
@@ -134,6 +143,24 @@ class PasswordResetFlowIntegrationTest {
                 .andExpect(jsonPath("$.data").isEmpty());
 
         verifyNoInteractions(passwordResetMailService);
+    }
+
+    private String verifyEmail(String email) throws Exception {
+        mockMvc.perform(post("/api/v1/auth/email-verifications")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("email", email))))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<String> codeCaptor = ArgumentCaptor.forClass(String.class);
+        verify(emailVerificationMailService).sendSignupVerificationCode(eq(email), codeCaptor.capture());
+
+        MvcResult confirmResult = mockMvc.perform(post("/api/v1/auth/email-verifications/confirm")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("email", email, "code", codeCaptor.getValue()))))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(confirmResult.getResponse().getContentAsString())
+                .path("data").path("verificationToken").asText();
     }
 
     private String json(Object value) throws Exception {

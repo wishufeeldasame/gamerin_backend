@@ -21,6 +21,8 @@ import java.util.UUID;
 @Table(name = "users")
 public class User {
 
+    public static final String WITHDRAWN_NICKNAME = "탈퇴한 사용자";
+
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
@@ -54,7 +56,7 @@ public class User {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
-    @Column(name = "deleted_at") 
+    @Column(name = "deleted_at")
     private OffsetDateTime deletedAt;
 
     protected User() {
@@ -130,8 +132,8 @@ public class User {
         return createdAt;
     }
 
-    public OffsetDateTime getDeletedAt() { 
-        return deletedAt; 
+    public OffsetDateTime getDeletedAt() {
+        return deletedAt;
     }
 
     public void updateLastLoginAt() {
@@ -139,8 +141,9 @@ public class User {
     }
 
     public boolean isActive() {
-        return this.status == UserStatus.ACTIVE;
+        return this.status == UserStatus.ACTIVE && this.deletedAt == null;
     }
+
     public void changePassword(String passwordHash) {
         this.passwordHash = passwordHash;
     }
@@ -160,5 +163,25 @@ public class User {
         if (nickname != null && !nickname.isBlank()) {
             this.nickname = nickname;
         }
+    }
+
+    // 유저 계정을 정지 상태로 전환
+    public void suspend() {
+        this.status = UserStatus.SUSPENDED;
+    }
+
+    // 유저 계정을 정상 활성 상태로 복구
+    public void activate() {
+        this.status = UserStatus.ACTIVE;
+    }
+
+    // 탈퇴: 행은 남기고 개인정보를 비워 같은 email/handle로 재가입할 수 있게 한다
+    public void withdraw() {
+        this.email = null;
+        this.passwordHash = null;
+        this.handle = "deleted_" + id.toString().replace("-", "");
+        this.nickname = WITHDRAWN_NICKNAME;
+        this.status = UserStatus.DELETED;
+        this.deletedAt = OffsetDateTime.now();
     }
 }

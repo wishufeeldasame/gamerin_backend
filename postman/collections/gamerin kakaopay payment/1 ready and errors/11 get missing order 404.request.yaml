@@ -1,0 +1,19 @@
+$kind: http-request
+method: GET
+url: '{{baseUrl}}/api/v1/payments/{{$guid}}'
+order: 13000
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{userAToken}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('HTTP 404', () => pm.response.to.have.status(404));
+      pm.test('오류 형식 { success:false, message }', () => {
+        const b = pm.response.json();
+        pm.expect(b.success).to.eql(false);
+        pm.expect(b.message).to.be.a('string');
+      });

@@ -1,0 +1,21 @@
+$kind: http-request
+method: GET
+url: '{{baseUrl}}/api/v1/mileage/me/transactions?size=20'
+order: 5000
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{userAToken}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('HTTP 200', () => pm.response.to.have.status(200));
+
+      pm.test('CHARGE +10,000 1건', () => {
+        const rows = pm.response.json().data.content.filter(t => t.type === 'CHARGE');
+        pm.expect(rows.length).to.eql(1);
+        pm.expect(rows[0].amount).to.eql(10000);
+        pm.expect(rows[0].balanceAfter).to.eql(10000);
+      });

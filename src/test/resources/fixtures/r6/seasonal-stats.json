@@ -1,0 +1,16 @@
+{
+  "data": {
+    "history": {
+      "data": [
+        [
+          "2026-07-16T12:00:00+00:00",
+          { "metadata": { "rank": "EMERALD II" }, "value": 3550 }
+        ],
+        [
+          "2026-07-10T12:00:00+00:00",
+          { "metadata": { "rank": "PLATINUM I" }, "value": 3300 }
+        ]
+      ]
+    }
+  }
+}

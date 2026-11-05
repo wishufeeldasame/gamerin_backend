@@ -12,6 +12,7 @@ public record MessageResponse(
         boolean read,
         String deliveryStatus,
         List<MessageAttachmentResponse> attachments,
-        SharedPostPreviewResponse sharedPost
+        SharedPostPreviewResponse sharedPost,
+        UUID clientMessageId
 ) {
 }

@@ -1,39 +1,53 @@
 package com.gamerin.backend.domain.post.service;
 
+import java.time.Clock;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.hashtag.service.HashtagService;
+import com.gamerin.backend.domain.membership.service.MembershipService;
+import com.gamerin.backend.domain.mention.service.MentionService;
+import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
+import com.gamerin.backend.domain.post.dto.request.UpdatePostRequest;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
+import com.gamerin.backend.domain.post.dto.response.PostVideoJobResponse;
 import com.gamerin.backend.domain.post.dto.response.ShareResponse;
 import com.gamerin.backend.domain.post.entity.Post;
-import com.gamerin.backend.domain.post.entity.PostBookmark;
 import com.gamerin.backend.domain.post.entity.PostComment;
 import com.gamerin.backend.domain.post.entity.PostLike;
 import com.gamerin.backend.domain.post.entity.PostMedia;
-import com.gamerin.backend.domain.post.entity.PostShare;
 import com.gamerin.backend.domain.post.entity.PostMediaType;
+import com.gamerin.backend.domain.post.entity.PostShare;
 import com.gamerin.backend.domain.post.entity.ShareTarget;
 import com.gamerin.backend.domain.post.moderation.ContentModerationService;
-import com.gamerin.backend.domain.post.repository.PostBookmarkRepository;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
 import com.gamerin.backend.domain.post.repository.PostLikeRepository;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.post.repository.PostShareRepository;
+import com.gamerin.backend.domain.report.entity.ReportTargetType;
+import com.gamerin.backend.domain.report.repository.ReportCountRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -50,17 +64,24 @@ public class PostService {
     private final PostRepository postRepository;
     private final PostMediaRepository postMediaRepository;
     private final PostLikeRepository postLikeRepository;
-    private final PostBookmarkRepository postBookmarkRepository;
+    private final PostBookmarkCommandService postBookmarkCommandService;
     private final PostCommentRepository postCommentRepository;
     private final PostShareRepository postShareRepository;
     private final PostResponseAssembler postResponseAssembler;
+    private final HashtagService hashtagService;
+    private final MentionService mentionService;
+    private final NotificationCommandService notificationCommandService;
     private final MediaStorageService mediaStorageService;
     private final VideoMetadataService videoMetadataService;
     private final ContentModerationService contentModerationService;
     private final MediaUploadSecurityService mediaUploadSecurityService;
     private final LightweightSecurityScanService lightweightSecurityScanService;
     private final TextSecurityService textSecurityService;
-    private final VideoOptimizationService videoOptimizationService;
+    private final PostVideoJobService postVideoJobService;
+    private final MembershipService membershipService;
+    private final ReportCountRepository reportCountRepository;
+    private final TransactionTemplate transactionTemplate;
+    private final Clock clock;
     private final long maxVideoFileSizeBytes;
 
     public PostService(
@@ -68,19 +89,121 @@ public class PostService {
             PostRepository postRepository,
             PostMediaRepository postMediaRepository,
             PostLikeRepository postLikeRepository,
-            PostBookmarkRepository postBookmarkRepository,
+            PostBookmarkCommandService postBookmarkCommandService,
             PostCommentRepository postCommentRepository,
             PostShareRepository postShareRepository,
             PostResponseAssembler postResponseAssembler,
+            HashtagService hashtagService,
+            MentionService mentionService,
+            NotificationCommandService notificationCommandService,
             MediaStorageService mediaStorageService,
             VideoMetadataService videoMetadataService,
             ContentModerationService contentModerationService,
             MediaUploadSecurityService mediaUploadSecurityService,
             LightweightSecurityScanService lightweightSecurityScanService,
             TextSecurityService textSecurityService,
-            VideoOptimizationService videoOptimizationService,
-            @Value("${app.media.video.max-file-size-bytes:524288000}") long maxVideoFileSizeBytes
-    ) {
+            PostVideoJobService postVideoJobService,
+            long maxVideoFileSizeBytes) {
+        this(
+                userRepository,
+                postRepository,
+                postMediaRepository,
+                postLikeRepository,
+                postBookmarkCommandService,
+                postCommentRepository,
+                postShareRepository,
+                postResponseAssembler,
+                hashtagService,
+                mentionService,
+                notificationCommandService,
+                mediaStorageService,
+                videoMetadataService,
+                contentModerationService,
+                mediaUploadSecurityService,
+                lightweightSecurityScanService,
+                textSecurityService,
+                postVideoJobService,
+                null,
+                null,
+                null,
+                Clock.systemUTC(),
+                maxVideoFileSizeBytes);
+    }
+
+    @Autowired
+    public PostService(
+            UserRepository userRepository,
+            PostRepository postRepository,
+            PostMediaRepository postMediaRepository,
+            PostLikeRepository postLikeRepository,
+            PostBookmarkCommandService postBookmarkCommandService,
+            PostCommentRepository postCommentRepository,
+            PostShareRepository postShareRepository,
+            PostResponseAssembler postResponseAssembler,
+            HashtagService hashtagService,
+            MentionService mentionService,
+            NotificationCommandService notificationCommandService,
+            MediaStorageService mediaStorageService,
+            VideoMetadataService videoMetadataService,
+            ContentModerationService contentModerationService,
+            MediaUploadSecurityService mediaUploadSecurityService,
+            LightweightSecurityScanService lightweightSecurityScanService,
+            TextSecurityService textSecurityService,
+            PostVideoJobService postVideoJobService,
+            MembershipService membershipService,
+            ReportCountRepository reportCountRepository,
+            TransactionTemplate transactionTemplate,
+            @Value("${app.media.video.max-file-size-bytes:524288000}") long maxVideoFileSizeBytes) {
+        this(
+                userRepository,
+                postRepository,
+                postMediaRepository,
+                postLikeRepository,
+                postBookmarkCommandService,
+                postCommentRepository,
+                postShareRepository,
+                postResponseAssembler,
+                hashtagService,
+                mentionService,
+                notificationCommandService,
+                mediaStorageService,
+                videoMetadataService,
+                contentModerationService,
+                mediaUploadSecurityService,
+                lightweightSecurityScanService,
+                textSecurityService,
+                postVideoJobService,
+                membershipService,
+                reportCountRepository,
+                transactionTemplate,
+                Clock.systemUTC(),
+                maxVideoFileSizeBytes);
+    }
+
+    PostService(
+            UserRepository userRepository,
+            PostRepository postRepository,
+            PostMediaRepository postMediaRepository,
+            PostLikeRepository postLikeRepository,
+            PostBookmarkCommandService postBookmarkCommandService,
+            PostCommentRepository postCommentRepository,
+            PostShareRepository postShareRepository,
+            PostResponseAssembler postResponseAssembler,
+            HashtagService hashtagService,
+            MentionService mentionService,
+            NotificationCommandService notificationCommandService,
+            MediaStorageService mediaStorageService,
+            VideoMetadataService videoMetadataService,
+            ContentModerationService contentModerationService,
+            MediaUploadSecurityService mediaUploadSecurityService,
+            LightweightSecurityScanService lightweightSecurityScanService,
+            TextSecurityService textSecurityService,
+            PostVideoJobService postVideoJobService,
+            MembershipService membershipService,
+            ReportCountRepository reportCountRepository,
+            TransactionTemplate transactionTemplate,
+            Clock clock,
+            long maxVideoFileSizeBytes) {
         if (maxVideoFileSizeBytes < 1) {
             throw new IllegalArgumentException("Video max file size must be at least 1 byte.");
         }
@@ -89,17 +212,24 @@ public class PostService {
         this.postRepository = postRepository;
         this.postMediaRepository = postMediaRepository;
         this.postLikeRepository = postLikeRepository;
-        this.postBookmarkRepository = postBookmarkRepository;
+        this.postBookmarkCommandService = postBookmarkCommandService;
         this.postCommentRepository = postCommentRepository;
         this.postShareRepository = postShareRepository;
         this.postResponseAssembler = postResponseAssembler;
+        this.hashtagService = hashtagService;
+        this.mentionService = mentionService;
+        this.notificationCommandService = notificationCommandService;
         this.mediaStorageService = mediaStorageService;
         this.videoMetadataService = videoMetadataService;
         this.contentModerationService = contentModerationService;
         this.mediaUploadSecurityService = mediaUploadSecurityService;
         this.lightweightSecurityScanService = lightweightSecurityScanService;
         this.textSecurityService = textSecurityService;
-        this.videoOptimizationService = videoOptimizationService;
+        this.postVideoJobService = postVideoJobService;
+        this.membershipService = membershipService;
+        this.reportCountRepository = reportCountRepository;
+        this.transactionTemplate = transactionTemplate;
+        this.clock = clock != null ? clock : Clock.systemUTC();
         this.maxVideoFileSizeBytes = maxVideoFileSizeBytes;
     }
 
@@ -113,11 +243,17 @@ public class PostService {
 
         Post post = Post.create(user, content);
         Post savedPost = postRepository.save(post);
+        hashtagService.attachToPost(savedPost);
+        mentionService.attachToPost(savedPost);
 
         return postResponseAssembler.toPostDetail(savedPost, user.getId());
     }
 
-    public PostDetailResponse create(CustomUserPrincipal principal, CreateMultipartPostRequest request) {
+    /**
+     * 사진·텍스트 게시물은 바로 만들어 반환한다. 영상은 검증·검열 후 처리 작업만 저장하고(비동기),
+     * 워커가 재인코딩을 마치면 게시물이 만들어진다.
+     */
+    public MultipartCreateResult create(CustomUserPrincipal principal, CreateMultipartPostRequest request) {
         User user = getCurrentUser(principal);
         String content = normalizeContent(request.getContent());
         List<MultipartFile> mediaFiles = normalizeMultipartFiles(request.getMediaFiles());
@@ -125,22 +261,94 @@ public class PostService {
 
         validateMultipartCreateRequest(content, mediaFiles, thumbnailFile);
         textSecurityService.assertTextSafe(content);
-        contentModerationService.assertPostAllowed(content, mediaFiles);
-        PreparedMediaUpload preparedMediaUpload = prepareMediaUpload(mediaFiles, thumbnailFile);
+        List<MultipartFile> moderatedFiles = new ArrayList<>(mediaFiles);
+        if (thumbnailFile != null) {
+            moderatedFiles.add(thumbnailFile);
+        }
+        contentModerationService.assertPostAllowed(content, moderatedFiles);
 
-        try {
-            Post post = Post.create(user, content);
-            Post savedPost = postRepository.save(post);
+        if (!mediaFiles.isEmpty() && resolveMediaType(mediaFiles.getFirst()) == PostMediaType.VIDEO) {
+            return MultipartCreateResult.ofVideoJob(
+                    postVideoJobService.enqueue(user, content, mediaFiles.getFirst(), thumbnailFile));
+        }
 
-            if (!preparedMediaUpload.isEmpty()) {
-                saveUploadedMedia(savedPost, preparedMediaUpload);
+        List<MediaStorageService.PreparedMediaFile> preparedImages = mediaFiles.stream()
+                .map(mediaUploadSecurityService::prepareImage)
+                .toList();
+
+        Post post = Post.create(user, content);
+        Post savedPost = postRepository.save(post);
+        hashtagService.attachToPost(savedPost);
+        mentionService.attachToPost(savedPost);
+
+        if (!preparedImages.isEmpty()) {
+            saveUploadedImages(savedPost, preparedImages);
+        }
+
+        return MultipartCreateResult.ofPost(postResponseAssembler.toPostDetail(savedPost, user.getId()));
+    }
+
+    public PostVideoJobResponse getVideoJob(CustomUserPrincipal principal, UUID jobId) {
+        User user = getCurrentUser(principal);
+        return postVideoJobService.getJob(user.getId(), jobId);
+    }
+
+    /**
+     * KP-C3 (#92): 멤버십 게시물 본문 수정.
+     * - E2: 작성자 본인, 삭제·숨김(report_counts.is_hidden) 아님, 1시간 이내, 요청 시점 멤버십 isActive,
+     * edit_count = 0 검증
+     * - E4: 비관적 쓰기 잠금(PESSIMISTIC_WRITE)으로 동시 수정을 직렬화하며, 본문이 동일하면 저장·차감 없음
+     * - E5: 생성과 동일한 텍스트 검사 및 ContentModerationService 검열 재적용 (행 잠금 전에 수행, 실패 시 edit_count 미차감)
+     * - E6: 해시태그·멘션 재파싱, 새로 추가된 멘션만 알림 생성, 제거된 멘션 알림 유지
+     */
+    // 외부 검열 동안 커넥션을 잡지 않도록 트랜잭션 없이 시작하고, 잠금·쓰기만 transactionTemplate으로 묶는다(바깥 트랜잭션이 있으면 참여).
+    @Transactional(propagation = Propagation.SUPPORTS)
+    public PostDetailResponse update(CustomUserPrincipal principal, UUID postId, UpdatePostRequest request) {
+        // 사용자 검증은 짧은 트랜잭션으로 하고(바깥 범위에서 조회하면 세션이 커넥션을 쥔다) 엔티티는 쓰기 트랜잭션에서 다시 조회한다.
+        transactionTemplate.execute(status -> getCurrentUser(principal));
+        // 외부 검열 호출 동안 행 잠금을 잡지 않도록 잠금 전에 본문 검사·검열을 끝낸다.
+        String content = normalizeContent(request != null ? request.content() : null);
+        validateCreateRequest(content);
+        textSecurityService.assertTextSafe(content);
+        contentModerationService.assertTextAllowed(content);
+
+        return transactionTemplate.execute(status -> {
+            User user = getCurrentUser(principal);
+            Post post = getActivePostForUpdate(postId);
+
+            if (reportCountRepository != null
+                    && reportCountRepository.existsByTargetTypeAndTargetIdAndIsHiddenTrue(ReportTargetType.POST, postId)) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found.");
             }
 
-            return postResponseAssembler.toPostDetail(savedPost, user.getId());
-        } catch (RuntimeException ex) {
-            preparedMediaUpload.deleteTemporaryFiles(mediaStorageService);
-            throw ex;
-        }
+            if (!post.getAuthor().getId().equals(user.getId())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the author can edit this post.");
+            }
+
+            if (membershipService == null || !membershipService.isActive(user.getId())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Active membership is required to edit posts.");
+            }
+
+            if (post.getEditCount() >= Post.MAX_EDIT_COUNT) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Post can only be edited once.");
+            }
+
+            OffsetDateTime editableUntil = post.editableUntil();
+            if (editableUntil == null || OffsetDateTime.now(clock).isAfter(editableUntil)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Post can only be edited within 1 hour of creation.");
+            }
+
+            if (Objects.equals(post.getContent(), content)) {
+                return postResponseAssembler.toPostDetail(post, user.getId());
+            }
+
+            post.editContent(content);
+            hashtagService.syncForPost(post);
+            mentionService.attachToPost(post);
+
+            return postResponseAssembler.toPostDetail(post, user.getId());
+        });
     }
 
     @Transactional(readOnly = true)
@@ -150,24 +358,34 @@ public class PostService {
         return postResponseAssembler.toPostDetail(post, user.getId());
     }
 
-    public void like(CustomUserPrincipal principal, UUID postId) {
+    @Transactional(readOnly = true)
+    public PostDetailResponse getDetailByNumber(CustomUserPrincipal principal, long postNumber) {
         User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
+        Post post = postRepository.findByPostNumberAndDeletedAtIsNull(postNumber)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found."));
+        return postResponseAssembler.toPostDetail(post, user.getId());
+    }
+
+    public void like(CustomUserPrincipal principal, UUID postId) {
+        User user = lockCurrentUser(principal);
+        Post post = getActivePostForUpdate(postId);
 
         if (postLikeRepository.existsByPostIdAndUserId(postId, user.getId())) {
             return;
         }
 
-        postLikeRepository.save(PostLike.create(post, user));
+        PostLike savedLike = postLikeRepository.save(PostLike.create(post, user));
         post.increaseLikeCount();
+        notificationCommandService.createLike(savedLike, post, user);
     }
 
     public void unlike(CustomUserPrincipal principal, UUID postId) {
-        User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
+        User user = lockCurrentUser(principal);
+        Post post = getActivePostForUpdate(postId);
 
         postLikeRepository.findByPostIdAndUserId(postId, user.getId())
                 .ifPresent(like -> {
+                    notificationCommandService.removeLike(postId, user.getId());
                     postLikeRepository.delete(like);
                     post.decreaseLikeCount();
                 });
@@ -175,7 +393,7 @@ public class PostService {
 
     public void delete(CustomUserPrincipal principal, UUID postId) {
         User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
+        Post post = getActivePostForUpdate(postId);
 
         if (!post.getAuthor().getId().equals(user.getId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the author can delete this post.");
@@ -185,49 +403,48 @@ public class PostService {
     }
 
     public void bookmark(CustomUserPrincipal principal, UUID postId) {
-        User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
-
-        if (postBookmarkRepository.existsByPostIdAndUserId(postId, user.getId())) {
-            return;
-        }
-
-        postBookmarkRepository.save(PostBookmark.create(post, user));
+        postBookmarkCommandService.bookmark(principal, postId);
     }
 
     public void unbookmark(CustomUserPrincipal principal, UUID postId) {
-        User user = getCurrentUser(principal);
-        getActivePost(postId);
-
-        postBookmarkRepository.findByPostIdAndUserId(postId, user.getId())
-                .ifPresent(postBookmarkRepository::delete);
+        postBookmarkCommandService.unbookmark(principal, postId);
     }
 
     public ShareResponse share(CustomUserPrincipal principal, UUID postId, CreateShareRequest request) {
         User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
+        Post post = getActivePostForUpdate(postId);
         ShareTarget target = request != null ? request.normalizedTarget() : ShareTarget.COPY_LINK;
 
         postShareRepository.save(PostShare.create(post, user, target));
         post.increaseShareCount();
 
-        return new ShareResponse(post.getId(), post.getShareCount());
+        return new ShareResponse(post.getId(), post.getPostNumber(), post.getShareCount());
     }
 
+    // 외부 검열 동안 커넥션을 잡지 않도록 트랜잭션 없이 시작하고, 잠금·쓰기만 transactionTemplate으로 묶는다(바깥 트랜잭션이 있으면 참여).
+    @Transactional(propagation = Propagation.SUPPORTS)
     public CommentResponse createComment(CustomUserPrincipal principal, UUID postId, CreateCommentRequest request) {
-        User user = getCurrentUser(principal);
-        Post post = getActivePost(postId);
+        // 사용자 검증은 짧은 트랜잭션으로 하고(바깥 범위에서 조회하면 세션이 커넥션을 쥔다) 엔티티는 쓰기 트랜잭션에서 다시 조회한다.
+        transactionTemplate.execute(status -> getCurrentUser(principal));
         String content = normalizeContent(request.content());
 
         if (content == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Comment content is required.");
         }
+        // 외부 검열 호출 동안 게시물 행 잠금을 잡지 않도록 잠금 전에 검열한다.
         textSecurityService.assertTextSafe(content);
         contentModerationService.assertTextAllowed(content);
 
-        PostComment savedComment = postCommentRepository.save(PostComment.create(post, user, content));
-        post.increaseCommentCount();
-        return postResponseAssembler.toCommentResponse(savedComment, user.getId());
+        return transactionTemplate.execute(status -> {
+            User user = getCurrentUser(principal);
+            Post post = getActivePostForUpdate(postId);
+
+            PostComment savedComment = postCommentRepository.save(PostComment.create(post, user, content));
+            post.increaseCommentCount();
+            notificationCommandService.createComment(savedComment, post, user);
+            mentionService.attachToComment(savedComment);
+            return postResponseAssembler.toCommentResponse(savedComment, user.getId());
+        });
     }
 
     @Transactional(readOnly = true)
@@ -235,14 +452,12 @@ public class PostService {
         User user = getCurrentUser(principal);
         getActivePost(postId);
 
-        return postCommentRepository.findActiveByPostId(postId)
-                .stream()
-                .map(comment -> postResponseAssembler.toCommentResponse(comment, user.getId()))
-                .toList();
+        return postResponseAssembler.toCommentResponses(postCommentRepository.findActiveByPostId(postId), user.getId());
     }
 
     public void deleteComment(CustomUserPrincipal principal, UUID postId, UUID commentId) {
         User user = getCurrentUser(principal);
+        Post post = getActivePostForUpdate(postId);
         PostComment comment = postCommentRepository.findActiveByPostIdAndId(postId, commentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Comment not found."));
 
@@ -250,73 +465,48 @@ public class PostService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the author can delete this comment.");
         }
 
+        notificationCommandService.removeComment(commentId);
+        mentionService.removeForComment(commentId);
         postCommentRepository.delete(comment);
-        comment.getPost().decreaseCommentCount();
+        post.decreaseCommentCount();
     }
 
-    private void saveUploadedMedia(
-            Post post,
-            PreparedMediaUpload preparedMediaUpload
-    ) {
+    private void saveUploadedImages(Post post, List<MediaStorageService.PreparedMediaFile> preparedImages) {
         List<MediaStorageService.StoredFile> storedFiles = new ArrayList<>();
 
         try {
-            MediaStorageService.StoredFile storedThumbnail = null;
-            if (preparedMediaUpload.preparedThumbnailFile() != null) {
-                storedThumbnail = mediaStorageService.storePostMedia(preparedMediaUpload.preparedThumbnailFile());
-                storedFiles.add(storedThumbnail);
-            }
-
             List<PostMedia> mediaToSave = new ArrayList<>();
-            for (int index = 0; index < preparedMediaUpload.mediaCount(); index++) {
-                MediaStorageService.StoredFile storedMedia;
-                if (preparedMediaUpload.mediaType() == PostMediaType.IMAGE) {
-                    storedMedia = mediaStorageService.storePostMedia(preparedMediaUpload.preparedImageFiles().get(index));
-                } else {
-                    storedMedia = mediaStorageService.storePostMedia(preparedMediaUpload.preparedVideoFiles().get(index));
-                }
+            for (int index = 0; index < preparedImages.size(); index++) {
+                MediaStorageService.StoredFile storedMedia = mediaStorageService.storePostMedia(preparedImages.get(index));
                 storedFiles.add(storedMedia);
-                mediaToSave.add(PostMedia.create(
-                        post,
-                        preparedMediaUpload.mediaType(),
-                        storedMedia.publicUrl(),
-                        storedThumbnail != null ? storedThumbnail.publicUrl() : null,
-                        index
-                ));
+                mediaToSave.add(PostMedia.create(post, PostMediaType.IMAGE, storedMedia.publicUrl(), null, index));
             }
 
             postMediaRepository.saveAll(mediaToSave);
+            deleteFilesOnRollback(storedFiles);
         } catch (Exception ex) {
             storedFiles.forEach(mediaStorageService::deleteQuietly);
             if (ex instanceof ResponseStatusException responseStatusException) {
                 throw responseStatusException;
             }
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to upload media files.", ex);
-        } finally {
-            preparedMediaUpload.deleteTemporaryFiles(mediaStorageService);
         }
     }
 
-    private PreparedMediaUpload prepareMediaUpload(List<MultipartFile> mediaFiles, MultipartFile thumbnailFile) {
-        if (mediaFiles.isEmpty()) {
-            return PreparedMediaUpload.empty();
+    // 응답 조립이나 COMMIT이 실패해도 저장된 파일이 고아로 남지 않게 한다.
+    private void deleteFilesOnRollback(List<MediaStorageService.StoredFile> storedFiles) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
         }
-
-        PostMediaType mediaType = resolveMediaType(mediaFiles.getFirst());
-        if (mediaType == PostMediaType.IMAGE) {
-            List<MediaStorageService.PreparedMediaFile> preparedImageFiles = mediaFiles.stream()
-                    .map(mediaUploadSecurityService::prepareImage)
-                    .toList();
-            return new PreparedMediaUpload(mediaType, preparedImageFiles, List.of(), null);
-        }
-
-        List<MediaStorageService.PreparedMediaPath> preparedVideoFiles = mediaFiles.stream()
-                .map(videoOptimizationService::prepareVideo)
-                .toList();
-        MediaStorageService.PreparedMediaFile preparedThumbnailFile = thumbnailFile == null
-                ? null
-                : mediaUploadSecurityService.prepareImage(thumbnailFile);
-        return new PreparedMediaUpload(mediaType, List.of(), preparedVideoFiles, preparedThumbnailFile);
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                // STATUS_UNKNOWN은 커밋됐을 수 있으므로 파일을 유지한다.
+                if (status == STATUS_ROLLED_BACK) {
+                    storedFiles.forEach(mediaStorageService::deleteQuietly);
+                }
+            }
+        });
     }
 
     private void validateCreateRequest(String content) {
@@ -328,8 +518,7 @@ public class PostService {
     private void validateMultipartCreateRequest(
             String content,
             List<MultipartFile> mediaFiles,
-            MultipartFile thumbnailFile
-    ) {
+            MultipartFile thumbnailFile) {
         if (content == null && mediaFiles.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Content or media is required.");
         }
@@ -375,7 +564,8 @@ public class PostService {
             validateVideoConstraints(mediaFiles.getFirst());
         } else {
             if (thumbnailFile != null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thumbnail file is only allowed for video uploads.");
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Thumbnail file is only allowed for video uploads.");
             }
         }
     }
@@ -444,13 +634,29 @@ public class PostService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found."));
     }
 
+    private Post getActivePostForUpdate(UUID postId) {
+        return postRepository.findActiveByIdForUpdate(postId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found."));
+    }
+
     private User getCurrentUser(CustomUserPrincipal principal) {
         if (principal == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication is required.");
         }
 
         return userRepository.findByIdAndDeletedAtIsNull(principal.getUserId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
+                .orElseThrow(
+                        () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
+    }
+
+    private User lockCurrentUser(CustomUserPrincipal principal) {
+        if (principal == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication is required.");
+        }
+
+        return userRepository.findActiveByIdForUpdate(principal.getUserId())
+                .orElseThrow(
+                        () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
     }
 
     private String normalizeContent(String content) {
@@ -466,27 +672,15 @@ public class PostService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    private record PreparedMediaUpload(
-            PostMediaType mediaType,
-            List<MediaStorageService.PreparedMediaFile> preparedImageFiles,
-            List<MediaStorageService.PreparedMediaPath> preparedVideoFiles,
-            MediaStorageService.PreparedMediaFile preparedThumbnailFile
-    ) {
+    /** 사진·텍스트 게시물이면 post, 영상 게시물이면 처리 작업(videoJob) 중 하나만 채운다. */
+    public record MultipartCreateResult(PostDetailResponse post, PostVideoJobResponse videoJob) {
 
-        private static PreparedMediaUpload empty() {
-            return new PreparedMediaUpload(null, List.of(), List.of(), null);
+        static MultipartCreateResult ofPost(PostDetailResponse post) {
+            return new MultipartCreateResult(post, null);
         }
 
-        private boolean isEmpty() {
-            return preparedImageFiles.isEmpty() && preparedVideoFiles.isEmpty();
-        }
-
-        private int mediaCount() {
-            return mediaType == PostMediaType.IMAGE ? preparedImageFiles.size() : preparedVideoFiles.size();
-        }
-
-        private void deleteTemporaryFiles(MediaStorageService mediaStorageService) {
-            preparedVideoFiles.forEach(mediaStorageService::deleteQuietly);
+        static MultipartCreateResult ofVideoJob(PostVideoJobResponse videoJob) {
+            return new MultipartCreateResult(null, videoJob);
         }
     }
 }

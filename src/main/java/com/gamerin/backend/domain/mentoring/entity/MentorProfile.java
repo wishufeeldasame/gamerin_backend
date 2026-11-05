@@ -38,7 +38,7 @@ public class MentorProfile implements Persistable<UUID> {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private MentorStatus status = MentorStatus.ACTIVE;
+    private MentorStatus status = MentorStatus.PENDING_APPROVAL;
 
     private String about;
 

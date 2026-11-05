@@ -1,0 +1,81 @@
+{
+  "platform_families_full_profiles": [
+    {
+      "board_ids_full_profiles": [
+        {
+          "board_id": "ranked",
+          "full_profiles": [
+            {
+              "season_id": 42,
+              "profile": { "wins": 0, "losses": 0, "abandon": 0 }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "data": {
+    "platformInfo": {
+      "platformUserId": "normal-account",
+      "platformUserHandle": "NormalPlayer"
+    },
+    "metadata": {
+      "currentSeason": 42
+    },
+    "segments": [
+      {
+        "attributes": {
+          "season": 42,
+          "gamemode": "pvp_ranked",
+          "platform": "pc",
+          "sessionType": "ranked"
+        },
+        "stats": {
+          "matchesPlayed": { "value": 0 },
+          "kdRatio": { "value": 0.0 }
+        }
+      },
+      {
+        "attributes": {
+          "gamemode": "pvp_quickplay",
+          "platform": "pc",
+          "sessionType": "quickplay"
+        },
+        "stats": {
+          "matchesPlayed": { "value": 50 },
+          "matchesWon": { "value": 24 },
+          "matchesLost": { "value": 24 },
+          "kdRatio": { "value": 1.41 }
+        }
+      },
+      {
+        "attributes": {
+          "season": 40,
+          "gamemode": "pvp_casual",
+          "platform": "pc",
+          "sessionType": "quick-match"
+        },
+        "stats": {
+          "matchesPlayed": { "value": 80 },
+          "matchesWon": { "value": 70 },
+          "matchesLost": { "value": 10 },
+          "kdRatio": { "value": 9.0 }
+        }
+      },
+      {
+        "attributes": {
+          "season": 34,
+          "gamemode": "pvp_standard",
+          "platform": "pc",
+          "sessionType": "standard"
+        },
+        "stats": {
+          "matchesPlayed": { "value": 70 },
+          "matchesWon": { "value": 60 },
+          "matchesLost": { "value": 10 },
+          "kdRatio": { "value": 8.0 }
+        }
+      }
+    ]
+  }
+}

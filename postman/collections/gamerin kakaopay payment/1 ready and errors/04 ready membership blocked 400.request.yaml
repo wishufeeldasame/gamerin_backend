@@ -1,0 +1,25 @@
+$kind: http-request
+method: POST
+url: '{{baseUrl}}/api/v1/payments/kakao/ready'
+order: 6000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "productCode": "MEMBERSHIP_30D",
+      "requestId": "{{$guid}}"
+    }
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{userAToken}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('HTTP 400', () => pm.response.to.have.status(400));
+      // 이용권 ready는 #87 MembershipService 머지 전까지 거부한다.

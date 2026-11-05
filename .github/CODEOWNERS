@@ -1,0 +1,18 @@
+# 아래쪽 규칙이 우선한다. 소유자는 develop 커밋 기록 기준으로 정했다.
+*  @wishufeeldasame
+/src/main/java/com/gamerin/backend/domain/admin/  @lsh050121
+/src/main/java/com/gamerin/backend/domain/mentoring/  @lsh050121
+/src/main/java/com/gamerin/backend/domain/report/  @lsh050121
+/src/main/java/com/gamerin/backend/domain/user/  @lsh050121
+/src/main/java/com/gamerin/backend/domain/bookmark/  @WhiteB1ossom
+/src/main/java/com/gamerin/backend/domain/follow/  @WhiteB1ossom
+/src/main/java/com/gamerin/backend/domain/game/  @WhiteB1ossom
+/src/main/java/com/gamerin/backend/domain/hashtag/  @WhiteB1ossom
+/src/main/java/com/gamerin/backend/domain/membership/  @WhiteB1ossom
+/src/main/java/com/gamerin/backend/domain/mention/  @WhiteB1ossom
+/src/main/java/com/gamerin/backend/domain/notification/  @WhiteB1ossom
+/src/main/java/com/gamerin/backend/domain/pubg/  @WhiteB1ossom
+/src/main/java/com/gamerin/backend/domain/r6/  @WhiteB1ossom
+/src/main/java/com/gamerin/backend/domain/repost/  @WhiteB1ossom
+/src/main/java/com/gamerin/backend/domain/riot/  @WhiteB1ossom
+/src/main/java/com/gamerin/backend/domain/search/  @WhiteB1ossom

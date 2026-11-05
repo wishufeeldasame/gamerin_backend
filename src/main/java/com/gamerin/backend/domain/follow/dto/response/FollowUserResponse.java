@@ -10,6 +10,7 @@ public record FollowUserResponse(
         String bio,
         String profileImageUrl,
         boolean verifiedBadge,
+        boolean membershipBadge,
         boolean isFollowing,
         OffsetDateTime followedAt
 ) {
