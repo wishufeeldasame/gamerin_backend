@@ -3,8 +3,13 @@ package com.gamerin.backend.domain.valorant.service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.game.model.GameType;
@@ -40,6 +45,18 @@ public class ValorantService {
     private static final String UNRATED = "Unrated";
     // HenrikDev Basic 키는 분당 30회라 사용자별 외부 재조회 간격을 둔다.
     static final Duration REFRESH_COOLDOWN = Duration.ofMinutes(10);
+    // 연동은 해제 후 재연동으로 쿨다운을 우회할 수 있어 사용자별 시도 횟수로 제한한다(시도당 외부 호출 최대 3회).
+    static final int MAX_CONNECT_ATTEMPTS = 3;
+    static final Duration CONNECT_ATTEMPT_WINDOW = Duration.ofMinutes(10);
+    private static final int MAX_TRACKED_USERS = 10_000;
+
+    // shortcut: 인스턴스 메모리 기록이라 서버를 여러 대로 늘리거나 재시작하면 제한이 나뉘거나 초기화된다. 확장 시 공유 저장소로 옮긴다.
+    private final Map<UUID, Deque<Instant>> connectAttempts = new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<UUID, Deque<Instant>> eldest) {
+            return size() > MAX_TRACKED_USERS;
+        }
+    };
 
     private final UserRepository userRepository;
     private final HenrikValorantClient henrikValorantClient;
@@ -57,6 +74,7 @@ public class ValorantService {
         getCurrentProfile(user);
         String[] riotId = parseRiotId(request.riotId());
         ValorantRegion region = request.region();
+        recordConnectAttempt(user.getId());
 
         ValorantAccount account = henrikValorantClient.findAccount(riotId[0], riotId[1]);
         if (userRepository.existsConnectedValorantPuuidByOtherUser(user.getId(), account.puuid())) {
@@ -144,6 +162,22 @@ public class ValorantService {
                 Math.round(wins * 100f / matches.size()),
                 matches.size()
         );
+    }
+
+    private void recordConnectAttempt(UUID userId) {
+        Instant now = Instant.now();
+        Instant windowStart = now.minus(CONNECT_ATTEMPT_WINDOW);
+        synchronized (connectAttempts) {
+            Deque<Instant> attempts = connectAttempts.computeIfAbsent(userId, id -> new ArrayDeque<>());
+            while (!attempts.isEmpty() && attempts.peekFirst().isBefore(windowStart)) {
+                attempts.pollFirst();
+            }
+            if (attempts.size() >= MAX_CONNECT_ATTEMPTS) {
+                throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                        "발로란트 연동 시도가 너무 많습니다. 10분 뒤 다시 시도해 주세요.");
+            }
+            attempts.addLast(now);
+        }
     }
 
     private String[] parseRiotId(String value) {

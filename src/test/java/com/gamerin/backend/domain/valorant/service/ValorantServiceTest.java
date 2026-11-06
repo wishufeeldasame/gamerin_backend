@@ -115,6 +115,24 @@ class ValorantServiceTest {
     }
 
     @Test
+    void connectAttemptsArePerUserLimitedBeforeCallingApi() {
+        User user = savedUser();
+        when(client.findAccount("Missing", "KR1"))
+                .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "존재하지 않는 Riot ID 또는 태그입니다."));
+        ValorantConnectRequest request = new ValorantConnectRequest("Missing#KR1", ValorantRegion.KR);
+        for (int i = 0; i < ValorantService.MAX_CONNECT_ATTEMPTS; i++) {
+            assertThatThrownBy(() -> service.connect(CustomUserPrincipal.from(user), request))
+                    .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                    .isEqualTo(HttpStatus.NOT_FOUND.value());
+        }
+
+        assertThatThrownBy(() -> service.connect(CustomUserPrincipal.from(user), request))
+                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS.value());
+        verify(client, org.mockito.Mockito.times(ValorantService.MAX_CONNECT_ATTEMPTS)).findAccount("Missing", "KR1");
+    }
+
+    @Test
     void connectRejectsAccountOwnedByAnotherUser() {
         User user = savedUser();
         when(client.findAccount("Name", "KR1")).thenReturn(new ValorantAccount("henrik-puuid", "Name", "KR1"));
