@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.post.repository.PostViewCommandRepository;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -55,9 +56,9 @@ public class PostViewService {
         if (userRepository.findActiveByIdForUpdate(userId).isEmpty()) {
             return 0;
         }
-        // 정렬: 여러 요청이 겹치는 글을 반대 순서로 잠가 교착하지 않게 한다.
-        List<UUID> activeIds = postRepository.findActiveIdsIn(postIds.stream().collect(Collectors.toSet()))
-                .stream().sorted().toList();
+        // 글 행을 먼저 잠근 뒤 활성 여부를 확인하므로, 판정과 쓰기 사이에 숨김이 끼어들어 24시간 중복만 남는 일이 없다.
+        List<UUID> activeIds = postRepository.lockActiveIn(postIds.stream().collect(Collectors.toSet()))
+                .stream().map(Post::getId).toList();
         OffsetDateTime now = OffsetDateTime.now(clock);
         OffsetDateTime cutoff = now.minus(DEDUP_WINDOW);
         int counted = 0;

@@ -62,6 +62,7 @@ public class AccountWithdrawalService {
         withdrawalRepository.deleteFollows(userId);
         withdrawalRepository.deleteBookmarkCollections(userId);
         withdrawalRepository.deletePostBookmarks(userId);
+        withdrawalRepository.deletePostViews(userId); // 열람 이력만 지운다. 글의 누적 조회수는 유지
         withdrawalRepository.deleteNotifications(userId);
         withdrawalRepository.deleteMentionsOfUser(userId);
         withdrawalRepository.deleteSocialAccounts(userId);

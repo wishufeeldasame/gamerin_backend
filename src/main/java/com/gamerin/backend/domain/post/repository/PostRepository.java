@@ -22,8 +22,10 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
 
     Optional<Post> findByPostNumberAndDeletedAtIsNull(Long postNumber);
 
-    @Query("select p.id from Post p where p.id in :ids and p.deletedAt is null")
-    java.util.List<UUID> findActiveIdsIn(@Param("ids") java.util.Collection<UUID> ids);
+    /** 활성 글만 id 순으로 행 잠금한다. 순서를 DB가 정해 겹치는 배치끼리 교착하지 않고, 잠근 뒤에는 숨김·삭제가 끼어들 수 없다. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from Post p where p.id in :ids and p.deletedAt is null order by p.id")
+    java.util.List<Post> lockActiveIn(@Param("ids") java.util.Collection<UUID> ids);
 
     @Query("""
         select p

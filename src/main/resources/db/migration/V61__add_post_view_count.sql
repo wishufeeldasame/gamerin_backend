@@ -8,3 +8,6 @@ CREATE TABLE post_views (
     viewed_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (post_id, user_id)
 );
+
+-- 회원 탈퇴 시 user_id로 열람 이력을 지운다(PK는 post_id가 앞이라 user_id 조회를 지원하지 않는다).
+CREATE INDEX idx_post_views_user ON post_views(user_id);
