@@ -59,6 +59,10 @@ public class Post {
     @Column(name = "share_count", nullable = false)
     private long shareCount;
 
+    // 조회수는 PostViewRepository가 원자적으로 증가시킨다. 엔티티 UPDATE가 오래된 값을 덮어쓰지 않도록 updatable=false.
+    @Column(name = "view_count", nullable = false, updatable = false)
+    private long viewCount;
+
     /** KP-C3 (#92): 게시물 수정 횟수 (0~1, SMALLINT) */
     @JdbcTypeCode(SqlTypes.SMALLINT)
     @Column(name = "edit_count", nullable = false)
@@ -97,6 +101,10 @@ public class Post {
     @PreUpdate
     protected void onUpdate() {
         this.updatedAt = OffsetDateTime.now();
+    }
+
+    public long getViewCount() {
+        return viewCount;
     }
 
     public void increaseLikeCount() {

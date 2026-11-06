@@ -1178,6 +1178,7 @@ class PostServiceTest {
                 0,
                 0,
                 0,
+                0,
                 false,
                 0,
                 null,

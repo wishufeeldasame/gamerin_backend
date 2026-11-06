@@ -22,6 +22,9 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
 
     Optional<Post> findByPostNumberAndDeletedAtIsNull(Long postNumber);
 
+    @Query("select p.id from Post p where p.id in :ids and p.deletedAt is null")
+    java.util.List<UUID> findActiveIdsIn(@Param("ids") java.util.Collection<UUID> ids);
+
     @Query("""
         select p
         from Post p
