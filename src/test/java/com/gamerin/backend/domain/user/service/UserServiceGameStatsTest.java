@@ -19,6 +19,7 @@ import com.gamerin.backend.domain.post.service.MediaStorageService;
 import com.gamerin.backend.domain.post.service.MediaUploadSecurityService;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
+import com.gamerin.backend.domain.valorant.model.ValorantSummaryStats;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -181,6 +182,29 @@ class UserServiceGameStatsTest {
         assertThat(nestedMap(response.gameStats(), "R6"))
                 .containsEntry("playerNameNormalized", "r6player")
                 .doesNotContainKey("accountId");
+    }
+
+    @Test
+    void valorantPuuidIsHiddenFromOwnAndPublicProfilesAndRiotIdOnlyFromPublic() {
+        User user = savedUser(UUID.randomUUID(), "target", "Target");
+        user.getProfile().connectValorant("player#KR1", "henrik-puuid", "KR", "PC",
+                new ValorantSummaryStats("Gold 2", "Platinum 1", 40, 1.25, 230, 24, 60, 10), null);
+
+        when(userRepository.findByIdAndDeletedAtIsNull(user.getId())).thenReturn(Optional.of(user));
+        when(userRepository.findByHandleAndDeletedAtIsNull("target")).thenReturn(Optional.of(user));
+
+        assertThat(nestedMap(userService.getMyProfile(user.getId()).gameStats(), "VALORANT"))
+                .containsEntry("riotId", "player#KR1")
+                .containsEntry("peakTierLabel", "Platinum 1")
+                .doesNotContainKey("puuid");
+        assertThat(nestedMap(userService.getProfile(null, "target").gameStats(), "VALORANT"))
+                .containsEntry("tierLabel", "Gold 2")
+                .containsEntry("peakTierLabel", "Platinum 1")
+                .containsEntry("kd", 1.25)
+                .containsEntry("acs", 230)
+                .containsEntry("headshotRate", 24)
+                .containsEntry("region", "KR")
+                .doesNotContainKeys("puuid", "riotId");
     }
 
     @Test

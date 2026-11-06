@@ -56,7 +56,7 @@ package com.gamerin.backend.domain.riot.controller;
         @DeleteMapping("/disconnect")
         @Operation(
                 summary = "Riot 계정 연동 해제",
-                description = "연동된 Riot 계정 데이터 및 저장된 LoL, Valorant 요약 정보를 전체 삭제합니다."
+                description = "연동된 Riot 계정 데이터와 저장된 LoL 요약 정보를 삭제합니다. 발로란트 연동(/api/v1/valorant)은 별개라 유지됩니다."
         )
         public ApiResponse<Void> disconnect(
                 @AuthenticationPrincipal CustomUserPrincipal principal

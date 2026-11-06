@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.auth.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -174,7 +175,9 @@ class SignupConsentIntegrationTest {
         List<UserConsent> consents = userConsentRepository.findAllByUserId(userId);
         assertThat(consents).extracting(UserConsent::getConsentType)
                 .containsExactlyInAnyOrder(ConsentType.TERMS, ConsentType.PRIVACY, ConsentType.AGE_14);
-        assertThat(consents).extracting(UserConsent::getVersion).containsOnly("1.0");
+        assertThat(consents).extracting(UserConsent::getConsentType, UserConsent::getVersion)
+                .containsExactlyInAnyOrder(
+                        tuple(ConsentType.TERMS, "1.0"), tuple(ConsentType.PRIVACY, "1.1"), tuple(ConsentType.AGE_14, "1.0"));
         assertThat(consents).extracting(UserConsent::getAgreedAt).doesNotContainNull()
                 .containsOnly(consents.get(0).getAgreedAt());
     }
@@ -216,7 +219,7 @@ class SignupConsentIntegrationTest {
 
     private Map<String, Object> consentFields() {
         return Map.of("agreedToTerms", true, "agreedToPrivacy", true, "agreedToAge14", true,
-                "termsVersion", "1.0", "privacyVersion", "1.0");
+                "termsVersion", "1.0", "privacyVersion", "1.1");
     }
 
     private String verifyEmail(String email) throws Exception {

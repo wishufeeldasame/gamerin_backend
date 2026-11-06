@@ -7,7 +7,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 public enum GameAccountConflict {
     R6("uq_user_profiles_connected_r6_account", "이미 다른 유저가 사용 중인 R6 계정입니다."),
-    RIOT("uq_user_profiles_connected_riot_puuid", "이미 다른 유저가 연동한 Riot 계정입니다.");
+    RIOT("uq_user_profiles_connected_riot_puuid", "이미 다른 유저가 연동한 Riot 계정입니다."),
+    VALORANT("uq_user_profiles_connected_valorant_puuid", "이미 다른 유저가 연동한 발로란트 계정입니다.");
 
     private final String constraintName;
     private final String message;
