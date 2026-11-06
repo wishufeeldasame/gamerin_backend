@@ -3,6 +3,8 @@ package com.gamerin.backend.domain.post.controller;
 import java.util.List;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -21,12 +23,15 @@ import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateShareRequest;
+import com.gamerin.backend.domain.post.dto.request.RecordPostViewsRequest;
 import com.gamerin.backend.domain.post.dto.request.UpdatePostRequest;
 import com.gamerin.backend.domain.post.dto.response.CommentResponse;
 import com.gamerin.backend.domain.post.dto.response.PostDetailResponse;
 import com.gamerin.backend.domain.post.dto.response.PostVideoJobResponse;
+import com.gamerin.backend.domain.post.dto.response.RecordPostViewsResponse;
 import com.gamerin.backend.domain.post.dto.response.ShareResponse;
 import com.gamerin.backend.domain.post.service.PostService;
+import com.gamerin.backend.domain.post.service.PostViewService;
 import com.gamerin.backend.domain.repost.dto.response.RepostActionResponse;
 import com.gamerin.backend.domain.repost.service.PostRepostService;
 import com.gamerin.backend.global.response.ApiResponse;
@@ -40,12 +45,17 @@ import jakarta.validation.Valid;
 @SecurityRequirement(name = "bearerAuth")
 public class PostController {
 
+    private static final Logger log = LoggerFactory.getLogger(PostController.class);
+
     private final PostService postService;
     private final PostRepostService postRepostService;
+    private final PostViewService postViewService;
 
-    public PostController(PostService postService, PostRepostService postRepostService) {
+    public PostController(PostService postService, PostRepostService postRepostService,
+            PostViewService postViewService) {
         this.postService = postService;
         this.postRepostService = postRepostService;
+        this.postViewService = postViewService;
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -92,14 +102,36 @@ public class PostController {
     public ApiResponse<PostDetailResponse> getDetail(
             @AuthenticationPrincipal CustomUserPrincipal principal,
             @PathVariable UUID postId) {
-        return ApiResponse.ok(postService.getDetail(principal, postId));
+        PostDetailResponse detail = postService.getDetail(principal, postId);
+        recordDetailView(principal, detail);
+        return ApiResponse.ok(detail);
     }
 
     @GetMapping("/by-number/{postNumber}")
     public ApiResponse<PostDetailResponse> getDetailByNumber(
             @AuthenticationPrincipal CustomUserPrincipal principal,
             @PathVariable long postNumber) {
-        return ApiResponse.ok(postService.getDetailByNumber(principal, postNumber));
+        PostDetailResponse detail = postService.getDetailByNumber(principal, postNumber);
+        recordDetailView(principal, detail);
+        return ApiResponse.ok(detail);
+    }
+
+    /** 피드 카드 노출 보고. 24시간 중복·삭제·숨김 글은 세지 않고 조용히 건너뛴다. */
+    @PostMapping("/views")
+    public ApiResponse<RecordPostViewsResponse> recordViews(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @Valid @RequestBody RecordPostViewsRequest request) {
+        return ApiResponse.ok(new RecordPostViewsResponse(
+                postViewService.record(principal.getUserId(), request.postIds())));
+    }
+
+    // 읽기 응답은 이미 만들었으므로(이번 조회는 다음 응답부터 반영) 집계 실패가 상세 조회를 막지 않게 한다.
+    private void recordDetailView(CustomUserPrincipal principal, PostDetailResponse detail) {
+        try {
+            postViewService.record(principal.getUserId(), List.of(detail.postId()));
+        } catch (RuntimeException ex) {
+            log.warn("Failed to record post view postId={}", detail.postId(), ex);
+        }
     }
 
     @DeleteMapping("/{postId}")

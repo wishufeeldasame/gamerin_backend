@@ -93,6 +93,7 @@ class AccountWithdrawalPostgresTest {
         jdbcTemplate.update("insert into notifications (recipient_id, actor_id, type, follow_id) values (?, ?, 'FOLLOW', ?)",
                 other.getId(), leaverId, followId);
         jdbcTemplate.update("insert into post_bookmarks (post_id, user_id) values (?, ?)", otherPostId, leaverId);
+        jdbcTemplate.update("insert into post_views (post_id, user_id, viewed_at) values (?, ?, now())", otherPostId, leaverId);
         jdbcTemplate.update("""
                 insert into social_accounts (user_id, provider, provider_user_id) values (?, 'GOOGLE', ?)
                 """, leaverId, "google-" + leaverId);
@@ -121,6 +122,7 @@ class AccountWithdrawalPostgresTest {
         assertThat(count("select count(*) from follows where follower_id = ? or followee_id = ?", leaverId, leaverId)).isZero();
         assertThat(count("select count(*) from notifications where actor_id = ? or recipient_id = ?", leaverId, leaverId)).isZero();
         assertThat(count("select count(*) from post_bookmarks where user_id = ?", leaverId)).isZero();
+        assertThat(count("select count(*) from post_views where user_id = ?", leaverId)).isZero();
         assertThat(count("select count(*) from social_accounts where user_id = ?", leaverId)).isZero();
         assertThat(count("select count(*) from mentor_profiles where user_id = ? and status = 'INACTIVE' and about is null",
                 leaverId)).isEqualTo(1);

@@ -88,6 +88,10 @@ public interface UserWithdrawalRepository extends Repository<User, UUID> {
     int deletePostBookmarks(@Param("userId") UUID userId);
 
     @Modifying(flushAutomatically = true)
+    @Query(value = "DELETE FROM post_views WHERE user_id = :userId", nativeQuery = true)
+    int deletePostViews(@Param("userId") UUID userId);
+
+    @Modifying(flushAutomatically = true)
     @Query(value = "DELETE FROM notifications WHERE recipient_id = :userId OR actor_id = :userId", nativeQuery = true)
     int deleteNotifications(@Param("userId") UUID userId);
 
