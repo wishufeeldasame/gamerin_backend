@@ -24,6 +24,7 @@ import com.gamerin.backend.domain.follow.entity.Follow;
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
 import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.notification.service.NotificationCommandService;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -215,6 +216,7 @@ public class FollowService {
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
                 membershipBadge,
+                RepresentativeTierResponse.from(profile),
                 isFollowing,
                 followedAt
         );

@@ -30,7 +30,10 @@ import com.gamerin.backend.domain.repost.dto.response.ReposterInfoResponse;
 import com.gamerin.backend.domain.repost.model.PostTimelineItem;
 import com.gamerin.backend.domain.repost.repository.RepostQueryRepository;
 import com.gamerin.backend.domain.user.entity.User;
+import com.gamerin.backend.domain.game.model.GameType;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 import com.gamerin.backend.domain.user.entity.UserProfile;
+import com.gamerin.backend.domain.user.repository.UserProfileRepository;
 
 @ExtendWith(MockitoExtension.class)
 class PostResponseAssemblerTest {
@@ -50,6 +53,9 @@ class PostResponseAssemblerTest {
     @Mock
     private MembershipService membershipService;
 
+    @Mock
+    private UserProfileRepository userProfileRepository;
+
     @InjectMocks
     private PostResponseAssembler assembler;
 
@@ -64,7 +70,7 @@ class PostResponseAssemblerTest {
         when(membershipService.findActiveUserIds(anyCollection())).thenReturn(Set.of(reposterId));
 
         var responses = assembler.toTimelinePostCards(List.of(
-                new PostTimelineItem(first, new ReposterInfoResponse(reposterId, "Reposter", repostedAt, false),
+                new PostTimelineItem(first, new ReposterInfoResponse(reposterId, "Reposter", repostedAt, false, null),
                         repostedAt),
                 new PostTimelineItem(second, null, repostedAt)), author.getId());
 
@@ -75,6 +81,44 @@ class PostResponseAssemblerTest {
         assertThat(responses.getLast().reposterInfo()).isNull();
         verify(membershipService).findActiveUserIds(Set.of(author.getId(), inactive.getId(), reposterId));
         verifyNoMoreInteractions(membershipService);
+    }
+
+    @Test
+    void timelineReadsReposterTiersInOneBatchAndAuthorTiersFromLoadedProfiles() {
+        User author = user("author", false);
+        author.getProfile().connectRiot("author#KR1", "puuid");
+        author.getProfile().updateLolSummary("GOLD I", 3.0, 52, 100);
+        author.getProfile().changeRepresentativeGame(GameType.LOL);
+        User reposter = user("reposter", false);
+        reposter.getProfile().connectPubg("pubgPlayer", "account.pubg");
+        reposter.getProfile().updatePubgSummary("Gold III", 1.0, 10, 5, null);
+        reposter.getProfile().changeRepresentativeGame(GameType.PUBG);
+        OffsetDateTime repostedAt = OffsetDateTime.parse("2026-10-15T00:00:00Z");
+        when(userProfileRepository.findAllById(anyCollection())).thenReturn(List.of(reposter.getProfile()));
+
+        var responses = assembler.toTimelinePostCards(List.of(
+                new PostTimelineItem(post(author),
+                        new ReposterInfoResponse(reposter.getId(), "Reposter", repostedAt, false, null), repostedAt),
+                new PostTimelineItem(post(author),
+                        new ReposterInfoResponse(reposter.getId(), "Reposter", repostedAt, false, null), repostedAt)),
+                null);
+
+        assertThat(responses).extracting(response -> response.authorRepresentativeTier())
+                .containsOnly(new RepresentativeTierResponse(GameType.LOL, "GOLD I"));
+        assertThat(responses).extracting(response -> response.reposterInfo().representativeTier())
+                .containsOnly(new RepresentativeTierResponse(GameType.PUBG, "Gold III"));
+        verify(userProfileRepository).findAllById(Set.of(reposter.getId()));
+        verifyNoMoreInteractions(userProfileRepository);
+    }
+
+    @Test
+    void postCardsWithoutRepostersDoNotQueryProfiles() {
+        User author = user("author", false);
+
+        var response = assembler.toPostCards(List.of(post(author)), null).getFirst();
+
+        assertThat(response.authorRepresentativeTier()).isNull();
+        verifyNoInteractions(userProfileRepository);
     }
 
     @Test

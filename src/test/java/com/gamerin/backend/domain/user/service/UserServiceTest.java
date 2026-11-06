@@ -1,8 +1,10 @@
 package com.gamerin.backend.domain.user.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -11,6 +13,7 @@ import static org.mockito.Mockito.when;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,11 +24,15 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.game.model.GameType;
+import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
 import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
@@ -34,6 +41,7 @@ import com.gamerin.backend.domain.post.service.MediaStorageService;
 import com.gamerin.backend.domain.post.service.MediaUploadSecurityService;
 import com.gamerin.backend.domain.user.dto.request.ProfileImageTarget;
 import com.gamerin.backend.domain.user.dto.request.UpdateProfileRequest;
+import com.gamerin.backend.domain.user.dto.request.UpdateRepresentativeGameRequest;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -65,6 +73,9 @@ class UserServiceTest {
     @Mock
     private MembershipService membershipService;
 
+    @Mock
+    private GameStatsPersistenceService gameStatsPersistenceService;
+
     private UserService userService;
 
     @BeforeEach
@@ -77,7 +88,8 @@ class UserServiceTest {
                 mediaStorageService,
                 mediaUploadSecurityService,
                 lightweightSecurityScanService,
-                membershipService
+                membershipService,
+                gameStatsPersistenceService
         );
     }
 
@@ -413,6 +425,48 @@ class UserServiceTest {
                 )
                 .hasMessageContaining("업로드 API");
         verify(mediaStorageService, never()).deleteOwnedProfileImageUrlQuietly(any(), any(), any());
+    }
+
+    @Test
+    void representativeGameIsSavedOnlyForConnectedGamesUnderTheProfileLock() {
+        User user = savedUser(UUID.randomUUID(), "gamer", "Gamer");
+        UserProfile profile = user.getProfile();
+        profile.connectRiot("gamer#KR1", "puuid");
+        applyToLockedProfile(user.getId(), profile);
+
+        userService.updateRepresentativeGame(user.getId(), new UpdateRepresentativeGameRequest(GameType.LOL));
+        assertThat(profile.getRepresentativeGame()).isEqualTo(GameType.LOL);
+
+        assertThatThrownBy(() -> userService.updateRepresentativeGame(
+                user.getId(), new UpdateRepresentativeGameRequest(GameType.PUBG)))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(profile.getRepresentativeGame()).isEqualTo(GameType.LOL);
+
+        userService.updateRepresentativeGame(user.getId(), new UpdateRepresentativeGameRequest(null));
+        assertThat(profile.getRepresentativeGame()).isNull();
+    }
+
+    @Test
+    void ownAndPublicProfilesIncludeTheRepresentativeTier() {
+        User user = savedUser(UUID.randomUUID(), "gamer", "Gamer");
+        user.getProfile().connectRiot("gamer#KR1", "puuid");
+        user.getProfile().updateLolSummary("GOLD I", 3.0, 52, 100);
+        user.getProfile().changeRepresentativeGame(GameType.LOL);
+        when(userRepository.findByIdAndDeletedAtIsNull(user.getId())).thenReturn(Optional.of(user));
+
+        var tier = userService.getMyProfile(user.getId()).representativeTier();
+
+        assertThat(tier.game()).isEqualTo(GameType.LOL);
+        assertThat(tier.tierLabel()).isEqualTo("GOLD I");
+    }
+
+    @SuppressWarnings("unchecked")
+    private void applyToLockedProfile(UUID userId, UserProfile profile) {
+        doAnswer(invocation -> {
+            ((Consumer<UserProfile>) invocation.getArgument(1)).accept(profile);
+            return null;
+        }).when(gameStatsPersistenceService).updateConnection(eq(userId), any());
     }
 
     private User savedUser(UUID id, String handle, String nickname) {

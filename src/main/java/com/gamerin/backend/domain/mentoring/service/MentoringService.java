@@ -41,6 +41,7 @@ import com.gamerin.backend.domain.mentoring.repository.MentoringReviewRepository
 import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.entity.User;
+import com.gamerin.backend.domain.user.repository.UserProfileRepository;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.domain.user.service.MileageService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -66,6 +67,7 @@ public class MentoringService {
     private final SettlementProcessor settlementProcessor;
     private final NotificationCommandService notificationCommandService;
     private final MembershipService membershipService;
+    private final UserProfileRepository userProfileRepository;
 
     public MentoringService(
             MentorProfileRepository mentorProfileRepository,
@@ -76,7 +78,8 @@ public class MentoringService {
             MileageService mileageService,
             SettlementProcessor settlementProcessor,
             NotificationCommandService notificationCommandService,
-            MembershipService membershipService) {
+            MembershipService membershipService,
+            UserProfileRepository userProfileRepository) {
         this.mentorProfileRepository = mentorProfileRepository;
         this.userRepository = userRepository;
         this.mentoringProgramRepository = mentoringProgramRepository;
@@ -86,6 +89,7 @@ public class MentoringService {
         this.settlementProcessor = settlementProcessor;
         this.notificationCommandService = notificationCommandService;
         this.membershipService = membershipService;
+        this.userProfileRepository = userProfileRepository;
     }
 
     @Transactional
@@ -166,6 +170,7 @@ public class MentoringService {
         Set<UUID> mentorIds = new HashSet<>();
         programs.forEach(program -> mentorIds.add(program.getMentor().getId()));
         Set<UUID> activeUserIds = mentorIds.isEmpty() ? Set.of() : membershipService.findActiveUserIds(mentorIds);
+        preloadProfiles(mentorIds);
         return programs.map(program -> MentoringProgramResponse.from(program,
                 activeUserIds.contains(program.getMentor().getId())));
     }
@@ -610,6 +615,7 @@ public class MentoringService {
             participantIds.add(application.getMentee().getId());
         });
         Set<UUID> activeUserIds = membershipService.findActiveUserIds(participantIds);
+        preloadProfiles(participantIds);
 
         return applications.map(application -> toRoleResponse(
                 application,
@@ -639,6 +645,13 @@ public class MentoringService {
                 menteeMembershipBadge);
     }
 
+    // 응답 DTO가 user.getProfile()로 대표 티어를 읽을 때 사용자마다 조회하지 않도록 영속성 컨텍스트에 미리 올린다.
+    private void preloadProfiles(Set<UUID> userIds) {
+        if (!userIds.isEmpty()) {
+            userProfileRepository.findAllById(userIds);
+        }
+    }
+
     // 멘토 평점 업데이트
     private void updateMentorStats(MentorProfile mentor, int newRating) {
         int oldCount = mentor.getReviewCount();
@@ -664,6 +677,7 @@ public class MentoringService {
         Set<UUID> reviewerIds = new HashSet<>();
         reviews.forEach(review -> reviewerIds.add(review.getMentee().getId()));
         Set<UUID> activeUserIds = reviewerIds.isEmpty() ? Set.of() : membershipService.findActiveUserIds(reviewerIds);
+        preloadProfiles(reviewerIds);
         return reviews.map(review -> MentoringReviewResponse.from(review,
                 activeUserIds.contains(review.getMentee().getId())));
     }

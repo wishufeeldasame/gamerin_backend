@@ -24,6 +24,7 @@ import com.gamerin.backend.domain.notification.dto.response.NotificationResponse
 import com.gamerin.backend.domain.notification.dto.response.UnreadNotificationCountResponse;
 import com.gamerin.backend.domain.notification.entity.Notification;
 import com.gamerin.backend.domain.notification.repository.NotificationRepository;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -154,7 +155,8 @@ public class NotificationQueryService {
                                 actor.getNickname(),
                                 profile != null ? profile.getProfileImageUrl() : null,
                                 profile != null && profile.isVerifiedBadge(),
-                                activeMemberIds.contains(actor.getId())
+                                activeMemberIds.contains(actor.getId()),
+                                RepresentativeTierResponse.from(profile)
                         )
                         : null,
                 notification.getPost() != null ? notification.getPost().getId() : null,

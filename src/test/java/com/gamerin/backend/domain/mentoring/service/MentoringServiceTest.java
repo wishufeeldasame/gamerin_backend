@@ -47,6 +47,7 @@ import com.gamerin.backend.domain.mentoring.repository.MentoringReviewRepository
 import com.gamerin.backend.domain.notification.service.NotificationCommandService;
 import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.entity.User;
+import com.gamerin.backend.domain.user.repository.UserProfileRepository;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.domain.user.service.MileageService;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -85,6 +86,9 @@ class MentoringServiceTest {
         @Mock
         private MembershipService membershipService;
 
+        @Mock
+        private UserProfileRepository userProfileRepository;
+
         private MentoringService mentoringService;
 
         @BeforeEach
@@ -98,7 +102,8 @@ class MentoringServiceTest {
                                 mileageService,
                                 settlementProcessor,
                                 notificationCommandService,
-                                membershipService);
+                                membershipService,
+                                userProfileRepository);
         }
 
         @Test

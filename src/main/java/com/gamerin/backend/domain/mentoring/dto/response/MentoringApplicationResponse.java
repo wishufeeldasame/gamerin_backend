@@ -8,6 +8,7 @@ import com.gamerin.backend.domain.mentoring.entity.ApplicationStatus;
 import com.gamerin.backend.domain.mentoring.entity.MentoringApplication;
 import com.gamerin.backend.domain.mentoring.entity.PaymentStatus;
 import com.gamerin.backend.domain.mentoring.service.MentoringSettlementCalculator;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 
 /**
  * 멘토링 신청 응답 DTO (KP-B2 배지, KP-C2 요율·수수료·수령액 표시)
@@ -32,7 +33,9 @@ public record MentoringApplicationResponse(
         @JsonInclude(JsonInclude.Include.NON_NULL) Long feeAmount,
         @JsonInclude(JsonInclude.Include.NON_NULL) Long payoutAmount,
         @JsonInclude(JsonInclude.Include.NON_NULL) Boolean nonMemberNotice,
-        @JsonInclude(JsonInclude.Include.NON_NULL) String feeNotice) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) String feeNotice,
+        @JsonInclude(JsonInclude.Include.NON_NULL) RepresentativeTierResponse mentorRepresentativeTier,
+        @JsonInclude(JsonInclude.Include.NON_NULL) RepresentativeTierResponse menteeRepresentativeTier) {
     public static final String NON_MEMBER_NOTICE_MESSAGE = "멤버십 가입 시 수수료 5% 혜택을 받을 수 있습니다.";
 
     /**
@@ -53,6 +56,8 @@ public record MentoringApplicationResponse(
                 application.getMessage(),
                 application.getCreatedAt(),
                 false,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -91,7 +96,9 @@ public record MentoringApplicationResponse(
                 null,
                 null,
                 null,
-                null);
+                null,
+                mentorTier(application),
+                menteeTier(application));
     }
 
     /**
@@ -150,7 +157,17 @@ public record MentoringApplicationResponse(
                 feeAmount,
                 payoutAmount,
                 nonMemberNotice,
-                feeNotice);
+                feeNotice,
+                mentorTier(application),
+                menteeTier(application));
+    }
+
+    private static RepresentativeTierResponse mentorTier(MentoringApplication application) {
+        return RepresentativeTierResponse.from(application.getProgram().getMentor().getUser().getProfile());
+    }
+
+    private static RepresentativeTierResponse menteeTier(MentoringApplication application) {
+        return RepresentativeTierResponse.from(application.getMentee().getProfile());
     }
 
     /**

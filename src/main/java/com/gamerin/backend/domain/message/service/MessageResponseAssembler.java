@@ -17,6 +17,7 @@ import com.gamerin.backend.domain.message.entity.DirectMessageAttachment;
 import com.gamerin.backend.domain.message.entity.MessageConversation;
 import com.gamerin.backend.domain.message.entity.MessageParticipant;
 import com.gamerin.backend.domain.post.entity.Post;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 
@@ -83,7 +84,8 @@ public class MessageResponseAssembler {
                 user.getRole().name(),
                 isOnline(user),
                 profile != null ? profile.getProfileImageUrl() : null,
-                false
+                false,
+                RepresentativeTierResponse.from(profile)
         );
     }
 

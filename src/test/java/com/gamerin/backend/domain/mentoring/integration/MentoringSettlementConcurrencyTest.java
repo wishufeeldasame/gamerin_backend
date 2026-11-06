@@ -34,6 +34,7 @@ import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepositor
 import com.gamerin.backend.domain.mentoring.service.MentoringService;
 import com.gamerin.backend.domain.mentoring.service.SettlementProcessor;
 import com.gamerin.backend.domain.user.entity.User;
+import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
@@ -67,12 +68,16 @@ class MentoringSettlementConcurrencyTest {
         jdbc.execute("DELETE FROM mentoring_applications");
         jdbc.execute("DELETE FROM mentoring_programs");
         jdbc.execute("DELETE FROM mentor_profiles");
+        jdbc.execute("DELETE FROM user_profiles");
         jdbc.execute("DELETE FROM users");
     }
 
     private User newUser(String prefix) {
         String id = UUID.randomUUID().toString().substring(0, 8);
-        return userRepository.save(User.createLocal(prefix + id + "@test.com", prefix + id, prefix, "pw"));
+        User user = User.createLocal(prefix + id + "@test.com", prefix + id, prefix, "pw");
+        // 가입 경로처럼 프로필을 함께 만든다. 응답 DTO가 대표 티어를 위해 프로필을 읽는다.
+        user.setProfile(UserProfile.createDefault(user));
+        return userRepository.save(user);
     }
 
     private MentoringApplication newApplication(MentoringProgram program, User mentee, ApplicationStatus status) {

@@ -4,6 +4,7 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.mentoring.entity.MentoringReview;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 
 public record MentoringReviewResponse(
     UUID id,
@@ -14,7 +15,8 @@ public record MentoringReviewResponse(
     int rating,
     String content,
     OffsetDateTime createdAt,
-    boolean membershipBadge
+    boolean membershipBadge,
+    RepresentativeTierResponse representativeTier
 ) {
     public static MentoringReviewResponse from(MentoringReview review, boolean membershipBadge) {
         return new MentoringReviewResponse(
@@ -26,7 +28,8 @@ public record MentoringReviewResponse(
             review.getRating(),
             review.getContent(),
             review.getCreatedAt(),
-            membershipBadge
+            membershipBadge,
+            RepresentativeTierResponse.from(review.getMentee().getProfile())
         );
     }
 } 

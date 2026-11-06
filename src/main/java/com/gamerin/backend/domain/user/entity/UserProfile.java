@@ -15,6 +15,8 @@ import org.hibernate.type.SqlTypes;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
@@ -82,6 +84,10 @@ public class UserProfile {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "game_connection_versions", columnDefinition = "jsonb", nullable = false)
     private Map<String, Long> gameConnectionVersions = new HashMap<>();
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "representative_game", length = 20)
+    private GameType representativeGame;
 
     @Column(name = "verified_badge", nullable = false)
     private boolean verifiedBadge = false;
@@ -153,6 +159,10 @@ public class UserProfile {
         return gameConnectionVersions.getOrDefault(gameKey, 0L);
     }
 
+    public GameType getRepresentativeGame() {
+        return representativeGame;
+    }
+
     public boolean isVerifiedBadge() {
         return verifiedBadge;
     }
@@ -198,7 +208,42 @@ public class UserProfile {
         this.profileImageUrl = null;
         this.coverImageUrl = null;
         this.gameStats = new HashMap<>();
+        this.representativeGame = null;
         this.verifiedBadge = false;
+    }
+
+    public boolean hasConnectedGame(GameType game) {
+        return switch (game) {
+            case PUBG -> hasConnectedPubg();
+            case R6 -> hasConnectedR6();
+            case LOL -> hasConnectedRiot();
+            // 발로란트(#178)는 Riot 연동과 별개로 VALORANT 키에 연동 상태를 저장한다.
+            case VALORANT -> Boolean.TRUE.equals(getGameStatsFor(GameType.VALORANT.name()).get(CONNECTED_KEY));
+            default -> false;
+        };
+    }
+
+    /** 호출자가 {@link #hasConnectedGame}으로 연동 여부를 먼저 검증한다. null이면 표시하지 않는다. */
+    public void changeRepresentativeGame(GameType game) {
+        this.representativeGame = game;
+    }
+
+    /** 대표 게임의 마지막 저장 티어. 대표 없음·연동 해제·티어 없음·UNRANKED·UNRATED면 null이다. */
+    public String getRepresentativeTierLabel() {
+        if (representativeGame == null || !hasConnectedGame(representativeGame)) {
+            return null;
+        }
+        String tierLabel = getStringValue(getGameStatsFor(representativeGame.name()), TIER_LABEL_KEY);
+        // LoL은 UNRANKED, 발로란트(HenrikDev)는 Unrated로 배치 전 상태를 표시한다.
+        return tierLabel == null || "UNRANKED".equalsIgnoreCase(tierLabel) || "UNRATED".equalsIgnoreCase(tierLabel)
+                ? null : tierLabel;
+    }
+
+    // 발로란트 연동 해제(#178)를 추가할 때도 이 메서드로 대표 게임을 비운다.
+    private void clearRepresentativeGameIf(GameType game) {
+        if (representativeGame == game) {
+            representativeGame = null;
+        }
     }
 
     public boolean hasConnectedPubg() {
@@ -255,6 +300,7 @@ public class UserProfile {
         nextGameStats.remove(PUBG_KEY);
         this.gameStats = nextGameStats;
         advanceGameConnectionVersion(PUBG_KEY);
+        clearRepresentativeGameIf(GameType.PUBG);
     }
 
     public boolean hasConnectedR6() {
@@ -354,6 +400,7 @@ public class UserProfile {
         nextGameStats.remove(R6_KEY);
         this.gameStats = nextGameStats;
         advanceGameConnectionVersion(R6_KEY);
+        clearRepresentativeGameIf(GameType.R6);
     }
 
     public boolean hasConnectedRiot() {
@@ -407,6 +454,7 @@ public class UserProfile {
         nextGameStats.remove(LOL_KEY);
         this.gameStats = nextGameStats;
         advanceGameConnectionVersion(RIOT_KEY);
+        clearRepresentativeGameIf(GameType.LOL);
     }
 
     private void advanceGameConnectionVersion(String gameKey) {

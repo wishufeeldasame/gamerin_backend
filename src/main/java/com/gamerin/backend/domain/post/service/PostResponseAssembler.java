@@ -27,7 +27,9 @@ import com.gamerin.backend.domain.repost.dto.response.ReposterInfoResponse;
 import com.gamerin.backend.domain.repost.model.PostTimelineItem;
 import com.gamerin.backend.domain.repost.model.RepostMetrics;
 import com.gamerin.backend.domain.repost.repository.RepostQueryRepository;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 import com.gamerin.backend.domain.user.entity.UserProfile;
+import com.gamerin.backend.domain.user.repository.UserProfileRepository;
 
 @Component
 public class PostResponseAssembler {
@@ -37,18 +39,21 @@ public class PostResponseAssembler {
     private final PostBookmarkRepository postBookmarkRepository;
     private final RepostQueryRepository repostQueryRepository;
     private final MembershipService membershipService;
+    private final UserProfileRepository userProfileRepository;
 
     public PostResponseAssembler(
             PostMediaRepository postMediaRepository,
             PostLikeRepository postLikeRepository,
             PostBookmarkRepository postBookmarkRepository,
             RepostQueryRepository repostQueryRepository,
-            MembershipService membershipService) {
+            MembershipService membershipService,
+            UserProfileRepository userProfileRepository) {
         this.postMediaRepository = postMediaRepository;
         this.postLikeRepository = postLikeRepository;
         this.postBookmarkRepository = postBookmarkRepository;
         this.repostQueryRepository = repostQueryRepository;
         this.membershipService = membershipService;
+        this.userProfileRepository = userProfileRepository;
     }
 
     public List<PostCardResponse> toPostCards(List<Post> posts, UUID viewerId) {
@@ -91,6 +96,7 @@ public class PostResponseAssembler {
         posts.forEach(post -> displayedUserIds.add(post.getAuthor().getId()));
         reposterInfoByPostId.values().forEach(reposter -> displayedUserIds.add(reposter.userId()));
         Set<UUID> activeUserIds = membershipService.findActiveUserIds(displayedUserIds);
+        Map<UUID, RepresentativeTierResponse> reposterTiers = findRepresentativeTiers(reposterInfoByPostId.values());
 
         List<PostCardResponse> responses = new ArrayList<>();
         for (Post post : posts) {
@@ -100,7 +106,7 @@ public class PostResponseAssembler {
                     likedPostIds.contains(post.getId()),
                     bookmarkedPostIds.contains(post.getId()),
                     repostMetrics.getOrDefault(post.getId(), new RepostMetrics(0L, false)),
-                    withMembershipBadge(reposterInfoByPostId.get(post.getId()), activeUserIds),
+                    withDisplayBadges(reposterInfoByPostId.get(post.getId()), activeUserIds, reposterTiers),
                     viewerId,
                     activeUserIds.contains(post.getAuthor().getId())));
         }
@@ -129,6 +135,7 @@ public class PostResponseAssembler {
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
                 membershipService.isActive(post.getAuthor().getId()),
+                RepresentativeTierResponse.from(profile),
                 post.getContent(),
                 media,
                 post.getLikeCount(),
@@ -172,6 +179,7 @@ public class PostResponseAssembler {
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
                 membershipBadge,
+                RepresentativeTierResponse.from(profile),
                 comment.getContent(),
                 comment.getCreatedAt(),
                 viewerId != null && comment.getAuthor().getId().equals(viewerId));
@@ -210,6 +218,7 @@ public class PostResponseAssembler {
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
                 membershipBadge,
+                RepresentativeTierResponse.from(profile),
                 post.getContent(),
                 media,
                 post.getLikeCount(),
@@ -227,7 +236,10 @@ public class PostResponseAssembler {
                 mine ? post.getEditCount() : null);
     }
 
-    private ReposterInfoResponse withMembershipBadge(ReposterInfoResponse reposter, Set<UUID> activeUserIds) {
+    private ReposterInfoResponse withDisplayBadges(
+            ReposterInfoResponse reposter,
+            Set<UUID> activeUserIds,
+            Map<UUID, RepresentativeTierResponse> representativeTiers) {
         if (reposter == null) {
             return null;
         }
@@ -235,7 +247,25 @@ public class PostResponseAssembler {
                 reposter.userId(),
                 reposter.nickname(),
                 reposter.repostedAt(),
-                activeUserIds.contains(reposter.userId()));
+                activeUserIds.contains(reposter.userId()),
+                representativeTiers.get(reposter.userId()));
+    }
+
+    // 리포스터는 타임라인 쿼리가 이름만 읽으므로 프로필을 한 번에 조회해 N+1을 피한다.
+    private Map<UUID, RepresentativeTierResponse> findRepresentativeTiers(Collection<ReposterInfoResponse> reposters) {
+        Set<UUID> userIds = new HashSet<>();
+        reposters.forEach(reposter -> userIds.add(reposter.userId()));
+        if (userIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, RepresentativeTierResponse> tiers = new HashMap<>();
+        for (UserProfile profile : userProfileRepository.findAllById(userIds)) {
+            RepresentativeTierResponse tier = RepresentativeTierResponse.from(profile);
+            if (tier != null) {
+                tiers.put(profile.getUserId(), tier);
+            }
+        }
+        return tiers;
     }
 
     private Map<UUID, List<PostMediaResponse>> buildMediaMap(Collection<UUID> postIds) {

@@ -15,6 +15,7 @@ public record DetailedUserProfileResponse(
         Map<String, Object> gameStats,
         boolean verifiedBadge,
         boolean membershipBadge,
+        RepresentativeTierResponse representativeTier,
         boolean isFollowing,
         boolean followsViewer,
         long followersCount,
