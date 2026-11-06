@@ -17,9 +17,9 @@ import com.gamerin.backend.domain.message.entity.DirectMessageAttachment;
 import com.gamerin.backend.domain.message.entity.MessageConversation;
 import com.gamerin.backend.domain.message.entity.MessageParticipant;
 import com.gamerin.backend.domain.post.entity.Post;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
-import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 
 @Component
 public class MessageResponseAssembler {

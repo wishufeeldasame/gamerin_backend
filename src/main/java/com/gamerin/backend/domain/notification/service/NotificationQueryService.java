@@ -24,12 +24,12 @@ import com.gamerin.backend.domain.notification.dto.response.NotificationResponse
 import com.gamerin.backend.domain.notification.dto.response.UnreadNotificationCountResponse;
 import com.gamerin.backend.domain.notification.entity.Notification;
 import com.gamerin.backend.domain.notification.repository.NotificationRepository;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.response.CursorPageResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
-import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 
 @Service
 @Transactional(readOnly = true)

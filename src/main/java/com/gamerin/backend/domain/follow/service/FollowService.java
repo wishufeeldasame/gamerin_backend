@@ -24,12 +24,12 @@ import com.gamerin.backend.domain.follow.entity.Follow;
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
 import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.notification.service.NotificationCommandService;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.response.CursorPageResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
-import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 
 @Service
 @Transactional
