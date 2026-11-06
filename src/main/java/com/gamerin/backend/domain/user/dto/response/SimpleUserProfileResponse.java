@@ -10,7 +10,8 @@ public record SimpleUserProfileResponse(
         String nickname,
         String profileImageUrl,
         boolean verifiedBadge,
-        boolean membershipBadge
+        boolean membershipBadge,
+        RepresentativeTierResponse representativeTier
 ) {
     public static SimpleUserProfileResponse from(User user, boolean membershipBadge) {
         UserProfile profile = user.getProfile();
@@ -20,7 +21,8 @@ public record SimpleUserProfileResponse(
                 user.getNickname(),
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
-                membershipBadge
+                membershipBadge,
+                RepresentativeTierResponse.from(profile)
         );
     }
 }

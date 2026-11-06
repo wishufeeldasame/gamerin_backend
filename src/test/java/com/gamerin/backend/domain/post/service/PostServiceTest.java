@@ -796,6 +796,7 @@ class PostServiceTest {
                 null,
                 false,
                 false,
+                null,
                 "hello",
                 OffsetDateTime.now(),
                 true);
@@ -842,6 +843,7 @@ class PostServiceTest {
                 null,
                 false,
                 false,
+                null,
                 "hello",
                 OffsetDateTime.now(),
                 true);
@@ -1170,6 +1172,7 @@ class PostServiceTest {
                 null,
                 false,
                 false,
+                null,
                 null,
                 List.of(),
                 0,

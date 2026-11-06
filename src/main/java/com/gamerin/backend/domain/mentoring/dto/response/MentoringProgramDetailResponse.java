@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import com.gamerin.backend.domain.mentoring.entity.MentoringProgram;
 import com.gamerin.backend.domain.mentoring.entity.ProgramStatus;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 
 public record MentoringProgramDetailResponse(
     UUID id,
@@ -20,8 +21,8 @@ public record MentoringProgramDetailResponse(
     Long price,
     List<String> tags,
     OffsetDateTime createdAt,
-    boolean membershipBadge
-
+    boolean membershipBadge,
+    RepresentativeTierResponse representativeTier
 ) {
     public static MentoringProgramDetailResponse from(MentoringProgram program, boolean membershipBadge) {
         return new MentoringProgramDetailResponse(
@@ -37,7 +38,8 @@ public record MentoringProgramDetailResponse(
             program.getPrice(),
             program.getTags(),
             program.getCreatedAt(),
-            membershipBadge
+            membershipBadge,
+            RepresentativeTierResponse.from(program.getMentor().getUser().getProfile())
         );
     }
 }

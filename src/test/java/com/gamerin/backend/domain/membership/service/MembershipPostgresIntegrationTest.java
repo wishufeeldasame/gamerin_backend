@@ -47,6 +47,7 @@ import com.gamerin.backend.domain.repost.model.PostTimelineItem;
 import com.gamerin.backend.domain.repost.repository.RepostQueryRepository;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
+import com.gamerin.backend.domain.user.repository.UserProfileRepository;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 
 import jakarta.persistence.EntityManager;
@@ -82,6 +83,8 @@ class MembershipPostgresIntegrationTest {
     private PostBookmarkRepository postBookmarkRepository;
     @Autowired
     private RepostQueryRepository repostQueryRepository;
+    @Autowired
+    private UserProfileRepository userProfileRepository;
 
     @DynamicPropertySource
     static void configurePostgres(DynamicPropertyRegistry registry) {
@@ -216,12 +219,12 @@ class MembershipPostgresIntegrationTest {
         entityManager.persist(second);
         entityManager.flush();
         PostResponseAssembler assembler = new PostResponseAssembler(postMediaRepository, postLikeRepository,
-                postBookmarkRepository, repostQueryRepository, service());
+                postBookmarkRepository, repostQueryRepository, service(), userProfileRepository);
         Statistics statistics = statistics();
         statistics.clear();
 
         var responses = assembler.toTimelinePostCards(List.of(
-                new PostTimelineItem(first, new ReposterInfoResponse(reposter.getId(), "Reposter", NOW, false), NOW),
+                new PostTimelineItem(first, new ReposterInfoResponse(reposter.getId(), "Reposter", NOW, false, null), NOW),
                 new PostTimelineItem(second, null, NOW)), null);
 
         assertThat(responses).extracting(response -> response.authorMembershipBadge()).containsExactly(true, false);

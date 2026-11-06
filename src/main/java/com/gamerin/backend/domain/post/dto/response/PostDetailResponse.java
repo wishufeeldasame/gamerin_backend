@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.UUID;
 
 import com.gamerin.backend.domain.repost.dto.response.ReposterInfoResponse;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 
 public record PostDetailResponse(
                 UUID postId,
@@ -14,6 +15,7 @@ public record PostDetailResponse(
                 String authorProfileImageUrl,
                 boolean authorVerifiedBadge,
                 boolean authorMembershipBadge,
+                RepresentativeTierResponse authorRepresentativeTier,
                 String content,
                 List<PostMediaResponse> media,
                 long likes,
@@ -39,6 +41,7 @@ public record PostDetailResponse(
                         String authorProfileImageUrl,
                         boolean authorVerifiedBadge,
                         boolean authorMembershipBadge,
+                        RepresentativeTierResponse authorRepresentativeTier,
                         String content,
                         List<PostMediaResponse> media,
                         long likes,
@@ -59,6 +62,7 @@ public record PostDetailResponse(
                                 authorProfileImageUrl,
                                 authorVerifiedBadge,
                                 authorMembershipBadge,
+                                authorRepresentativeTier,
                                 content,
                                 media,
                                 likes,

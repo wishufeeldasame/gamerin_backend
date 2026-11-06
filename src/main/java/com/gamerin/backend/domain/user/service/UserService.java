@@ -17,6 +17,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.follow.repository.FollowRepository;
+import com.gamerin.backend.domain.game.service.GameStatsPersistenceService;
 import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.post.service.LightweightSecurityScanService;
 import com.gamerin.backend.domain.post.service.MediaStorageService;
@@ -25,8 +26,10 @@ import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.user.dto.request.ProfileImageTarget;
 import com.gamerin.backend.domain.user.dto.request.UpdateProfileRequest;
+import com.gamerin.backend.domain.user.dto.request.UpdateRepresentativeGameRequest;
 import com.gamerin.backend.domain.user.dto.response.DetailedUserProfileResponse;
 import com.gamerin.backend.domain.user.dto.response.ProfileImageUploadResponse;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
@@ -57,6 +60,7 @@ public class UserService {
     private final MediaUploadSecurityService mediaUploadSecurityService;
     private final LightweightSecurityScanService lightweightSecurityScanService;
     private final MembershipService membershipService;
+    private final GameStatsPersistenceService gameStatsPersistenceService;
 
     public UserService(
             UserRepository userRepository,
@@ -66,7 +70,8 @@ public class UserService {
             MediaStorageService mediaStorageService,
             MediaUploadSecurityService mediaUploadSecurityService,
             LightweightSecurityScanService lightweightSecurityScanService,
-            MembershipService membershipService
+            MembershipService membershipService,
+            GameStatsPersistenceService gameStatsPersistenceService
     ) {
         this.userRepository = userRepository;
         this.followRepository = followRepository;
@@ -76,6 +81,7 @@ public class UserService {
         this.mediaUploadSecurityService = mediaUploadSecurityService;
         this.lightweightSecurityScanService = lightweightSecurityScanService;
         this.membershipService = membershipService;
+        this.gameStatsPersistenceService = gameStatsPersistenceService;
     }
 
     @Transactional(readOnly = true)
@@ -128,6 +134,7 @@ public class UserService {
                         : ownProfile ? toOwnGameStats(profile.getGameStats()) : toPublicGameStats(profile.getGameStats()),
                 profile != null && profile.isVerifiedBadge(),
                 membershipService.isActive(user.getId()),
+                RepresentativeTierResponse.from(profile),
                 isFollowing,
                 followsViewer,
                 followersCount,
@@ -199,6 +206,18 @@ public class UserService {
             publicStats.remove(fieldName);
         }
         gameStats.put(gameKey, publicStats);
+    }
+
+    // 연동 해제와 같은 프로필 행 잠금 아래에서 검증해, 해제 직후 대표로 남는 경쟁을 막는다.
+    @Transactional
+    public void updateRepresentativeGame(UUID userId, UpdateRepresentativeGameRequest request) {
+        GameType game = request.game();
+        gameStatsPersistenceService.updateConnection(userId, profile -> {
+            if (game != null && !profile.hasConnectedGame(game)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "연동한 게임만 대표 게임으로 설정할 수 있습니다.");
+            }
+            profile.changeRepresentativeGame(game);
+        });
     }
 
     @Transactional

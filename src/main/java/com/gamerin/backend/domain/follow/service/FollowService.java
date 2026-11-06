@@ -29,6 +29,7 @@ import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.response.CursorPageResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 
 @Service
 @Transactional
@@ -215,6 +216,7 @@ public class FollowService {
                 profile != null ? profile.getProfileImageUrl() : null,
                 profile != null && profile.isVerifiedBadge(),
                 membershipBadge,
+                RepresentativeTierResponse.from(profile),
                 isFollowing,
                 followedAt
         );

@@ -29,6 +29,7 @@ import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.response.CursorPageResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 
 @Service
 @Transactional(readOnly = true)
@@ -154,7 +155,8 @@ public class NotificationQueryService {
                                 actor.getNickname(),
                                 profile != null ? profile.getProfileImageUrl() : null,
                                 profile != null && profile.isVerifiedBadge(),
-                                activeMemberIds.contains(actor.getId())
+                                activeMemberIds.contains(actor.getId()),
+                                RepresentativeTierResponse.from(profile)
                         )
                         : null,
                 notification.getPost() != null ? notification.getPost().getId() : null,

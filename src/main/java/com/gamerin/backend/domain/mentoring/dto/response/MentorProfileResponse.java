@@ -2,6 +2,7 @@ package com.gamerin.backend.domain.mentoring.dto.response;
 
 import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
 import com.gamerin.backend.domain.mentoring.entity.MentorStatus;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 import java.util.UUID;
 
 public record MentorProfileResponse(
@@ -12,7 +13,8 @@ public record MentorProfileResponse(
     double ratingAvg,
     int reviewCount,
     int menteeCount,
-    boolean membershipBadge
+    boolean membershipBadge,
+    RepresentativeTierResponse representativeTier
 ){
     public static MentorProfileResponse from (MentorProfile profile, boolean membershipBadge) {
         return new MentorProfileResponse(
@@ -23,7 +25,8 @@ public record MentorProfileResponse(
             profile.getRatingAvg().doubleValue(),
             profile.getReviewCount(),
             profile.getMenteeCount(),
-            membershipBadge
+            membershipBadge,
+            RepresentativeTierResponse.from(profile.getUser().getProfile())
         );
     }
 }

@@ -11,6 +11,7 @@ import com.gamerin.backend.domain.auth.repository.RefreshTokenRepository;
 import com.gamerin.backend.domain.auth.repository.SocialAccountRepository;
 import com.gamerin.backend.domain.auth.repository.SocialSignupSessionRepository;
 import com.gamerin.backend.domain.membership.service.MembershipService;
+import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.entity.UserStatus;
@@ -317,13 +318,15 @@ public class LocalAuthService {
 
     @Transactional(readOnly = true)
     public MeResponse getMe(CustomUserPrincipal principal) {
-        boolean hasPassword = userRepository.findById(principal.getUserId())
-                .map(user -> user.getPasswordHash() != null)
-                .orElse(false);
+        User user = userRepository.findById(principal.getUserId()).orElse(null);
+        UserProfile profile = user != null ? user.getProfile() : null;
         return new MeResponse(
                 principal.getUserId(), principal.getUsername(), principal.getNickname(),
                 principal.getAuthorities().stream().findFirst().map(Object::toString).orElse("ROLE_USER"),
-                "ACTIVE", hasPassword, membershipService.isActive(principal.getUserId()));
+                "ACTIVE", user != null && user.getPasswordHash() != null,
+                membershipService.isActive(principal.getUserId()),
+                profile != null ? profile.getRepresentativeGame() : null,
+                RepresentativeTierResponse.from(profile));
     }
 
     private void validatePasswordConfirmation(String password, String passwordConfirm) {
