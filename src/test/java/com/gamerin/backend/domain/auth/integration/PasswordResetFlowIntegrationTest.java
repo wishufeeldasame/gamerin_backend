@@ -64,7 +64,7 @@ class PasswordResetFlowIntegrationTest {
                                 Map.entry("agreedToPrivacy", true),
                                 Map.entry("agreedToAge14", true),
                                 Map.entry("termsVersion", "1.0"),
-                                Map.entry("privacyVersion", "1.0"),
+                                Map.entry("privacyVersion", "1.1"),
                                 Map.entry("emailVerificationToken", emailVerificationToken)))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))

@@ -88,6 +88,14 @@ riot:
   api:
     key: "여기에_RIOT_API_KEY"
 
+henrik:
+  api:
+    # HenrikDev Discord 가입 후 https://api.henrikdev.xyz/dashboard 에서 발급. 실제 키는 커밋하지 않는다.
+    key: your-henrik-api-key
+    base-url: "https://api.henrikdev.xyz"
+    connect-timeout: ${HENRIK_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${HENRIK_API_READ_TIMEOUT:10s}
+
 r6:
   api:
     # Create a key at https://r6data.com/dashboard. Never commit a real key.

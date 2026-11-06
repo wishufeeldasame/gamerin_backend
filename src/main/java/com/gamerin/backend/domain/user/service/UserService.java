@@ -49,6 +49,10 @@ public class UserService {
                     "connected", "playerName", "platform", "tierLabel", "kd", "winRate", "matches", "statsMode", "updatedAt"
             ),
             GameType.LOL.name(), Set.of("connected", "tierLabel", "kda", "winRate", "games"),
+            GameType.VALORANT.name(), Set.of(
+                    "connected", "region", "platform", "tierLabel", "peakTierLabel", "rr",
+                    "kd", "acs", "headshotRate", "winRate", "matches", "updatedAt"
+            ),
             "RIOT", Set.of("connected")
     );
 
@@ -182,6 +186,7 @@ public class UserService {
         }
 
         removeInternalFields(publicGameStats, GameType.R6.name(), "accountId");
+        removeInternalFields(publicGameStats, GameType.VALORANT.name(), "puuid");
         return publicGameStats;
     }
 
