@@ -42,7 +42,7 @@ import org.springframework.web.server.ResponseStatusException;
 @ExtendWith(MockitoExtension.class)
 class ValorantServiceTest {
 
-    private static final ValorantRank GOLD = new ValorantRank("Gold 2", "Platinum 1", 40);
+    private static final ValorantRank GOLD = new ValorantRank("Gold 2", "Platinum 1", 40, null);
 
     @Mock
     private UserRepository userRepository;
@@ -86,20 +86,14 @@ class ValorantServiceTest {
 
     @Test
     void unratedWithoutMatchesHasNoMetricsAndNoRr() {
-        when(client.getRank(ValorantRegion.AP, "p")).thenReturn(new ValorantRank(null, null, 0));
-        when(client.getRecentCompetitiveMatches(ValorantRegion.AP, "p")).thenReturn(List.of());
-
-        assertThat(service.fetchSummary(ValorantRegion.AP, "p"))
+        assertThat(ValorantService.summarize(new ValorantRank(null, null, 0, null), List.of()))
                 .isEqualTo(new ValorantSummaryStats("Unrated", null, null, null, null, null, null, 0));
     }
 
     @Test
     void zeroDeathsUsesKillsAsKd() {
-        when(client.getRank(ValorantRegion.KR, "p")).thenReturn(GOLD);
-        when(client.getRecentCompetitiveMatches(ValorantRegion.KR, "p"))
-                .thenReturn(List.of(new ValorantMatchStats(7, 0, 0, 0, 0, 0, 0, 0, true)));
-
-        ValorantSummaryStats summary = service.fetchSummary(ValorantRegion.KR, "p");
+        ValorantSummaryStats summary = ValorantService.summarize(GOLD,
+                List.of(new ValorantMatchStats(7, 0, 0, 0, 0, 0, 0, 0, true)));
 
         assertThat(summary.kd()).isEqualTo(7.0);
         assertThat(summary.acs()).isNull();
@@ -142,7 +136,7 @@ class ValorantServiceTest {
                 new ValorantSummaryStats("Gold 2", null, 40, null, null, null, null, 0), null);
         when(client.getRank(ValorantRegion.KR, "henrik-puuid")).thenAnswer(invocation -> {
             profile.disconnectValorant();
-            return new ValorantRank("Diamond 1", null, 10);
+            return new ValorantRank("Diamond 1", null, 10, null);
         });
         when(client.getRecentCompetitiveMatches(ValorantRegion.KR, "henrik-puuid")).thenReturn(List.of());
 
@@ -157,7 +151,7 @@ class ValorantServiceTest {
         User user = savedUser();
         user.getProfile().connectValorant("Name#KR1", "henrik-puuid", "AP", "PC",
                 new ValorantSummaryStats("Gold 2", null, 40, null, null, null, null, 0), null);
-        when(client.getRank(ValorantRegion.AP, "henrik-puuid")).thenReturn(new ValorantRank("Diamond 1", "Diamond 1", 10));
+        when(client.getRank(ValorantRegion.AP, "henrik-puuid")).thenReturn(new ValorantRank("Diamond 1", "Diamond 1", 10, null));
         when(client.getRecentCompetitiveMatches(ValorantRegion.AP, "henrik-puuid")).thenReturn(List.of());
 
         ValorantSummaryResponse response = service.refreshMySummary(CustomUserPrincipal.from(user));
@@ -188,10 +182,27 @@ class ValorantServiceTest {
         user.getProfile().connectValorant("Name#KR1", "henrik-puuid", "KR", "PC",
                 new ValorantSummaryStats("Gold 2", null, 40, null, null, null, null, 0),
                 OffsetDateTime.now().minus(ValorantService.REFRESH_COOLDOWN).minusSeconds(1));
-        when(client.getRank(ValorantRegion.KR, "henrik-puuid")).thenReturn(new ValorantRank("Gold 3", null, 5));
+        when(client.getRank(ValorantRegion.KR, "henrik-puuid")).thenReturn(new ValorantRank("Gold 3", null, 5, null));
         when(client.getRecentCompetitiveMatches(ValorantRegion.KR, "henrik-puuid")).thenReturn(List.of());
 
         assertThat(service.refreshMySummary(CustomUserPrincipal.from(user)).tierLabel()).isEqualTo("Gold 3");
+    }
+
+    @Test
+    void refreshAppliesChangedRiotIdAndKeepsItWhenAbsent() {
+        User user = savedUser();
+        UserProfile profile = user.getProfile();
+        profile.connectValorant("Old#KR1", "henrik-puuid", "KR", "PC",
+                new ValorantSummaryStats("Gold 2", null, 40, null, null, null, null, 0), null);
+        when(client.getRank(ValorantRegion.KR, "henrik-puuid"))
+                .thenReturn(new ValorantRank("Gold 2", null, 40, "New#KR9"))
+                .thenReturn(new ValorantRank("Gold 2", null, 40, null));
+        when(client.getRecentCompetitiveMatches(ValorantRegion.KR, "henrik-puuid")).thenReturn(List.of());
+
+        assertThat(service.refreshMySummary(CustomUserPrincipal.from(user)).riotId()).isEqualTo("New#KR9");
+
+        ReflectionTestUtils.setField(profile, "gameStats", withoutUpdatedAt(profile.getGameStats()));
+        assertThat(service.refreshMySummary(CustomUserPrincipal.from(user)).riotId()).isEqualTo("New#KR9");
     }
 
     @Test
@@ -199,6 +210,15 @@ class ValorantServiceTest {
         User user = savedUser();
 
         assertThat(service.getMySummary(CustomUserPrincipal.from(user)).connected()).isFalse();
+    }
+
+    @SuppressWarnings("unchecked")
+    private java.util.Map<String, Object> withoutUpdatedAt(java.util.Map<String, Object> gameStats) {
+        java.util.Map<String, Object> next = new java.util.HashMap<>(gameStats);
+        java.util.Map<String, Object> valorant = new java.util.HashMap<>((java.util.Map<String, Object>) next.get("VALORANT"));
+        valorant.remove("updatedAt");
+        next.put("VALORANT", valorant);
+        return next;
     }
 
     private User savedUser() {

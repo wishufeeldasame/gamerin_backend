@@ -21,8 +21,8 @@ class UserProfileValorantTest {
         profile.connectValorant("name#KR1", "henrik-puuid", "KR", "PC", GOLD, null);
         OffsetDateTime updatedAt = OffsetDateTime.parse("2026-11-06T12:00:00+09:00");
 
-        profile.updateValorantSummary(new ValorantSummaryStats("Unrated", "Platinum 1", null, null, null, null, null, 0),
-                updatedAt);
+        profile.updateValorantSummary(null,
+                new ValorantSummaryStats("Unrated", "Platinum 1", null, null, null, null, null, 0), updatedAt);
 
         assertThat(profile.getValorantPuuid()).isEqualTo("henrik-puuid");
         assertThat(profile.getValorantRiotId()).isEqualTo("name#KR1");

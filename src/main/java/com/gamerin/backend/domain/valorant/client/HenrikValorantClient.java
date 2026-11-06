@@ -76,14 +76,26 @@ public class HenrikValorantClient {
         JsonNode response = fetch(false, "/valorant/v3/by-puuid/mmr/{affinity}/{platform}/{puuid}",
                 region.affinity(), PLATFORM, puuid);
         if (response == null) {
-            return new ValorantRank(null, null, null);
+            return new ValorantRank(null, null, null, null);
         }
-        JsonNode current = response.path("data").path("current");
+        JsonNode data = response.path("data");
+        JsonNode current = data.path("current");
         return new ValorantRank(
                 trimToNull(current.path("tier").path("name").asText(null)),
-                trimToNull(response.path("data").path("peak").path("tier").path("name").asText(null)),
-                current.path("rr").isInt() ? current.path("rr").asInt() : null
+                trimToNull(data.path("peak").path("tier").path("name").asText(null)),
+                current.path("rr").isInt() ? current.path("rr").asInt() : null,
+                currentRiotId(data.path("account"), puuid)
         );
+    }
+
+    // 닉네임 변경을 반영하되 다른 계정의 이름을 저장하지 않도록 puuid가 같을 때만 쓴다.
+    private String currentRiotId(JsonNode account, String puuid) {
+        String name = trimToNull(account.path("name").asText(null));
+        String tag = trimToNull(account.path("tag").asText(null));
+        if (name == null || tag == null || !puuid.equalsIgnoreCase(account.path("puuid").asText(""))) {
+            return null;
+        }
+        return name + "#" + tag;
     }
 
     /** 최근 경쟁전 최대 10경기. 경기 기록이 없으면(404) 빈 목록이다. */

@@ -63,7 +63,8 @@ public class ValorantService {
             throw GameAccountConflict.VALORANT.conflict();
         }
 
-        ValorantSummaryStats summary = fetchSummary(region, account.puuid());
+        ValorantSummaryStats summary = summarize(henrikValorantClient.getRank(region, account.puuid()),
+                henrikValorantClient.getRecentCompetitiveMatches(region, account.puuid()));
         OffsetDateTime updatedAt = OffsetDateTime.now();
         try {
             gameStatsPersistenceService.updateConnection(user.getId(), current -> current.connectValorant(
@@ -97,12 +98,13 @@ public class ValorantService {
         }
 
         long connectionVersion = profile.getGameConnectionVersion(GAME);
-        ValorantSummaryStats summary = fetchSummary(region, puuid);
+        ValorantRank rank = henrikValorantClient.getRank(region, puuid);
+        ValorantSummaryStats summary = summarize(rank, henrikValorantClient.getRecentCompetitiveMatches(region, puuid));
         OffsetDateTime updatedAt = OffsetDateTime.now();
         UserProfile current = gameStatsPersistenceService.updateSummary(
                 user.getId(), GAME, connectionVersion,
                 latest -> latest.hasConnectedValorant() && puuid.equals(latest.getValorantPuuid()),
-                latest -> latest.updateValorantSummary(summary, updatedAt)
+                latest -> latest.updateValorantSummary(rank.riotId(), summary, updatedAt)
         );
         return toResponse(current);
     }
@@ -113,9 +115,7 @@ public class ValorantService {
         gameStatsPersistenceService.updateConnection(user.getId(), UserProfile::disconnectValorant);
     }
 
-    ValorantSummaryStats fetchSummary(ValorantRegion region, String puuid) {
-        ValorantRank rank = henrikValorantClient.getRank(region, puuid);
-        List<ValorantMatchStats> matches = henrikValorantClient.getRecentCompetitiveMatches(region, puuid);
+    static ValorantSummaryStats summarize(ValorantRank rank, List<ValorantMatchStats> matches) {
         String tierLabel = rank.tierLabel() == null ? UNRATED : rank.tierLabel();
         Integer rr = UNRATED.equalsIgnoreCase(tierLabel) ? null : rank.rr();
         if (matches.isEmpty()) {

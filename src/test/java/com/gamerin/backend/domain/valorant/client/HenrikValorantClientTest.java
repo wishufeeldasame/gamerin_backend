@@ -88,20 +88,31 @@ class HenrikValorantClientTest {
     @Test
     void getRankReadsCurrentAndPeakTier() {
         body = """
-                {"status":200,"data":{"current":{"tier":{"id":13,"name":"Gold 2"},"rr":41},
+                {"status":200,"data":{"account":{"name":"New Name","tag":"KR2","puuid":"P"},
+                 "current":{"tier":{"id":13,"name":"Gold 2"},"rr":41},
                  "peak":{"tier":{"id":16,"name":"Platinum 2"}}}}
                 """;
 
         assertThat(client().getRank(ValorantRegion.AP, "p"))
-                .isEqualTo(new ValorantRank("Gold 2", "Platinum 2", 41));
+                .isEqualTo(new ValorantRank("Gold 2", "Platinum 2", 41, "New Name#KR2"));
         assertThat(uris.get(0)).isEqualTo("/valorant/v3/by-puuid/mmr/ap/pc/p");
+    }
+
+    @Test
+    void getRankIgnoresAccountNameOfAnotherPuuid() {
+        body = """
+                {"status":200,"data":{"account":{"name":"Other","tag":"KR1","puuid":"other"},
+                 "current":{"tier":{"name":"Gold 2"},"rr":41}}}
+                """;
+
+        assertThat(client().getRank(ValorantRegion.KR, "p").riotId()).isNull();
     }
 
     @Test
     void rankAndMatchesNotFoundMeanNoRecord() {
         status = 404;
 
-        assertThat(client().getRank(ValorantRegion.KR, "p")).isEqualTo(new ValorantRank(null, null, null));
+        assertThat(client().getRank(ValorantRegion.KR, "p")).isEqualTo(new ValorantRank(null, null, null, null));
         assertThat(client().getRecentCompetitiveMatches(ValorantRegion.KR, "p")).isEmpty();
     }
 

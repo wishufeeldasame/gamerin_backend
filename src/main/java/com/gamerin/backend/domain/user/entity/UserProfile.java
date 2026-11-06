@@ -529,9 +529,13 @@ public class UserProfile {
         advanceGameConnectionVersion(VALORANT_KEY);
     }
 
-    public void updateValorantSummary(ValorantSummaryStats summary, OffsetDateTime updatedAt) {
+    /** riotId가 null이면 저장된 Riot ID를 유지한다(닉네임 변경 반영용). */
+    public void updateValorantSummary(String riotId, ValorantSummaryStats summary, OffsetDateTime updatedAt) {
         Map<String, Object> valorantStats = new HashMap<>(getGameStatsFor(VALORANT_KEY));
         valorantStats.put(CONNECTED_KEY, true);
+        if (riotId != null) {
+            valorantStats.put(RIOT_ID_KEY, riotId);
+        }
         putValorantSummaryValues(valorantStats, summary, updatedAt);
 
         Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
