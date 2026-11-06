@@ -9,6 +9,7 @@ import java.util.UUID;
 
 import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.game.model.GameType;
+import com.gamerin.backend.domain.valorant.model.ValorantSummaryStats;
 import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -52,6 +53,13 @@ public class UserProfile {
     private static final String LOL_KEY = GameType.LOL.name();
     private static final String PUUID_KEY = "puuid";
     private static final String RIOT_ID_KEY = "riotId";
+
+    private static final String VALORANT_KEY = GameType.VALORANT.name();
+    private static final String REGION_KEY = "region";
+    private static final String PEAK_TIER_LABEL_KEY = "peakTierLabel";
+    private static final String RR_KEY = "rr";
+    private static final String ACS_KEY = "acs";
+    private static final String HEADSHOT_RATE_KEY = "headshotRate";
 
     @Id
     @Column
@@ -217,8 +225,8 @@ public class UserProfile {
             case PUBG -> hasConnectedPubg();
             case R6 -> hasConnectedR6();
             case LOL -> hasConnectedRiot();
-            // 발로란트(#178)는 Riot 연동과 별개로 VALORANT 키에 연동 상태를 저장한다.
-            case VALORANT -> Boolean.TRUE.equals(getGameStatsFor(GameType.VALORANT.name()).get(CONNECTED_KEY));
+            // 발로란트(#178)는 Riot(LoL) 연동과 별개로 VALORANT 키에 연동 상태를 저장한다.
+            case VALORANT -> hasConnectedValorant();
             default -> false;
         };
     }
@@ -239,7 +247,6 @@ public class UserProfile {
                 ? null : tierLabel;
     }
 
-    // 발로란트 연동 해제(#178)를 추가할 때도 이 메서드로 대표 게임을 비운다.
     private void clearRepresentativeGameIf(GameType game) {
         if (representativeGame == game) {
             representativeGame = null;
@@ -337,7 +344,10 @@ public class UserProfile {
     }
 
     public OffsetDateTime getR6UpdatedAt() {
-        String value = getStringValue(getR6Stats(), UPDATED_AT_KEY);
+        return parseOffsetDateTime(getStringValue(getR6Stats(), UPDATED_AT_KEY));
+    }
+
+    private OffsetDateTime parseOffsetDateTime(String value) {
         if (value == null) {
             return null;
         }
@@ -455,6 +465,106 @@ public class UserProfile {
         this.gameStats = nextGameStats;
         advanceGameConnectionVersion(RIOT_KEY);
         clearRepresentativeGameIf(GameType.LOL);
+    }
+
+    public boolean hasConnectedValorant() {
+        return Boolean.TRUE.equals(getGameStatsFor(VALORANT_KEY).get(CONNECTED_KEY));
+    }
+
+    public String getValorantRiotId() {
+        return getStringValue(getGameStatsFor(VALORANT_KEY), RIOT_ID_KEY);
+    }
+
+    /** HenrikDev 기준 PUUID. Riot 공식 API의 RIOT.puuid와 같은 값이라고 가정하지 않는다. */
+    public String getValorantPuuid() {
+        return getStringValue(getGameStatsFor(VALORANT_KEY), PUUID_KEY);
+    }
+
+    public String getValorantRegion() {
+        return getStringValue(getGameStatsFor(VALORANT_KEY), REGION_KEY);
+    }
+
+    public String getValorantPlatform() {
+        return getStringValue(getGameStatsFor(VALORANT_KEY), PLATFORM_KEY);
+    }
+
+    public ValorantSummaryStats getValorantSummary() {
+        Map<String, Object> stats = getGameStatsFor(VALORANT_KEY);
+        return new ValorantSummaryStats(
+                getStringValue(stats, TIER_LABEL_KEY),
+                getStringValue(stats, PEAK_TIER_LABEL_KEY),
+                getIntegerValue(stats, RR_KEY),
+                getDoubleValue(stats, KD_KEY),
+                getIntegerValue(stats, ACS_KEY),
+                getIntegerValue(stats, HEADSHOT_RATE_KEY),
+                getIntegerValue(stats, WIN_RATE_KEY),
+                getIntegerValue(stats, MATCHES_KEY)
+        );
+    }
+
+    public OffsetDateTime getValorantUpdatedAt() {
+        return parseOffsetDateTime(getStringValue(getGameStatsFor(VALORANT_KEY), UPDATED_AT_KEY));
+    }
+
+    public void connectValorant(
+            String riotId,
+            String puuid,
+            String region,
+            String platform,
+            ValorantSummaryStats summary,
+            OffsetDateTime updatedAt
+    ) {
+        // A new connection never inherits statistics cached for a previous account.
+        Map<String, Object> valorantStats = new HashMap<>();
+        valorantStats.put(CONNECTED_KEY, true);
+        valorantStats.put(RIOT_ID_KEY, riotId);
+        valorantStats.put(PUUID_KEY, puuid);
+        valorantStats.put(REGION_KEY, region);
+        valorantStats.put(PLATFORM_KEY, platform);
+        putValorantSummaryValues(valorantStats, summary, updatedAt);
+
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.put(VALORANT_KEY, valorantStats);
+        this.gameStats = nextGameStats;
+        advanceGameConnectionVersion(VALORANT_KEY);
+    }
+
+    /** riotId가 null이면 저장된 Riot ID를 유지한다(닉네임 변경 반영용). */
+    public void updateValorantSummary(String riotId, ValorantSummaryStats summary, OffsetDateTime updatedAt) {
+        Map<String, Object> valorantStats = new HashMap<>(getGameStatsFor(VALORANT_KEY));
+        valorantStats.put(CONNECTED_KEY, true);
+        if (riotId != null) {
+            valorantStats.put(RIOT_ID_KEY, riotId);
+        }
+        putValorantSummaryValues(valorantStats, summary, updatedAt);
+
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.put(VALORANT_KEY, valorantStats);
+        this.gameStats = nextGameStats;
+    }
+
+    public void disconnectValorant() {
+        Map<String, Object> nextGameStats = new HashMap<>(getSafeGameStats());
+        nextGameStats.remove(VALORANT_KEY);
+        this.gameStats = nextGameStats;
+        advanceGameConnectionVersion(VALORANT_KEY);
+        clearRepresentativeGameIf(GameType.VALORANT);
+    }
+
+    private void putValorantSummaryValues(
+            Map<String, Object> valorantStats,
+            ValorantSummaryStats summary,
+            OffsetDateTime updatedAt
+    ) {
+        putNullable(valorantStats, TIER_LABEL_KEY, summary.tierLabel());
+        putNullable(valorantStats, PEAK_TIER_LABEL_KEY, summary.peakTierLabel());
+        putNullable(valorantStats, RR_KEY, summary.rr());
+        putNullable(valorantStats, KD_KEY, summary.kd());
+        putNullable(valorantStats, ACS_KEY, summary.acs());
+        putNullable(valorantStats, HEADSHOT_RATE_KEY, summary.headshotRate());
+        putNullable(valorantStats, WIN_RATE_KEY, summary.winRate());
+        putNullable(valorantStats, MATCHES_KEY, summary.matches());
+        putNullable(valorantStats, UPDATED_AT_KEY, updatedAt == null ? null : updatedAt.toString());
     }
 
     private void advanceGameConnectionVersion(String gameKey) {

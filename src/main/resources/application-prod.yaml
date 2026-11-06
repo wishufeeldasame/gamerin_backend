@@ -115,6 +115,13 @@ riot:
     connect-timeout: ${RIOT_API_CONNECT_TIMEOUT:3s}
     read-timeout: ${RIOT_API_READ_TIMEOUT:10s}
 
+henrik:
+  api:
+    key: ${HENRIK_API_KEY:}
+    base-url: ${HENRIK_API_BASE_URL:https://api.henrikdev.xyz}
+    connect-timeout: ${HENRIK_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${HENRIK_API_READ_TIMEOUT:10s}
+
 r6:
   api:
     key: ${R6DATA_API_KEY:}

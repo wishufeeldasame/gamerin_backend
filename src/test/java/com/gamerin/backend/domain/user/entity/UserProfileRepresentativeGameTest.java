@@ -2,8 +2,6 @@ package com.gamerin.backend.domain.user.entity;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -15,6 +13,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import com.gamerin.backend.domain.game.model.GameStatsMode;
 import com.gamerin.backend.domain.game.model.GameType;
 import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
+import com.gamerin.backend.domain.valorant.model.ValorantSummaryStats;
 
 class UserProfileRepresentativeGameTest {
 
@@ -96,6 +95,7 @@ class UserProfileRepresentativeGameTest {
         assertClearedBy(GameType.PUBG, UserProfile::disconnectPubg);
         assertClearedBy(GameType.R6, UserProfile::disconnectR6);
         assertClearedBy(GameType.LOL, UserProfile::disconnectRiot);
+        assertClearedBy(GameType.VALORANT, UserProfile::disconnectValorant);
         assertClearedBy(GameType.LOL, UserProfile::clearForWithdrawal);
     }
 
@@ -132,11 +132,9 @@ class UserProfileRepresentativeGameTest {
         assertThat(profile.getRepresentativeGame()).isNull();
     }
 
-    // 발로란트 연동·요약 저장은 #178에서 구현한다. 그 전까지는 저장될 형태를 직접 넣어 검증한다.
     private void putValorantTier(UserProfile profile, String tierLabel) {
-        Map<String, Object> gameStats = new HashMap<>(profile.getGameStats());
-        gameStats.put(GameType.VALORANT.name(), Map.of("connected", true, "tierLabel", tierLabel));
-        profile.updateGameStats(gameStats);
+        profile.connectValorant("name#KR1", "henrik-puuid", "KR", "PC",
+                new ValorantSummaryStats(tierLabel, null, null, null, null, null, null, 0), null);
     }
 
     private UserProfile connectedProfile() {
