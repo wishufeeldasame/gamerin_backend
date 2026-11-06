@@ -47,6 +47,10 @@ public class User {
     @Column(nullable = false, length = 20)
     private UserStatus status;
 
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private Theme theme;
+
     @Column(name = "last_login_at")
     private OffsetDateTime lastLoginAt;
 
@@ -124,6 +128,10 @@ public class User {
         return status;
     }
 
+    public Theme getTheme() {
+        return theme;
+    }
+
     public OffsetDateTime getLastLoginAt() {
         return lastLoginAt;
     }
@@ -163,6 +171,10 @@ public class User {
         if (nickname != null && !nickname.isBlank()) {
             this.nickname = nickname;
         }
+    }
+
+    public void updateTheme(Theme theme) {
+        this.theme = theme;
     }
 
     // 유저 계정을 정지 상태로 전환
