@@ -1,7 +1,8 @@
 package com.gamerin.backend.global.logging;
 
 import java.io.PrintStream;
-import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -10,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 public final class JsonConsoleLogger {
 
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private JsonConsoleLogger() {
@@ -33,7 +35,7 @@ public final class JsonConsoleLogger {
 
     private static void write(String level, String event, String status, String reason, Map<String, ?> details) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("timestamp", Instant.now().toString());
+        payload.put("timestamp", OffsetDateTime.now(KST).toString());
         payload.put("level", level);
         payload.put("event", event);
         payload.put("status", status);
@@ -53,7 +55,7 @@ public final class JsonConsoleLogger {
             return OBJECT_MAPPER.writeValueAsString(payload);
         } catch (JsonProcessingException ex) {
             return "{\"timestamp\":\"%s\",\"level\":\"ERROR\",\"event\":\"logging.json_serialize\",\"status\":\"failure\",\"reason\":\"%s\"}"
-                    .formatted(Instant.now(), escape(ex.getMessage()));
+                    .formatted(OffsetDateTime.now(KST), escape(ex.getMessage()));
         }
     }
 
