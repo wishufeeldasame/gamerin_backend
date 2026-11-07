@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.user.entity;
 
+import org.hibernate.annotations.DynamicUpdate;
+
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -19,6 +21,8 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "users")
+// Keep concurrent changes to different user fields from overwriting each other.
+@DynamicUpdate
 public class User {
 
     public static final String WITHDRAWN_NICKNAME = "탈퇴한 사용자";

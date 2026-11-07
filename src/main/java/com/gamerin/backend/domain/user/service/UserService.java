@@ -228,7 +228,7 @@ public class UserService {
 
     @Transactional
     public void updateSettings(UUID userId, UpdateUserSettingsRequest request) {
-        User user = userRepository.findByIdAndDeletedAtIsNull(userId)
+        User user = userRepository.findActiveByIdForUpdate(userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
         user.updateTheme(request.theme());
     }

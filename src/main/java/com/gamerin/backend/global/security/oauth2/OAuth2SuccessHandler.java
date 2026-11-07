@@ -21,6 +21,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
+import java.time.OffsetDateTime;
 import java.util.Optional;
 
 @Component
@@ -76,7 +77,7 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
             User user = userRepository.findById(socialAccount.getUserId())
                     .orElseThrow(() -> new IllegalStateException("사용자를 찾을 수 없습니다."));
 
-            processLogin(user, socialAccount, response);
+            processLogin(user, socialAccount);
 
             TokenService.AuthResult result = tokenService.issueTokens(user);
             setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
@@ -102,7 +103,7 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
                 );
                 socialAccountRepository.save(newAccount);
 
-                processLogin(user, newAccount, response);
+                processLogin(user, newAccount);
 
                 TokenService.AuthResult result = tokenService.issueTokens(user);
                 setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
@@ -132,12 +133,13 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         return "true".equals(String.valueOf(emailVerified));
     }
 
-    private void processLogin(User user, SocialAccount socialAccount, HttpServletResponse response) {
+    private void processLogin(User user, SocialAccount socialAccount) {
         socialAccount.updateLastLoginAt();
         socialAccountRepository.save(socialAccount);
 
-        user.updateLastLoginAt();
-        userRepository.save(user);
+        if (userRepository.recordLastLogin(user.getId(), OffsetDateTime.now()) == 0) {
+            throw new IllegalStateException("사용자를 찾을 수 없습니다.");
+        }
     }
 
     private String buildLoginSuccessUrl() {
