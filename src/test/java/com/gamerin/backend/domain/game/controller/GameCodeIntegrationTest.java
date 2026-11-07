@@ -64,8 +64,9 @@ class GameCodeIntegrationTest {
     }
 
     @Test
-    void gamesRequireAuthentication() throws Exception {
-        mockMvc.perform(get("/api/v1/games")).andExpect(status().isUnauthorized());
+    void gamesAllowAnonymousFilterLookup() throws Exception {
+        mockMvc.perform(get("/api/v1/games")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
     }
 
     @Test

@@ -11,6 +11,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 
@@ -126,8 +127,7 @@ public class MentoringService {
 
     @Transactional(readOnly = true)
     public MentorProfileResponse getMentorProfile(UUID mentorId) {
-        MentorProfile mentorProfile = mentorProfileRepository.findById(mentorId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "해당 멘토를 찾을 수 없습니다."));
+        MentorProfile mentorProfile = getPublicMentor(mentorId);
 
         return MentorProfileResponse.from(mentorProfile, membershipService.isActive(mentorProfile.getUserId()));
     }
@@ -165,7 +165,8 @@ public class MentoringService {
     public Page<MentoringProgramResponse> getPrograms(GameType gameName, UUID mentorId, Pageable pageable) {
 
         Page<MentoringProgram> programs = mentoringProgramRepository
-                .findByFilters(gameName == null ? null : gameName.name(), mentorId, pageable);
+                .findByFilters(gameName == null ? null : gameName.name(), mentorId,
+                        publicPage(pageable, Set.of("id", "createdAt", "updatedAt", "title", "price")));
 
         Set<UUID> mentorIds = new HashSet<>();
         programs.forEach(program -> mentorIds.add(program.getMentor().getId()));
@@ -180,6 +181,10 @@ public class MentoringService {
         MentoringProgram program = mentoringProgramRepository.findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
 
+        if (program.isAdminSuspended()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다.");
+        }
+        requirePublicMentor(program.getMentor());
         return MentoringProgramDetailResponse.from(program, membershipService.isActive(program.getMentor().getId()));
     }
 
@@ -673,13 +678,35 @@ public class MentoringService {
     // 특정 멘토의 리뷰 목록 조회
     @Transactional(readOnly = true)
     public Page<MentoringReviewResponse> getMentorReviews(UUID mentorId, Pageable pageable) {
-        Page<MentoringReview> reviews = mentoringReviewRepository.findByMentorUserId(mentorId, pageable);
+        getPublicMentor(mentorId);
+        Page<MentoringReview> reviews = mentoringReviewRepository.findByMentorUserId(mentorId,
+                publicPage(pageable, Set.of("id", "createdAt", "rating")));
         Set<UUID> reviewerIds = new HashSet<>();
         reviews.forEach(review -> reviewerIds.add(review.getMentee().getId()));
         Set<UUID> activeUserIds = reviewerIds.isEmpty() ? Set.of() : membershipService.findActiveUserIds(reviewerIds);
         preloadProfiles(reviewerIds);
-        return reviews.map(review -> MentoringReviewResponse.from(review,
+        return reviews.map(review -> MentoringReviewResponse.fromPublic(review,
                 activeUserIds.contains(review.getMentee().getId())));
+    }
+
+    private MentorProfile getPublicMentor(UUID mentorId) {
+        MentorProfile mentor = mentorProfileRepository.findById(mentorId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "해당 멘토를 찾을 수 없습니다."));
+        requirePublicMentor(mentor);
+        return mentor;
+    }
+
+    private void requirePublicMentor(MentorProfile mentor) {
+        if (mentor.getStatus() != MentorStatus.ACTIVE || !mentor.getUser().isActive()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "해당 멘토를 찾을 수 없습니다.");
+        }
+    }
+
+    private Pageable publicPage(Pageable pageable, Set<String> sortProperties) {
+        if (pageable.getSort().stream().anyMatch(order -> !sortProperties.contains(order.getProperty()))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "지원하지 않는 정렬입니다.");
+        }
+        return PageRequest.of(pageable.getPageNumber(), Math.min(pageable.getPageSize(), 50), pageable.getSort());
     }
 
 }

@@ -3,12 +3,14 @@ package com.gamerin.backend.domain.mentoring.dto.response;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import com.gamerin.backend.domain.mentoring.entity.MentoringReview;
 import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 
 public record MentoringReviewResponse(
     UUID id,
-    UUID applicationId,
+    @JsonInclude(JsonInclude.Include.NON_NULL) UUID applicationId,
     UUID programId,
     String programTitle,
     String menteeNickname,
@@ -19,9 +21,17 @@ public record MentoringReviewResponse(
     RepresentativeTierResponse representativeTier
 ) {
     public static MentoringReviewResponse from(MentoringReview review, boolean membershipBadge) {
+        return from(review, membershipBadge, true);
+    }
+
+    public static MentoringReviewResponse fromPublic(MentoringReview review, boolean membershipBadge) {
+        return from(review, membershipBadge, false);
+    }
+
+    private static MentoringReviewResponse from(MentoringReview review, boolean membershipBadge, boolean includeApplication) {
         return new MentoringReviewResponse(
             review.getId(),
-            review.getApplication().getId(),
+            includeApplication ? review.getApplication().getId() : null,
             review.getApplication().getProgram().getId(),
             review.getApplication().getProgram().getTitle(),
             review.getMentee().getNickname(),

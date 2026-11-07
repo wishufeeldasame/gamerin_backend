@@ -57,8 +57,9 @@ public class FeedService {
             String cursor,
             int size
     ) {
-        UUID viewerId = getCurrentUserId(principal);
         String normalizedTab = normalizeTab(tab);
+        UUID viewerId = "following".equals(normalizedTab)
+                ? getCurrentUserId(principal) : getOptionalViewerId(principal);
         int pageSize = clampSize(size, DEFAULT_PAGE_SIZE);
         boolean followingOnly = "following".equals(normalizedTab);
         TimelineCursor timelineCursor = TimelineCursor.parseOrStart(cursor);
@@ -82,7 +83,7 @@ public class FeedService {
             String cursor,
             int size
     ) {
-        UUID viewerId = getCurrentUserId(principal);
+        UUID viewerId = getOptionalViewerId(principal);
         UUID targetUserId = getTargetUserId(handle);
 
         int pageSize = clampSize(size, DEFAULT_PAGE_SIZE);
@@ -105,7 +106,7 @@ public class FeedService {
             String cursor,
             int size
     ) {
-        getCurrentUserId(principal);
+        getOptionalViewerId(principal);
         getTargetUserId(handle);
 
         int pageSize = clampSize(size, DEFAULT_MEDIA_PAGE_SIZE);
@@ -176,6 +177,10 @@ public class FeedService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid bookmark scope.");
         }
         return normalized;
+    }
+
+    private UUID getOptionalViewerId(CustomUserPrincipal principal) {
+        return principal == null ? null : getCurrentUserId(principal);
     }
 
     private UUID getCurrentUserId(CustomUserPrincipal principal) {

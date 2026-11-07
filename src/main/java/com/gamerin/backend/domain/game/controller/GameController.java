@@ -12,16 +12,14 @@ import com.gamerin.backend.domain.game.model.GameType;
 import com.gamerin.backend.global.response.ApiResponse;
 
 import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 @Tag(name = "Game", description = "게임 코드 API")
 @RestController
 @RequestMapping("/api/v1/games")
-@SecurityRequirement(name = "bearerAuth")
 public class GameController {
 
-    @Operation(summary = "게임 목록 조회", description = "지원하는 게임 코드와 표시명을 고정 순서로 반환 (로그인 필요)")
+    @Operation(summary = "게임 목록 조회", description = "지원하는 게임 코드와 표시명을 고정 순서로 반환 (비로그인 조회 허용)")
     @GetMapping
     public ApiResponse<List<GameResponse>> getGames() {
         return ApiResponse.ok(Arrays.stream(GameType.values()).map(GameResponse::from).toList());
