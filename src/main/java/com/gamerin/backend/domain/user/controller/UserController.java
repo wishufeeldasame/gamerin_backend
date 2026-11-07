@@ -21,6 +21,7 @@ import com.gamerin.backend.domain.post.service.FeedService;
 import com.gamerin.backend.domain.user.dto.request.ProfileImageTarget;
 import com.gamerin.backend.domain.user.dto.request.UpdateProfileRequest;
 import com.gamerin.backend.domain.user.dto.request.UpdateRepresentativeGameRequest;
+import com.gamerin.backend.domain.user.dto.request.UpdateUserSettingsRequest;
 import com.gamerin.backend.domain.user.dto.response.DetailedUserProfileResponse;
 import com.gamerin.backend.domain.user.dto.response.ProfileImageUploadResponse;
 import com.gamerin.backend.domain.user.service.AccountWithdrawalService;
@@ -65,6 +66,15 @@ public class UserController {
             @Valid @RequestBody UpdateProfileRequest request
     ) {
         userService.updateProfile(principal.getUserId(), request);
+        return ApiResponse.ok(null);
+    }
+
+    @PatchMapping("/me/settings")
+    public ApiResponse<Void> updateSettings(
+            @AuthenticationPrincipal CustomUserPrincipal principal,
+            @Valid @RequestBody UpdateUserSettingsRequest request
+    ) {
+        userService.updateSettings(principal.getUserId(), request);
         return ApiResponse.ok(null);
     }
 

@@ -39,7 +39,7 @@ controller는 모두 `/api/v1/...` 아래에 있으며, 도메인 이름과 URL�
 | Prefix | Controller | 대표 엔드포인트 |
 | --- | --- | --- |
 | `/api/v1/auth` | AuthController | `POST /signup`, `POST /social-signup`, `POST /login`, `POST /refresh`, `POST /logout`, `POST /find-id`, `POST /find-password`, `POST /reset-password`, `GET /me`, `GET /availability/handle` |
-| `/api/v1/users` | UserController | `GET/PATCH /me`, `POST /me/profile-images`, `GET /me/bookmarks`, `GET /{handle}`, `GET /{handle}/posts`, `GET /{handle}/media` |
+| `/api/v1/users` | UserController | `GET/PATCH /me`, `PATCH /me/settings`, `POST /me/profile-images`, `GET /me/bookmarks`, `GET /{handle}`, `GET /{handle}/posts`, `GET /{handle}/media` |
 | `/api/v1/users` | FollowController | `POST/DELETE /{handle}/follow`, `GET /{handle}/followers`, `GET /{handle}/following` |
 | `/api/v1/feed` | FeedController | `GET /` |
 | `/api/v1/posts` | PostController | `POST /` (JSON 또는 multipart), `GET/DELETE /{postId}`, `POST/DELETE /{postId}/likes`, `/reposts`, `/bookmarks`, `POST /{postId}/shares`, `POST/GET /{postId}/comments`, `DELETE /{postId}/comments/{commentId}` |
