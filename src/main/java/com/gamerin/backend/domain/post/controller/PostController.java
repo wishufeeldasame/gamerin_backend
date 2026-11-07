@@ -42,7 +42,6 @@ import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping("/api/v1/posts")
-@SecurityRequirement(name = "bearerAuth")
 public class PostController {
 
     private static final Logger log = LoggerFactory.getLogger(PostController.class);
@@ -58,6 +57,7 @@ public class PostController {
         this.postViewService = postViewService;
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public ApiResponse<PostDetailResponse> create(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -69,6 +69,7 @@ public class PostController {
      * 사진 게시물은 200과 게시물을, 영상 게시물은 202와 처리 작업을 반환한다.
      * 영상은 처리가 끝나면 게시물이 만들어지므로 {@code GET /video-jobs/{jobId}}로 상태를 확인한다.
      */
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<?>> createWithFiles(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -80,6 +81,7 @@ public class PostController {
         return ResponseEntity.ok(ApiResponse.ok(result.post()));
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @GetMapping("/video-jobs/{jobId}")
     public ApiResponse<PostVideoJobResponse> getVideoJob(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -90,6 +92,7 @@ public class PostController {
     /**
      * KP-C3 (#92): 멤버십 게시물 본문 수정 API (E1).
      */
+    @SecurityRequirement(name = "bearerAuth")
     @PatchMapping(value = "/{postId}", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ApiResponse<PostDetailResponse> update(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -117,6 +120,7 @@ public class PostController {
     }
 
     /** 피드 카드 노출 보고. 24시간 중복·삭제·숨김 글은 세지 않고 조용히 건너뛴다. */
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping("/views")
     public ApiResponse<RecordPostViewsResponse> recordViews(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -127,6 +131,9 @@ public class PostController {
 
     // 읽기 응답은 이미 만들었으므로(이번 조회는 다음 응답부터 반영) 집계 실패가 상세 조회를 막지 않게 한다.
     private void recordDetailView(CustomUserPrincipal principal, PostDetailResponse detail) {
+        if (principal == null) {
+            return;
+        }
         try {
             postViewService.record(principal.getUserId(), List.of(detail.postId()));
         } catch (RuntimeException ex) {
@@ -134,6 +141,7 @@ public class PostController {
         }
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @DeleteMapping("/{postId}")
     public ApiResponse<Void> delete(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -142,6 +150,7 @@ public class PostController {
         return ApiResponse.ok(null);
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping("/{postId}/likes")
     public ApiResponse<Void> like(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -150,6 +159,7 @@ public class PostController {
         return ApiResponse.ok(null);
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @DeleteMapping("/{postId}/likes")
     public ApiResponse<Void> unlike(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -158,6 +168,7 @@ public class PostController {
         return ApiResponse.ok(null);
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping("/{postId}/reposts")
     public ApiResponse<RepostActionResponse> repost(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -165,6 +176,7 @@ public class PostController {
         return ApiResponse.ok(postRepostService.repost(principal, postId));
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @DeleteMapping("/{postId}/reposts")
     public ApiResponse<RepostActionResponse> unrepost(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -172,6 +184,7 @@ public class PostController {
         return ApiResponse.ok(postRepostService.unrepost(principal, postId));
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping("/{postId}/bookmarks")
     public ApiResponse<Void> bookmark(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -180,6 +193,7 @@ public class PostController {
         return ApiResponse.ok(null);
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @DeleteMapping("/{postId}/bookmarks")
     public ApiResponse<Void> unbookmark(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -188,6 +202,7 @@ public class PostController {
         return ApiResponse.ok(null);
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping("/{postId}/shares")
     public ApiResponse<ShareResponse> share(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -196,6 +211,7 @@ public class PostController {
         return ApiResponse.ok(postService.share(principal, postId, request));
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping("/{postId}/comments")
     public ApiResponse<CommentResponse> createComment(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -211,6 +227,7 @@ public class PostController {
         return ApiResponse.ok(postService.getComments(principal, postId));
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @DeleteMapping("/{postId}/comments/{commentId}")
     public ApiResponse<Void> deleteComment(
             @AuthenticationPrincipal CustomUserPrincipal principal,

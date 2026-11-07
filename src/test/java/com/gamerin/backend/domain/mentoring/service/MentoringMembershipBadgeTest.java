@@ -299,6 +299,7 @@ class MentoringMembershipBadgeTest {
         MentoringReview first = review(application());
         MentoringReview second = review(application());
         UUID mentorId = first.getMentor().getId();
+        when(mentorProfileRepository.findById(mentorId)).thenReturn(Optional.of(first.getMentor()));
         when(mentoringReviewRepository.findByMentorUserId(mentorId, pageable))
                 .thenReturn(new PageImpl<>(List.of(first, second), pageable, 2));
         Set<UUID> writers = Set.of(first.getMentee().getId(), second.getMentee().getId());
@@ -314,7 +315,9 @@ class MentoringMembershipBadgeTest {
 
     @Test
     void emptyReviewsSkipMembership() {
-        UUID mentorId = UUID.randomUUID();
+        MentorProfile mentor = application().getProgram().getMentor();
+        UUID mentorId = mentor.getId();
+        when(mentorProfileRepository.findById(mentorId)).thenReturn(Optional.of(mentor));
         when(mentoringReviewRepository.findByMentorUserId(mentorId, pageable)).thenReturn(Page.empty(pageable));
 
         assertThat(service.getMentorReviews(mentorId, pageable)).isEmpty();

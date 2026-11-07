@@ -166,6 +166,7 @@ class MentoringServiceTest {
                                 UUID.randomUUID());
                 MentoringProgram program = application.getProgram();
                 program.setStatus(ProgramStatus.CLOSED);
+                program.getMentor().setStatus(MentorStatus.ACTIVE);
 
                 when(mentoringProgramRepository.findByIdAndDeletedAtIsNull(program.getId()))
                                 .thenReturn(Optional.of(program));

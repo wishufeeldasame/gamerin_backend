@@ -38,6 +38,7 @@ public interface PostCommentRepository extends JpaRepository<PostComment, UUID> 
         left join fetch author.profile
         where pc.post.id = :postId
           and pc.deletedAt is null
+          and author.deletedAt is null
         order by pc.createdAt desc, pc.id desc
         """)
     List<PostComment> findActiveByPostId(@Param("postId") UUID postId);

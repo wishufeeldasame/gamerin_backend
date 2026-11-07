@@ -353,17 +353,18 @@ public class PostService {
 
     @Transactional(readOnly = true)
     public PostDetailResponse getDetail(CustomUserPrincipal principal, UUID postId) {
-        User user = getCurrentUser(principal);
+        UUID viewerId = getOptionalViewerId(principal);
         Post post = getActivePost(postId);
-        return postResponseAssembler.toPostDetail(post, user.getId());
+        return postResponseAssembler.toPostDetail(post, viewerId);
     }
 
     @Transactional(readOnly = true)
     public PostDetailResponse getDetailByNumber(CustomUserPrincipal principal, long postNumber) {
-        User user = getCurrentUser(principal);
+        UUID viewerId = getOptionalViewerId(principal);
         Post post = postRepository.findByPostNumberAndDeletedAtIsNull(postNumber)
+                .filter(item -> item.getAuthor().getDeletedAt() == null)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found."));
-        return postResponseAssembler.toPostDetail(post, user.getId());
+        return postResponseAssembler.toPostDetail(post, viewerId);
     }
 
     public void like(CustomUserPrincipal principal, UUID postId) {
@@ -449,10 +450,10 @@ public class PostService {
 
     @Transactional(readOnly = true)
     public List<CommentResponse> getComments(CustomUserPrincipal principal, UUID postId) {
-        User user = getCurrentUser(principal);
+        UUID viewerId = getOptionalViewerId(principal);
         getActivePost(postId);
 
-        return postResponseAssembler.toCommentResponses(postCommentRepository.findActiveByPostId(postId), user.getId());
+        return postResponseAssembler.toCommentResponses(postCommentRepository.findActiveByPostId(postId), viewerId);
     }
 
     public void deleteComment(CustomUserPrincipal principal, UUID postId, UUID commentId) {
@@ -631,12 +632,17 @@ public class PostService {
 
     private Post getActivePost(UUID postId) {
         return postRepository.findByIdAndDeletedAtIsNull(postId)
+                .filter(post -> post.getAuthor().getDeletedAt() == null)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found."));
     }
 
     private Post getActivePostForUpdate(UUID postId) {
         return postRepository.findActiveByIdForUpdate(postId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Post not found."));
+    }
+
+    private UUID getOptionalViewerId(CustomUserPrincipal principal) {
+        return principal == null ? null : getCurrentUser(principal).getId();
     }
 
     private User getCurrentUser(CustomUserPrincipal principal) {
