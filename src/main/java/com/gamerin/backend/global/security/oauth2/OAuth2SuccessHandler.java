@@ -18,11 +18,13 @@ import org.springframework.security.oauth2.client.authentication.OAuth2Authentic
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.authentication.SimpleUrlAuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.util.Optional;
+import java.util.UUID;
 
 @Component
 public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler {
@@ -31,6 +33,7 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
     private final SocialSignupSessionRepository socialSignupSessionRepository;
     private final UserRepository userRepository;
     private final TokenService tokenService;
+    private final TransactionTemplate transactionTemplate;
     
     private final String frontendBaseUrl;
     private final String refreshCookieName;
@@ -42,6 +45,7 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
             SocialSignupSessionRepository socialSignupSessionRepository,
             UserRepository userRepository,
             TokenService tokenService,
+            TransactionTemplate transactionTemplate,
             @Value("${app.frontend.base-url:http://localhost:3000}") String frontendBaseUrl,
             @Value("${app.auth.jwt.refresh-cookie-name:refresh_token}") String refreshCookieName,
             @Value("${app.auth.jwt.refresh-cookie-secure:false}") boolean refreshCookieSecure,
@@ -51,6 +55,7 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         this.socialSignupSessionRepository = socialSignupSessionRepository;
         this.userRepository = userRepository;
         this.tokenService = tokenService;
+        this.transactionTemplate = transactionTemplate;
         this.frontendBaseUrl = frontendBaseUrl;
         this.refreshCookieName = refreshCookieName;
         this.refreshCookieSecure = refreshCookieSecure;
@@ -74,14 +79,7 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         if (accountOpt.isPresent()) {
             // [Case A: 이미 소셜 연동이 완료된 기존 유저] -> 바로 로그인
             SocialAccount socialAccount = accountOpt.get();
-            User user = userRepository.findById(socialAccount.getUserId())
-                    .orElseThrow(() -> new IllegalStateException("사용자를 찾을 수 없습니다."));
-
-            processLogin(user, socialAccount);
-
-            TokenService.AuthResult result = tokenService.issueTokens(user);
-            setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
-            targetUrl = buildLoginSuccessUrl();
+            targetUrl = processLogin(socialAccount.getUserId(), socialAccount, response);
 
         } else if (!isEmailVerified(oAuth2User)) {
             // Google이 확인하지 않은 이메일로는 신규 가입·기존 계정 연동을 허용하지 않는다
@@ -101,13 +99,7 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
                 SocialAccount newAccount = SocialAccount.create(
                         user.getId(), provider, providerUserId, email, name
                 );
-                socialAccountRepository.save(newAccount);
-
-                processLogin(user, newAccount);
-
-                TokenService.AuthResult result = tokenService.issueTokens(user);
-                setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
-                targetUrl = buildLoginSuccessUrl();
+                targetUrl = processLogin(user.getId(), newAccount, response);
 
             } else {
                 // [Case B-2: 서비스에 아예 처음 온 완전 신규 유저] -> 가입 세션 열고 폼 페이지로 리다이렉트
@@ -133,13 +125,27 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         return "true".equals(String.valueOf(emailVerified));
     }
 
-    private void processLogin(User user, SocialAccount socialAccount) {
-        socialAccount.updateLastLoginAt();
-        socialAccountRepository.save(socialAccount);
-
-        if (userRepository.recordLastLogin(user.getId(), OffsetDateTime.now()) == 0) {
-            throw new IllegalStateException("사용자를 찾을 수 없습니다.");
+    private String processLogin(UUID userId, SocialAccount socialAccount, HttpServletResponse response) {
+        TokenService.AuthResult result = transactionTemplate.execute(status -> {
+            // Keep the user row locked until social linking and token issuance commit.
+            if (userRepository.recordLastLogin(userId, OffsetDateTime.now()) == 0) {
+                socialAccountRepository.delete(socialAccount);
+                return null;
+            }
+            User user = userRepository.findById(userId)
+                    .orElseThrow(() -> new IllegalStateException("사용자를 찾을 수 없습니다."));
+            socialAccount.updateLastLoginAt();
+            socialAccountRepository.save(socialAccount);
+            return tokenService.issueTokens(user);
+        });
+        if (result == null) {
+            return UriComponentsBuilder.fromUriString(frontendBaseUrl)
+                    .path("/login")
+                    .queryParam("error", "account_withdrawn")
+                    .build().toUriString();
         }
+        setRefreshTokenCookie(response, result.refreshToken(), result.refreshTokenExpiresIn());
+        return buildLoginSuccessUrl();
     }
 
     private String buildLoginSuccessUrl() {
