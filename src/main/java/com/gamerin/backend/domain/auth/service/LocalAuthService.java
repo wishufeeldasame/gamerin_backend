@@ -325,6 +325,7 @@ public class LocalAuthService {
                 principal.getAuthorities().stream().findFirst().map(Object::toString).orElse("ROLE_USER"),
                 "ACTIVE", user != null && user.getPasswordHash() != null,
                 membershipService.isActive(principal.getUserId()),
+                user != null ? user.getTheme() : null,
                 profile != null ? profile.getRepresentativeGame() : null,
                 RepresentativeTierResponse.from(profile));
     }

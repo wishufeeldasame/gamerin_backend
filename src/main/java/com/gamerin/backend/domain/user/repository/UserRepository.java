@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.user.repository;
 
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -9,6 +10,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +27,11 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findWithProfileById(@Param("id") UUID id);
 
     Optional<User> findByIdAndDeletedAtIsNull(UUID id);
+
+    @Transactional
+    @Modifying
+    @Query("update User u set u.lastLoginAt = :now, u.updatedAt = :now where u.id = :id and u.deletedAt is null")
+    int recordLastLogin(@Param("id") UUID id, @Param("now") OffsetDateTime now);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select u from User u where u.id = :id and u.deletedAt is null")
