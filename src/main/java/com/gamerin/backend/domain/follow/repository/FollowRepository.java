@@ -14,6 +14,35 @@ import com.gamerin.backend.domain.follow.entity.Follow;
 
 public interface FollowRepository extends JpaRepository<Follow, UUID> {
 
+    interface RecommendationCandidate {
+        String getUserId();
+        long getMutualCount();
+    }
+
+    @Query(value = """
+            WITH mutual AS (
+                SELECT second_hop.followee_id AS user_id, COUNT(*) AS mutual_count
+                FROM follows first_hop
+                JOIN users intermediary ON intermediary.id = first_hop.followee_id
+                    AND intermediary.status = 'ACTIVE' AND intermediary.deleted_at IS NULL
+                JOIN follows second_hop ON second_hop.follower_id = first_hop.followee_id
+                WHERE first_hop.follower_id = :viewerId AND second_hop.followee_id <> :viewerId
+                GROUP BY second_hop.followee_id
+            )
+            SELECT CAST(candidate.id AS VARCHAR) AS userId, mutual.mutual_count AS mutualCount
+            FROM mutual
+            JOIN users candidate ON candidate.id = mutual.user_id
+            WHERE candidate.status = 'ACTIVE' AND candidate.deleted_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM follows existing
+                  WHERE existing.follower_id = :viewerId AND existing.followee_id = candidate.id
+              )
+            ORDER BY mutual.mutual_count DESC, COALESCE(candidate.last_login_at, candidate.created_at) DESC, candidate.id DESC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<RecommendationCandidate> findRecommendationCandidates(
+            @Param("viewerId") UUID viewerId, @Param("limit") int limit);
+
     boolean existsByFollowerIdAndFolloweeId(UUID followerId, UUID followeeId);
 
     Optional<Follow> findByFollowerIdAndFolloweeId(UUID followerId, UUID followeeId);
