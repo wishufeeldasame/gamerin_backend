@@ -59,7 +59,7 @@ class OAuth2SuccessHandlerTest {
 
         handler.onAuthenticationSuccess(new MockHttpServletRequest(), response, authentication(false));
 
-        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/login?error=email_not_verified");
+        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/?login=1&error=email_not_verified");
         verifyNoInteractions(userRepository, socialSignupSessionRepository);
         verify(socialAccountRepository, never()).save(any());
     }

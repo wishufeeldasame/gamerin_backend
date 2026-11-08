@@ -85,7 +85,8 @@ public class OAuth2SuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         } else if (!isEmailVerified(oAuth2User)) {
             // Google이 확인하지 않은 이메일로는 신규 가입·기존 계정 연동을 허용하지 않는다
             targetUrl = UriComponentsBuilder.fromUriString(frontendBaseUrl)
-                    .path("/login")
+                    .path("/")
+                    .queryParam("login", "1")
                     .queryParam("error", "email_not_verified")
                     .build().toUriString();
 
