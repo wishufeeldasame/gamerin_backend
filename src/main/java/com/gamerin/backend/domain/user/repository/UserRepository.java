@@ -22,6 +22,26 @@ import jakarta.persistence.LockModeType;
 
 public interface UserRepository extends JpaRepository<User, UUID> {
 
+    @Query("select u from User u left join fetch u.profile where u.id in :ids")
+    List<User> findAllWithProfileByIdIn(@Param("ids") Collection<UUID> ids);
+
+    @Query(value = """
+        SELECT CAST(u.id AS VARCHAR)
+        FROM users u
+        WHERE u.id <> :viewerId
+          AND u.status = 'ACTIVE' AND u.deleted_at IS NULL
+          AND u.id NOT IN :excludedIds
+          AND NOT EXISTS (
+              SELECT 1 FROM follows f WHERE f.follower_id = :viewerId AND f.followee_id = u.id
+          )
+        ORDER BY COALESCE(u.last_login_at, u.created_at) DESC, u.id DESC
+        LIMIT :limit
+        """, nativeQuery = true)
+    List<String> findRecentRecommendationIds(
+            @Param("viewerId") UUID viewerId,
+            @Param("excludedIds") Collection<UUID> excludedIds,
+            @Param("limit") int limit);
+
     @Transactional(readOnly = true)
     @Query("select u from User u left join fetch u.profile where u.id = :id")
     Optional<User> findWithProfileById(@Param("id") UUID id);

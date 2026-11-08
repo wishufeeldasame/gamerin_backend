@@ -41,6 +41,7 @@ controller는 모두 `/api/v1/...` 아래에 있으며, 도메인 이름과 URL�
 | `/api/v1/auth` | AuthController | `POST /signup`, `POST /social-signup`, `POST /login`, `POST /refresh`, `POST /logout`, `POST /find-id`, `POST /find-password`, `POST /reset-password`, `GET /me`, `GET /availability/handle` |
 | `/api/v1/users` | UserController | `GET/PATCH /me`, `PATCH /me/settings`, `POST /me/profile-images`, `GET /me/bookmarks`, `GET /{handle}`, `GET /{handle}/posts`, `GET /{handle}/media` |
 | `/api/v1/users` | FollowController | `POST/DELETE /{handle}/follow`, `GET /{handle}/followers`, `GET /{handle}/following` |
+| `/api/v1/users` | UserRecommendationController | `GET /me/recommendations?limit=5` (인증 필요, 1~20명) |
 | `/api/v1/feed` | FeedController | `GET /` |
 | `/api/v1/posts` | PostController | `POST /` (JSON 또는 multipart), `GET/DELETE /{postId}`, `POST/DELETE /{postId}/likes`, `/reposts`, `/bookmarks`, `POST /{postId}/shares`, `POST/GET /{postId}/comments`, `DELETE /{postId}/comments/{commentId}` |
 | `/api/v1/bookmark-collections` | BookmarkCollectionController | `POST/GET /`, `GET/PATCH/DELETE /{collectionId}`, `GET /{collectionId}/bookmarks`, `PUT/DELETE /{collectionId}/bookmarks/{postId}` |
@@ -64,6 +65,22 @@ controller는 모두 `/api/v1/...` 아래에 있으며, 도메인 이름과 URL�
 - 커서 목록: `data` 내부에 `{ "items": [...], "nextCursor": ..., "hasNext": ... }` (`CursorPageResponse.java`)
 - 일반 JSON 오류: `{ "success": false, "message": "..." }` (`global/exception/GlobalExceptionHandler.java`). 메시지는 한국어/영어가 혼재한다.
 - SSE(`/api/v1/messages/stream`)와 첨부 다운로드는 별도 형식이다.
+
+### 추천 친구 (#168)
+
+`GET /api/v1/users/me/recommendations?limit=5`는 `ApiResponse<List<UserRecommendationResponse>>`를 반환한다.
+각 항목은 `userId, handle, nickname, profileImageUrl, membershipBadge, mutualCount, representativeTier, winRate`다.
+대표 티어는 기존 `{ game, tierLabel }` 계약이며 승률은 대표 게임의 마지막 저장 백분율(0~100)이다.
+프로필 이미지·티어·승률이 없으면 각 필드는 null이다. 외부 게임 API를 호출하거나 계정 식별자를 공개하지 않는다.
+
+- 활성 팔로잉 사용자가 팔로우하는 후보를 공통 연결 수 내림차순으로 추천한다. 동점은 최근 로그인(없으면 가입) 시각, UUID 내림차순이다.
+- 부족분만 같은 최근 로그인/가입 순으로 보충한다(`mutualCount=0`). 자기 자신·기존 팔로우·정지·탈퇴 계정은 두 경로 모두 제외한다.
+- 기본 5, 허용 1~20. 범위·형식 오류는 400, 비로그인은 401, 정지 회원은 403이다. 후보가 없으면 `data: []`다.
+- 2단계 팔로우를 후보 ID별로 먼저 집계하고, 최대 20명의 프로필과 멤버십을 일괄 조회한다. 서비스 SQL은 결과가 있으면 3회(보충 시 4회)다.
+- V65의 활성 사용자 최근 활동 부분 인덱스를 추가한다. 기존 팔로우 인덱스·유니크 키를 재사용한다. 새 테이블·캐시·스케줄러는 없다.
+- 프론트 `feature/design-v2`의 `SuggestedFriendsCard` 목업(닉네임·대표 티어·승률·팔로우 버튼)에 맞춘 응답이다. 프론트 실제 연동은 별도 작업이며, 팔로우는 기존 `POST /api/v1/users/{handle}/follow`를 사용한다.
+
+검증: `./gradlew test --tests '*UserRecommendation*'`. 동일 테스트를 PostgreSQL에서 실행하려면 **빈 전용 테스트 DB** `gamerin_recommendation_test`를 준비하고 `RECOMMENDATION_POSTGRES_TEST_URL`을 지정한다. 선택값은 `RECOMMENDATION_POSTGRES_TEST_USERNAME`(기본 postgres), `RECOMMENDATION_POSTGRES_TEST_PASSWORD`(기본 빈 값)다. 이 경우 Flyway 적용과 JPA validate도 확인한다. 운영 DB는 사용하지 않는다. H2/PG 전환 시 `--rerun-tasks`로 다시 실행한다.
 
 ## 인증 방식
 
