@@ -80,6 +80,16 @@ controller는 모두 `/api/v1/...` 아래에 있으며, 도메인 이름과 URL�
 - 메시지 첨부는 `/uploads/message-attachments/**` 직접 접근이 차단되고, 인증 API(`/api/v1/messages/attachments/{id}`)로만 받을 수 있다.
 - 관련 코드: `global/security/config/SecurityConfig.java`, `global/security/jwt/*`, `global/security/oauth2/OAuth2SuccessHandler.java`, `domain/auth/`.
 
+### 비로그인 공개 조회 (#189)
+
+GET 전체 피드(`tab=all` 또는 생략), 게시물 상세·댓글, 타인 프로필·게시물·미디어, 멘토링 프로그램·멘토 소개·후기, 게임 코드를 공개한다. 팔로잉 피드·쓰기·개인 조회는 JSON 401로 보호한다. `/users/me`·하위 및 `/mentoring/mentors/me` 보호가 공개 동적 경로보다 우선한다.
+
+익명 개인화 필드는 false, 편집 정보는 null이고 조회수는 세지 않는다. 공개 후기는 신청 ID를 제외한다. 프로그램·후기 페이지 크기는 최대 50이다. 삭제·관리자 숨김 프로그램과 미승인·비활성·정지·탈퇴 멘토는 공개하지 않는다. 일반 마감 프로그램은 상태와 함께 공개한다. OAuth 성공 콜백(`/auth/oauth-success`)·refresh·DB 스키마는 유지한다. Google 이메일 미인증·탈퇴 계정은 `/login` 대신 `/?login=1&error=email_not_verified` 또는 `/?login=1&error=account_withdrawn`으로 보내 중앙 모달에서 안내한다.
+
+공개 조회 요청량 제한은 기존 정책을 유지한다. nginx의 일반 API 경로와 백엔드 공개 GET에는 새 익명 전용 rate limit을 추가하지 않았다.
+
+프론트 #187의 공개 셸·중앙 로그인 모달 적용은 후속 작업이다. 로그인 완료만으로 보류된 쓰기를 자동 실행하지 않는다. 검색·해시태그·관계 목록과 결제 상품 공개는 이번 범위에서 제외한다.
+
 ## 실행 / 빌드 / 테스트
 
 사전 준비: JDK 21, PostgreSQL, (미디어 기능 사용 시) FFmpeg. 모든 명령은 저장소 루트에서 실행한다.

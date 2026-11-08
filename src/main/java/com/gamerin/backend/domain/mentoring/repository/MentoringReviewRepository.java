@@ -20,5 +20,12 @@ public interface MentoringReviewRepository extends JpaRepository<MentoringReview
     List<UUID> findReviewedApplicationIds(@Param("applicationIds") List<UUID> applicationIds);
 
     // 특정 멘토의 리뷰 목록 조회 (페이징)
-    Page<MentoringReview> findByMentorUserId(UUID mentorId, Pageable pageable);
+    @Query("""
+        select r from MentoringReview r
+        where r.mentor.userId = :mentorId
+          and r.mentee.deletedAt is null
+          and r.application.program.deletedAt is null
+          and r.application.program.adminSuspendedAt is null
+        """)
+    Page<MentoringReview> findByMentorUserId(@Param("mentorId") UUID mentorId, Pageable pageable);
 }

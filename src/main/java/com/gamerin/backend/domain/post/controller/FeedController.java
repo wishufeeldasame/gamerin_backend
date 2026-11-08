@@ -6,17 +6,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import io.swagger.v3.oas.annotations.Operation;
+
 import com.gamerin.backend.domain.post.dto.response.PostCardResponse;
 import com.gamerin.backend.domain.post.service.FeedService;
 import com.gamerin.backend.global.response.ApiResponse;
 import com.gamerin.backend.global.response.CursorPageResponse;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
 
-import io.swagger.v3.oas.annotations.security.SecurityRequirement;
-
 @RestController
 @RequestMapping("/api/v1/feed")
-@SecurityRequirement(name = "bearerAuth")
 public class FeedController {
 
     private final FeedService feedService;
@@ -25,6 +24,7 @@ public class FeedController {
         this.feedService = feedService;
     }
 
+    @Operation(description = "전체 피드는 비로그인 조회 가능. following 탭은 인증 필수이며 익명 요청은 401.")
     @GetMapping
     public ApiResponse<CursorPageResponse<PostCardResponse>> getFeed(
             @AuthenticationPrincipal CustomUserPrincipal principal,

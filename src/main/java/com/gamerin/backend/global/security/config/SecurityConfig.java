@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpMethod;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
@@ -64,6 +65,20 @@ public class SecurityConfig {
             "/oauth2/**",
             "/login/oauth2/**",
             "/uploads/**"
+    };
+    private static final String[] PUBLIC_READ_PATTERNS = {
+            "/api/v1/feed",
+            "/api/v1/posts/{postId}",
+            "/api/v1/posts/by-number/{postNumber}",
+            "/api/v1/posts/{postId}/comments",
+            "/api/v1/users/{handle}",
+            "/api/v1/users/{handle}/posts",
+            "/api/v1/users/{handle}/media",
+            "/api/v1/mentoring/programs",
+            "/api/v1/mentoring/programs/{id}",
+            "/api/v1/mentoring/mentors/{mentorId}",
+            "/api/v1/mentoring/mentors/{mentorId}/reviews",
+            "/api/v1/games"
     };
     private static final String[] SWAGGER_UI_PATTERNS = {
             "/swagger-ui",
@@ -130,6 +145,10 @@ public class SecurityConfig {
                         auth.requestMatchers(denyAllPatterns).denyAll();
                     }
                     auth.requestMatchers(buildPermitAllPatterns(swaggerUiEnabled, apiDocsEnabled)).permitAll()
+                            // 개인 경로를 동적 공개 경로보다 먼저 보호한다.
+                            .requestMatchers("/api/v1/users/me", "/api/v1/users/me/**",
+                                    "/api/v1/mentoring/mentors/me", "/api/v1/mentoring/mentors/me/**").authenticated()
+                            .requestMatchers(HttpMethod.GET, PUBLIC_READ_PATTERNS).permitAll()
                             .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                             .anyRequest().authenticated();
                 })

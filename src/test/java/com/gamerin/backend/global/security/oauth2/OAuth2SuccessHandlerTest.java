@@ -70,7 +70,7 @@ class OAuth2SuccessHandlerTest {
 
         handler.onAuthenticationSuccess(new MockHttpServletRequest(), response, authentication(false));
 
-        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/login?error=email_not_verified");
+        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/?login=1&error=email_not_verified");
         verifyNoInteractions(userRepository, socialSignupSessionRepository);
         verify(socialAccountRepository, never()).save(any());
     }
@@ -104,7 +104,7 @@ class OAuth2SuccessHandlerTest {
 
         handler.onAuthenticationSuccess(new MockHttpServletRequest(), response, authentication(true));
 
-        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/login?error=account_withdrawn");
+        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/?login=1&error=account_withdrawn");
         assertThat(response.getHeader("Set-Cookie")).isNull();
         verify(socialAccountRepository, never()).save(any());
         verifyNoInteractions(tokenService);
@@ -120,7 +120,7 @@ class OAuth2SuccessHandlerTest {
 
         handler.onAuthenticationSuccess(new MockHttpServletRequest(), response, authentication(true));
 
-        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/login?error=account_withdrawn");
+        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/?login=1&error=account_withdrawn");
         assertThat(response.getHeader("Set-Cookie")).isNull();
         verify(socialAccountRepository).delete(account);
         verify(socialAccountRepository, never()).save(any());

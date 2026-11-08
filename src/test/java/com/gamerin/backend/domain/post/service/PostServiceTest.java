@@ -997,11 +997,14 @@ class PostServiceTest {
     }
 
     @Test
-    void getDetailByNumberRequiresAuthentication() {
-        assertThatThrownBy(() -> postService.getDetailByNumber(null, 1L))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(error -> ((ResponseStatusException) error).getStatusCode().value())
-                .isEqualTo(HttpStatus.UNAUTHORIZED.value());
+    void getDetailByNumberAllowsAnonymousViewer() {
+        Post post = Post.create(savedUser(UUID.randomUUID(), "author", "Author"), "hello");
+        PostDetailResponse expected = postDetailResponse(UUID.randomUUID());
+        when(postRepository.findByPostNumberAndDeletedAtIsNull(1L)).thenReturn(Optional.of(post));
+        when(postResponseAssembler.toPostDetail(post, null)).thenReturn(expected);
+
+        assertThat(postService.getDetailByNumber(null, 1L)).isSameAs(expected);
+        verify(postResponseAssembler).toPostDetail(post, null);
     }
 
     @Test

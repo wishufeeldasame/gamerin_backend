@@ -55,7 +55,7 @@ class OAuth2LoginIntegrationTest {
         doReturn(Optional.of(user)).when(userRepository).findByEmail(user.getEmail());
         MockHttpServletResponse response = login(user);
 
-        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/login?error=account_withdrawn");
+        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/?login=1&error=account_withdrawn");
         assertThat(response.getHeader("Set-Cookie")).isNull();
         assertThat(socialAccountRepository.findByProviderAndProviderUserId("GOOGLE", user.getId().toString())).isEmpty();
         assertThat(refreshTokenRepository.findAllByUserIdAndRevokedAtIsNull(user.getId())).isEmpty();
@@ -68,7 +68,7 @@ class OAuth2LoginIntegrationTest {
         socialAccountRepository.saveAndFlush(SocialAccount.create(
                 user.getId(), "GOOGLE", user.getId().toString(), user.getEmail(), "User"));
 
-        assertThat(login(user).getRedirectedUrl()).isEqualTo("http://localhost:3000/login?error=account_withdrawn");
+        assertThat(login(user).getRedirectedUrl()).isEqualTo("http://localhost:3000/?login=1&error=account_withdrawn");
         assertThat(socialAccountRepository.findByProviderAndProviderUserId("GOOGLE", user.getId().toString())).isEmpty();
         assertThat(login(user).getRedirectedUrl()).startsWith("http://localhost:3000/auth/social/complete#signupToken=");
     }

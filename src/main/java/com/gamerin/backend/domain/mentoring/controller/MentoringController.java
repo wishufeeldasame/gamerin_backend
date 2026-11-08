@@ -43,7 +43,6 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 @Tag(name = "Mentoring", description = "멘토링 관련 API")
 @RestController
 @RequestMapping("/api/v1/mentoring")
-@SecurityRequirement(name = "bearerAuth")
 public class MentoringController {
     
     private final MentoringService mentoringService;
@@ -53,6 +52,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "멘토 등록", description = "일반 유저를 멘토로 등록")
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping("/mentors")
     public ApiResponse<MentorProfileResponse> registerMentor(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -62,6 +62,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "내 멘토 프로필 조회", description = "현재 로그인한 사용자의 멘토 프로필을 조회. 멘토 등록 전이면 null 반환")
+    @SecurityRequirement(name = "bearerAuth")
     @GetMapping("/mentors/me")
     public ApiResponse<MentorProfileResponse> getMyMentorProfile(
         @AuthenticationPrincipal CustomUserPrincipal principal
@@ -78,6 +79,7 @@ public class MentoringController {
 }
 
     @Operation(summary = "멘토링 프로그램 등록", description = "멘토가 새로운 멘토링 상품을 등록")
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping("/programs")
     public ApiResponse<MentoringProgramResponse> registerProgram(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -103,6 +105,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "멘토링 프로그램 수정", description = "자신이 등록한 멘토링 상품 정보를 수정")
+    @SecurityRequirement(name = "bearerAuth")
     @PatchMapping("/programs/{id}")
     public ApiResponse<MentoringProgramResponse> updateProgram(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -113,6 +116,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "멘토링 프로그램 삭제", description = "자신이 등록한 멘토링 상품을 삭제")
+    @SecurityRequirement(name = "bearerAuth")
     @DeleteMapping("/programs/{id}")
     public ApiResponse<Void> deleteProgram(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -123,6 +127,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "멘토링 신청", description = "멘티가 특정 멘토링 프로그램에 신청")
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping("/applications")
     public ApiResponse<MentoringApplicationResponse> applyToProgram(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -132,6 +137,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "멘토링 신청 취소", description = "멘티가 수락 전인 신청을 취소하고 마일리지를 환불받습니다.")
+    @SecurityRequirement(name = "bearerAuth")
     @PatchMapping("/applications/{id}/cancel")
     public ApiResponse<MentoringApplicationResponse> cancelApplication(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -141,6 +147,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "나의 멘토링 신청 내역 (멘티용)", description = "내가 신청한 멘토링 목록 조회")
+    @SecurityRequirement(name = "bearerAuth")
     @GetMapping("/applications/mentee")
     public ApiResponse<Page<MentoringApplicationResponse>> getMyApplicationsAsMentee(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -150,6 +157,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "받은 멘토링 신청 내역 (멘토용)", description = "멘토로서 나에게 들어온 신청 목록 조회")
+    @SecurityRequirement(name = "bearerAuth")
     @GetMapping("/applications/mentor")
     public ApiResponse<Page<MentoringApplicationResponse>> getMyApplicationsAsMentor(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -159,6 +167,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "멘토링 신청 수락", description = "멘토가 멘티의 신청을 수락")
+    @SecurityRequirement(name = "bearerAuth")
     @PatchMapping("/applications/{id}/accept")
     public ApiResponse<MentoringApplicationResponse> acceptApplication(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -168,6 +177,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "멘토링 신청 거절", description = "멘토가 멘티의 신청을 거절 (마일리지 환불 포함)")
+    @SecurityRequirement(name = "bearerAuth")
     @PatchMapping("/applications/{id}/reject")
     public ApiResponse<MentoringApplicationResponse> rejectApplication(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -177,6 +187,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "멘토링 시작", description = "멘토가 수락된 멘토링을 시작 (상태: ONGOING)")
+    @SecurityRequirement(name = "bearerAuth")
     @PatchMapping("/applications/{id}/start")
     public ApiResponse<MentoringApplicationResponse> startMentoring(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -186,6 +197,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "멘토링 완료 확정", description = "멘티가 멘토링 완료를 확정하고 멘토에게 마일리지를 지급 (상태: COMPLETED, 정산 완료)")
+    @SecurityRequirement(name = "bearerAuth")
     @PatchMapping("/applications/{id}/complete")
     public ApiResponse<MentoringApplicationResponse> completeMentoring(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -195,6 +207,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "멘토의 수업 완료 보고", description = "멘토가 모든 수업을 마쳤음을 선언 (상태: FINISHED)")
+    @SecurityRequirement(name = "bearerAuth")
     @PatchMapping("/applications/{id}/finish")
     public ApiResponse<MentoringApplicationResponse> finishMentoring(
         @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -204,6 +217,7 @@ public class MentoringController {
     }
 
     @Operation(summary = "리뷰 작성", description = "완료된 멘토링에 대해 리뷰를 작성")
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping("/reviews")
     public ApiResponse<MentoringReviewResponse> createReview(
         @AuthenticationPrincipal CustomUserPrincipal principal,

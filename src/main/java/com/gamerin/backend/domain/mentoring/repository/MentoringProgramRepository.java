@@ -21,7 +21,10 @@ public interface MentoringProgramRepository extends JpaRepository<MentoringProgr
         @Query("SELECT p FROM MentoringProgram p " +
                         "WHERE (:gameName IS NULL OR p.gameName = :gameName) " +
                         "AND (:mentorId IS NULL OR p.mentor.userId = :mentorId) " +
-                        "AND p.deletedAt IS NULL")
+                        "AND p.deletedAt IS NULL AND p.adminSuspendedAt IS NULL " +
+                        "AND p.mentor.status = com.gamerin.backend.domain.mentoring.entity.MentorStatus.ACTIVE " +
+                        "AND p.mentor.user.deletedAt IS NULL " +
+                        "AND p.mentor.user.status = com.gamerin.backend.domain.user.entity.UserStatus.ACTIVE")
         Page<MentoringProgram> findByFilters(
                         @Param("gameName") String gameName,
                         @Param("mentorId") UUID mentorId,

@@ -35,7 +35,6 @@ import jakarta.validation.Valid; // 추가됨
 
 @RestController
 @RequestMapping("/api/v1/users")
-@SecurityRequirement(name = "bearerAuth")
 public class UserController {
 
     private final UserService userService;
@@ -52,6 +51,7 @@ public class UserController {
         this.accountWithdrawalService = accountWithdrawalService;
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @GetMapping("/me")
     public ApiResponse<DetailedUserProfileResponse> getMyProfile(
             @AuthenticationPrincipal CustomUserPrincipal principal
@@ -60,6 +60,7 @@ public class UserController {
         return ApiResponse.ok(response);
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @PatchMapping("/me")
     public ApiResponse<Void> updateProfile(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -69,6 +70,7 @@ public class UserController {
         return ApiResponse.ok(null);
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @PatchMapping("/me/settings")
     public ApiResponse<Void> updateSettings(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -78,6 +80,7 @@ public class UserController {
         return ApiResponse.ok(null);
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @PatchMapping("/me/representative-game")
     public ApiResponse<Void> updateRepresentativeGame(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -88,12 +91,14 @@ public class UserController {
     }
 
     // 회원 탈퇴. refresh cookie 정리는 클라이언트가 이어서 호출하는 /auth/logout이 담당한다
+    @SecurityRequirement(name = "bearerAuth")
     @DeleteMapping("/me")
     public ApiResponse<Void> withdraw(@AuthenticationPrincipal CustomUserPrincipal principal) {
         accountWithdrawalService.withdraw(principal.getUserId());
         return ApiResponse.ok(null);
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @PostMapping(value = "/me/profile-images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ApiResponse<ProfileImageUploadResponse> uploadProfileImage(
             @AuthenticationPrincipal CustomUserPrincipal principal,
@@ -103,6 +108,7 @@ public class UserController {
         return ApiResponse.ok(userService.uploadProfileImage(principal.getUserId(), target, file));
     }
     
+    @SecurityRequirement(name = "bearerAuth")
     @GetMapping("/me/bookmarks")
     public ApiResponse<CursorPageResponse<PostCardResponse>> getMyBookmarks(
             @AuthenticationPrincipal CustomUserPrincipal principal,
