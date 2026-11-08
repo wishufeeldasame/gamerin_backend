@@ -27,6 +27,7 @@ import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.user.dto.request.ProfileImageTarget;
 import com.gamerin.backend.domain.user.dto.request.UpdateProfileRequest;
 import com.gamerin.backend.domain.user.dto.request.UpdateRepresentativeGameRequest;
+import com.gamerin.backend.domain.user.dto.request.UpdateUserSettingsRequest;
 import com.gamerin.backend.domain.user.dto.response.DetailedUserProfileResponse;
 import com.gamerin.backend.domain.user.dto.response.ProfileImageUploadResponse;
 import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
@@ -223,6 +224,13 @@ public class UserService {
             }
             profile.changeRepresentativeGame(game);
         });
+    }
+
+    @Transactional
+    public void updateSettings(UUID userId, UpdateUserSettingsRequest request) {
+        User user = userRepository.findActiveByIdForUpdate(userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다."));
+        user.updateTheme(request.theme());
     }
 
     @Transactional

@@ -1,9 +1,11 @@
 package com.gamerin.backend.global.security.oauth2;
 
+import com.gamerin.backend.domain.auth.entity.SocialAccount;
 import com.gamerin.backend.domain.auth.entity.SocialSignupSession;
 import com.gamerin.backend.domain.auth.repository.SocialAccountRepository;
 import com.gamerin.backend.domain.auth.repository.SocialSignupSessionRepository;
 import com.gamerin.backend.domain.auth.service.TokenService;
+import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,13 +17,18 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.authority.AuthorityUtils;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.DefaultOAuth2User;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -42,12 +49,16 @@ class OAuth2SuccessHandlerTest {
     @Mock
     private TokenService tokenService;
 
+    @Mock
+    private PlatformTransactionManager transactionManager;
+
     private OAuth2SuccessHandler handler;
 
     @BeforeEach
     void setUp() {
         handler = new OAuth2SuccessHandler(
                 socialAccountRepository, socialSignupSessionRepository, userRepository, tokenService,
+                new TransactionTemplate(transactionManager),
                 "http://localhost:3000", "refresh_token", false, "Lax");
     }
 
@@ -78,6 +89,42 @@ class OAuth2SuccessHandlerTest {
         assertThat(response.getRedirectedUrl())
                 .isEqualTo("http://localhost:3000/auth/social/complete#signupToken=signup-token");
         verify(socialSignupSessionRepository).save(any(SocialSignupSession.class));
+    }
+
+    @Test
+    void withdrawalBeforeAutoLinkingRedirectsWithoutSavingSocialAccount() throws Exception {
+        User staleUser = User.createLocal("user@example.com", "user", "User", "password-hash");
+        UUID userId = UUID.randomUUID();
+        ReflectionTestUtils.setField(staleUser, "id", userId);
+        when(socialAccountRepository.findByProviderAndProviderUserId("GOOGLE", "google-sub"))
+                .thenReturn(Optional.empty());
+        when(userRepository.findByEmail("user@example.com")).thenReturn(Optional.of(staleUser));
+        when(userRepository.recordLastLogin(eq(userId), any())).thenReturn(0);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        handler.onAuthenticationSuccess(new MockHttpServletRequest(), response, authentication(true));
+
+        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/?login=1&error=account_withdrawn");
+        assertThat(response.getHeader("Set-Cookie")).isNull();
+        verify(socialAccountRepository, never()).save(any());
+        verifyNoInteractions(tokenService);
+    }
+
+    @Test
+    void existingLinkToWithdrawnUserIsRemovedBeforeFailureRedirect() throws Exception {
+        SocialAccount account = SocialAccount.create(UUID.randomUUID(), "GOOGLE", "google-sub", "user@example.com", "User");
+        when(socialAccountRepository.findByProviderAndProviderUserId("GOOGLE", "google-sub"))
+                .thenReturn(Optional.of(account));
+        when(userRepository.recordLastLogin(eq(account.getUserId()), any())).thenReturn(0);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        handler.onAuthenticationSuccess(new MockHttpServletRequest(), response, authentication(true));
+
+        assertThat(response.getRedirectedUrl()).isEqualTo("http://localhost:3000/?login=1&error=account_withdrawn");
+        assertThat(response.getHeader("Set-Cookie")).isNull();
+        verify(socialAccountRepository).delete(account);
+        verify(socialAccountRepository, never()).save(any());
+        verifyNoInteractions(tokenService);
     }
 
     private OAuth2AuthenticationToken authentication(boolean emailVerified) {

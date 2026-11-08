@@ -128,7 +128,7 @@ class PublicBrowsingIntegrationTest {
             "PATCH,/mentoring/applications/{id}/reject", "PATCH,/mentoring/applications/{id}/cancel",
             "PATCH,/mentoring/applications/{id}/start", "PATCH,/mentoring/applications/{id}/finish",
             "PATCH,/mentoring/applications/{id}/complete", "PATCH,/posts/{id}", "DELETE,/posts/{id}",
-            "DELETE,/posts/{id}/comments/{id}"})
+            "DELETE,/posts/{id}/comments/{id}", "PATCH,/users/me/settings"})
     void anonymousMutationsAreRejectedBeforeDomainEffects(String method, String path) throws Exception {
         unauthorized(request(HttpMethod.valueOf(method), "/api/v1" + path.replace("{id}", post.getId().toString()))
                 .contentType(MediaType.APPLICATION_JSON).content("{}"));
@@ -264,6 +264,7 @@ class PublicBrowsingIntegrationTest {
                     || paths.path(path).path("get").path("security").isEmpty()).isTrue();
         }
         assertThat(paths.path("/api/v1/posts").path("post").path("security").isEmpty()).isFalse();
+        assertThat(paths.path("/api/v1/users/me/settings").path("patch").path("security").isEmpty()).isFalse();
     }
 
     private void unauthorized(MockHttpServletRequestBuilder request) throws Exception {

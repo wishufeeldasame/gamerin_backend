@@ -1,5 +1,7 @@
 package com.gamerin.backend.domain.user.entity;
 
+import org.hibernate.annotations.DynamicUpdate;
+
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -19,6 +21,8 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "users")
+// Keep concurrent changes to different user fields from overwriting each other.
+@DynamicUpdate
 public class User {
 
     public static final String WITHDRAWN_NICKNAME = "탈퇴한 사용자";
@@ -46,6 +50,10 @@ public class User {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private UserStatus status;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private Theme theme;
 
     @Column(name = "last_login_at")
     private OffsetDateTime lastLoginAt;
@@ -124,6 +132,10 @@ public class User {
         return status;
     }
 
+    public Theme getTheme() {
+        return theme;
+    }
+
     public OffsetDateTime getLastLoginAt() {
         return lastLoginAt;
     }
@@ -163,6 +175,10 @@ public class User {
         if (nickname != null && !nickname.isBlank()) {
             this.nickname = nickname;
         }
+    }
+
+    public void updateTheme(Theme theme) {
+        this.theme = theme;
     }
 
     // 유저 계정을 정지 상태로 전환
