@@ -9,6 +9,11 @@ import jakarta.validation.constraints.Size;
 
 public class SendMultipartMessageRequest {
 
+    private boolean asyncUpload;
+
+    public boolean isAsyncUpload() { return asyncUpload; }
+    public void setAsyncUpload(boolean asyncUpload) { this.asyncUpload = asyncUpload; }
+
     @Size(max = 2000)
     private String content;
 

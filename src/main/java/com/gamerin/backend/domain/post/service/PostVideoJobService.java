@@ -148,6 +148,35 @@ public class PostVideoJobService {
         }
     }
 
+    /** 새 통합 업로드 작업에서도 기존 게시물 화질·변환 규칙을 그대로 사용한다. */
+    public MediaStorageService.PreparedMediaPath prepareUploadVideo(MultipartFile file, VideoQualityTier tier) {
+        Path input = null;
+        Path output = null;
+        try {
+            temporaryStorageGuard.ensureCapacity(file.getSize());
+            Files.createDirectories(jobDirectory);
+            input = Files.createTempFile(jobDirectory, "upload-input-", extractExtension(file.getOriginalFilename()));
+            try (InputStream stream = file.getInputStream()) {
+                Files.copy(stream, input, StandardCopyOption.REPLACE_EXISTING);
+            }
+            if (!videoOptimizationService.isEnabled()) {
+                Path preserved = input;
+                input = null;
+                return new MediaStorageService.PreparedMediaPath(preserved, extractExtension(file.getOriginalFilename()));
+            }
+            output = Files.createTempFile(jobDirectory, "upload-output-", ".mp4");
+            videoOptimizationService.transcodeForPost(input, output, tier);
+            Path preserved = output;
+            output = null;
+            return new MediaStorageService.PreparedMediaPath(preserved, ".mp4");
+        } catch (IOException ex) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to prepare upload.", ex);
+        } finally {
+            deleteQuietly(input);
+            deleteQuietly(output);
+        }
+    }
+
     public PostVideoJobResponse getJob(UUID userId, UUID jobId) {
         return transactionTemplate.execute(status -> {
             PostVideoJob job = postVideoJobRepository.findById(jobId)

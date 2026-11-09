@@ -1,5 +1,6 @@
 package com.gamerin.backend.domain.message.service;
 
+import java.util.function.Consumer;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -28,6 +29,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.upload.repository.UploadJobRepository;
+import com.gamerin.backend.domain.upload.entity.UploadJob;
 import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
@@ -96,6 +99,7 @@ public class MessageService {
     private final NotificationCommandService notificationCommandService;
     private final MembershipService membershipService;
     private final TransactionTemplate transactionTemplate;
+    private final UploadJobRepository uploadJobRepository;
 
     public MessageService(
             UserRepository userRepository,
@@ -116,7 +120,8 @@ public class MessageService {
             SseStreamTokenService sseStreamTokenService,
             NotificationCommandService notificationCommandService,
             MembershipService membershipService,
-            TransactionTemplate transactionTemplate
+            TransactionTemplate transactionTemplate,
+            UploadJobRepository uploadJobRepository
     ) {
         this.userRepository = userRepository;
         this.postRepository = postRepository;
@@ -137,6 +142,7 @@ public class MessageService {
         this.notificationCommandService = notificationCommandService;
         this.membershipService = membershipService;
         this.transactionTemplate = transactionTemplate;
+        this.uploadJobRepository = uploadJobRepository;
     }
 
     @Transactional(readOnly = true)
@@ -226,7 +232,8 @@ public class MessageService {
         // 검열 전 조회는 모두 짧은 트랜잭션 안에서 한다(바깥 범위에서 조회하면 세션이 커넥션을 쥔다).
         // 잠금 전에 참여자 엔티티를 올리면 검열 중 나가기·재입장 변경이 잠금 뒤 조회에 반영되지 않아 존재 여부만 확인한다.
         SendPrecheck precheck = transactionTemplate.execute(status -> {
-            UUID id = getCurrentUser(principal).getId();
+            UUID id = lockUploadSender(principal).getId();
+            assertUnreservedClientKey(id, request.clientMessageId());
             ensureParticipant(conversationId, id);
             MessageResponse sent = findSentMessage(id, conversationId, request.clientMessageId())
                     .map(message -> toMessageResponse(message, id))
@@ -245,7 +252,8 @@ public class MessageService {
         validateMessageContent(content);
 
         return transactionTemplate.execute(status -> {
-            User viewer = getCurrentUser(principal);
+            User viewer = lockUploadSender(principal);
+            assertUnreservedClientKey(viewer.getId(), request.clientMessageId());
             MessageConversation conversation = getActiveConversationForUpdate(conversationId);
             MessageParticipant viewerParticipant = getParticipant(conversationId, viewerId);
 
@@ -279,11 +287,23 @@ public class MessageService {
             UUID conversationId,
             SendMultipartMessageRequest request
     ) {
+        return sendMultipartMessage(principal, conversationId, request, null);
+    }
+
+    @Transactional(propagation = Propagation.SUPPORTS)
+    public MessageResponse sendProcessedUpload(CustomUserPrincipal principal, UUID conversationId,
+            SendMultipartMessageRequest request, Consumer<UUID> completed) {
+        return sendMultipartMessage(principal, conversationId, request, completed);
+    }
+
+    private MessageResponse sendMultipartMessage(CustomUserPrincipal principal, UUID conversationId,
+            SendMultipartMessageRequest request, Consumer<UUID> completed) {
         UUID clientMessageId = request.getClientMessageId();
         // 검열 전 조회는 모두 짧은 트랜잭션 안에서 한다(바깥 범위에서 조회하면 세션이 커넥션을 쥔다).
         // 잠금 전에 참여자 엔티티를 올리면 검열 중 나가기·재입장 변경이 잠금 뒤 조회에 반영되지 않아 존재 여부만 확인한다.
         SendPrecheck precheck = transactionTemplate.execute(status -> {
-            UUID id = getCurrentUser(principal).getId();
+            UUID id = lockUploadSender(principal).getId();
+            if (completed == null) assertUnreservedClientKey(id, clientMessageId);
             ensureParticipant(conversationId, id);
             MessageResponse sent = findSentMessage(id, conversationId, clientMessageId)
                     .map(message -> toMessageResponse(message, id))
@@ -291,6 +311,7 @@ public class MessageService {
             return new SendPrecheck(id, sent, sent == null && getSharedPost(request.getSharedPostId()) != null);
         });
         if (precheck.alreadySent() != null) {
+            if (completed != null) transactionTemplate.executeWithoutResult(status -> completed.accept(precheck.alreadySent().id()));
             return precheck.alreadySent();
         }
         UUID viewerId = precheck.viewerId();
@@ -306,20 +327,31 @@ public class MessageService {
         List<PreparedMessageAttachment> preparedAttachments = prepareAttachments(attachments);
 
         List<MessageAttachmentStorageService.StoredFile> storedFiles = new ArrayList<>();
+        boolean[] cleanupRegistered = {false};
         try {
             // 커밋 실패 시에도 저장된 파일을 지우도록 try가 템플릿 호출 전체를 감싼다.
             return transactionTemplate.execute(status -> {
-                User viewer = getCurrentUser(principal);
+                if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                        @Override public void afterCompletion(int outcome) {
+                            if (outcome == STATUS_ROLLED_BACK) storedFiles.forEach(messageAttachmentStorageService::deleteQuietly);
+                        }
+                    });
+                    cleanupRegistered[0] = true;
+                }
+                User viewer = lockUploadSender(principal);
+                if (completed == null) assertUnreservedClientKey(viewer.getId(), clientMessageId);
                 MessageConversation conversation = getActiveConversationForUpdate(conversationId);
                 MessageParticipant viewerParticipant = getParticipant(conversationId, viewerId);
 
                 // 검열 중에 같은 키 요청이 먼저 저장됐을 수 있어 대화 잠금 뒤 다시 확인한다.
                 Optional<DirectMessage> sentMessage = findSentMessage(viewerId, conversationId, clientMessageId);
                 if (sentMessage.isPresent()) {
+                    if (completed != null) completed.accept(sentMessage.get().getId());
                     return toMessageResponse(sentMessage.get(), viewerId);
                 }
 
-                ensureCounterpartsActive(conversationId, viewerId);
+                ensureCounterpartsActive(conversationId, viewerId, completed != null);
                 Post sharedPost = getSharedPost(request.getSharedPostId());
                 DirectMessage savedMessage = saveMessage(
                         conversation,
@@ -350,17 +382,60 @@ public class MessageService {
 
                 directMessageAttachmentRepository.saveAll(messageAttachments);
                 markParticipantRead(viewerParticipant);
+                if (completed != null) completed.accept(savedMessage.getId());
                 publishMessageCreated(savedMessage);
                 return toMessageResponse(savedMessage, viewerId);
             });
         } catch (Exception ex) {
-            storedFiles.forEach(messageAttachmentStorageService::deleteQuietly);
+            if (!cleanupRegistered[0]) storedFiles.forEach(messageAttachmentStorageService::deleteQuietly);
             if (ex instanceof ResponseStatusException responseStatusException) {
                 throw responseStatusException;
             }
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to upload message attachments.", ex);
         } finally {
             preparedAttachments.forEach(this::deleteTemporaryPreparedAttachment);
+        }
+    }
+
+    @Transactional(propagation = Propagation.SUPPORTS)
+    public void validateUploadAdmission(CustomUserPrincipal principal, UUID conversationId, SendMultipartMessageRequest request) {
+        transactionTemplate.executeWithoutResult(status -> {
+            User viewer = getCurrentUser(principal);
+            getActiveConversation(conversationId);
+            ensureParticipant(conversationId, viewer.getId());
+            ensureCounterpartsActive(conversationId, viewer.getId(), true);
+            getSharedPost(request.getSharedPostId());
+        });
+        List<MultipartFile> files = normalizeAttachmentFiles(request.getAttachments());
+        if (files.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Async upload requires attachments.");
+        validateAttachments(files, false);
+        textSecurityService.assertTextSafe(request.getContent());
+    }
+
+    @Transactional(readOnly = true)
+    public MessageResponse getUploadMessage(UUID userId, UUID messageId) {
+        return directMessageRepository.findActiveByIdAndParticipantUserId(messageId, userId)
+                .filter(message -> message.getConversation().getDeletedAt() == null)
+                .filter(message -> messageParticipantRepository
+                        .findByConversationIdAndUserIdAndDeletedAtIsNull(message.getConversation().getId(), userId)
+                        .filter(participant -> participant.getClearedAt() == null
+                                || message.getCreatedAt().isAfter(participant.getClearedAt()))
+                        .isPresent())
+                .map(message -> toMessageResponse(message, userId)).orElse(null);
+    }
+
+    private User lockUploadSender(CustomUserPrincipal principal) {
+        if (principal == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication is required.");
+        User user = userRepository.findActiveByIdForUpdate(principal.getUserId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user not found."));
+        if (!user.isActive()) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "User is not active.");
+        return user;
+    }
+
+    private void assertUnreservedClientKey(UUID userId, UUID clientMessageId) {
+        if (clientMessageId != null && uploadJobRepository.existsByUserIdAndKindAndClientKey(userId,
+                UploadJob.Kind.MESSAGE, clientMessageId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Client message id is reserved by an async upload.");
         }
     }
 
@@ -874,11 +949,15 @@ public class MessageService {
 
     // 기존 대화로 보낼 때도 상대가 탈퇴·정지 상태면 거부한다(대화 생성·공유 경로의 getRecipientUser와 같은 응답).
     private void ensureCounterpartsActive(UUID conversationId, UUID viewerId) {
+        ensureCounterpartsActive(conversationId, viewerId, false);
+    }
+
+    private void ensureCounterpartsActive(UUID conversationId, UUID viewerId, boolean asyncUpload) {
         boolean inactive = messageParticipantRepository.findByConversationId(conversationId).stream()
                 .map(MessageParticipant::getUser)
                 .anyMatch(user -> !user.getId().equals(viewerId) && !user.isActive());
         if (inactive) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Recipient is not active.");
+            throw new ResponseStatusException(asyncUpload ? HttpStatus.FORBIDDEN : HttpStatus.BAD_REQUEST, "Recipient is not active.");
         }
     }
 
@@ -1010,6 +1089,10 @@ public class MessageService {
     }
 
     private void validateAttachments(List<MultipartFile> attachments) {
+        validateAttachments(attachments, true);
+    }
+
+    private void validateAttachments(List<MultipartFile> attachments, boolean inspectDuration) {
         if (attachments.isEmpty()) {
             return;
         }
@@ -1030,7 +1113,7 @@ public class MessageService {
                 if (attachment.getSize() > MAX_VIDEO_ATTACHMENT_SIZE_BYTES) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video attachment must be 100MB or smaller.");
                 }
-                validateVideoAttachment(attachment);
+                validateVideoAttachment(attachment, inspectDuration);
             }
         }
 
@@ -1045,10 +1128,11 @@ public class MessageService {
         }
     }
 
-    private void validateVideoAttachment(MultipartFile videoFile) {
+    private void validateVideoAttachment(MultipartFile videoFile, boolean inspectDuration) {
         mediaUploadSecurityService.assertVideoFileSafe(videoFile);
         lightweightSecurityScanService.assertFileClean(videoFile);
 
+        if (!inspectDuration) return;
         double videoLengthSeconds = videoMetadataService.readDurationSeconds(videoFile);
         if (videoLengthSeconds > MAX_VIDEO_ATTACHMENT_DURATION_SECONDS) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video attachment duration must be 2 minutes or shorter.");
@@ -1070,9 +1154,14 @@ public class MessageService {
             return List.of();
         }
 
-        return attachments.stream()
-                .map(this::prepareAttachment)
-                .toList();
+        List<PreparedMessageAttachment> prepared = new ArrayList<>();
+        try {
+            for (MultipartFile attachment : attachments) prepared.add(prepareAttachment(attachment));
+            return prepared;
+        } catch (RuntimeException ex) {
+            prepared.forEach(this::deleteTemporaryPreparedAttachment);
+            throw ex;
+        }
     }
 
     private PreparedMessageAttachment prepareAttachment(MultipartFile attachment) {

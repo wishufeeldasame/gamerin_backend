@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.gamerin.backend.domain.upload.service.UploadJobService;
 import com.gamerin.backend.domain.post.dto.request.CreateCommentRequest;
 import com.gamerin.backend.domain.post.dto.request.CreateMultipartPostRequest;
 import com.gamerin.backend.domain.post.dto.request.CreatePostRequest;
@@ -47,12 +48,14 @@ public class PostController {
     private static final Logger log = LoggerFactory.getLogger(PostController.class);
 
     private final PostService postService;
+    private final UploadJobService uploadJobService;
     private final PostRepostService postRepostService;
     private final PostViewService postViewService;
 
     public PostController(PostService postService, PostRepostService postRepostService,
-            PostViewService postViewService) {
+            PostViewService postViewService, UploadJobService uploadJobService) {
         this.postService = postService;
+        this.uploadJobService = uploadJobService;
         this.postRepostService = postRepostService;
         this.postViewService = postViewService;
     }
@@ -66,14 +69,17 @@ public class PostController {
     }
 
     /**
-     * 사진 게시물은 200과 게시물을, 영상 게시물은 202와 처리 작업을 반환한다.
-     * 영상은 처리가 끝나면 게시물이 만들어지므로 {@code GET /video-jobs/{jobId}}로 상태를 확인한다.
+     * 기본 요청은 사진 200·영상 202이며 영상은 {@code GET /video-jobs/{jobId}}로 확인한다.
+     * {@code asyncUpload=true}는 사진·영상 모두 검열 전 202로 접수하며 {@code GET /upload-jobs/{jobId}}로 확인한다.
      */
     @SecurityRequirement(name = "bearerAuth")
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<?>> createWithFiles(
             @AuthenticationPrincipal CustomUserPrincipal principal,
             @Valid @ModelAttribute CreateMultipartPostRequest request) {
+        if (request.isAsyncUpload()) {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.ok(uploadJobService.enqueuePost(principal, request)));
+        }
         PostService.MultipartCreateResult result = postService.create(principal, request);
         if (result.videoJob() != null) {
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.ok(result.videoJob()));
