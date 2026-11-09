@@ -19,6 +19,7 @@ public record MeResponse(
         Theme theme,
         // 설정 화면의 선택값. 티어가 없어도 고른 게임은 그대로 내려준다
         GameType representativeGame,
-        RepresentativeTierResponse representativeTier
+        RepresentativeTierResponse representativeTier,
+        String profileImageUrl
 ) {
 }
