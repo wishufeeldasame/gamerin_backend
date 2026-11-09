@@ -20,6 +20,7 @@ import com.gamerin.backend.domain.auth.repository.SocialAccountRepository;
 import com.gamerin.backend.domain.auth.repository.SocialSignupSessionRepository;
 import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.user.entity.User;
+import com.gamerin.backend.domain.user.entity.UserProfile;
 import com.gamerin.backend.domain.user.entity.UserStatus;
 import com.gamerin.backend.domain.user.repository.UserRepository;
 import com.gamerin.backend.global.security.principal.CustomUserPrincipal;
@@ -28,6 +29,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -135,6 +138,41 @@ class LocalAuthServiceTest {
                 assertThat(json.get("membershipBadge").booleanValue()).isEqualTo(active);
                 verify(membershipService).isActive(userId);
                 verify(membershipService, never()).findActiveUserIds(any());
+        }
+
+        @ParameterizedTest
+        @NullSource
+        @ValueSource(strings = {"/uploads/profile.jpg", "https://cdn.example.com/profile.jpg"})
+        void getMeReturnsCurrentProfileImageIncludingDeletion(String profileImageUrl) {
+                User user = User.createLocal("member@example.com", "member", "Member", "encoded");
+                UUID userId = UUID.randomUUID();
+                ReflectionTestUtils.setField(user, "id", userId);
+                UserProfile profile = UserProfile.createDefault(user);
+                profile.updateProfileImageUrl("/uploads/old.jpg");
+                profile.updateProfileImageUrl(profileImageUrl);
+                user.setProfile(profile);
+                when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+
+                var response = localAuthService.getMe(CustomUserPrincipal.from(user));
+
+                assertThat(response.profileImageUrl()).isEqualTo(profileImageUrl);
+                var json = new ObjectMapper().valueToTree(response);
+                assertThat(json.has("profileImageUrl")).isTrue();
+                if (profileImageUrl == null) {
+                        assertThat(json.get("profileImageUrl").isNull()).isTrue();
+                } else {
+                        assertThat(json.get("profileImageUrl").asText()).isEqualTo(profileImageUrl);
+                }
+        }
+
+        @Test
+        void getMeReturnsNullImageWithoutProfile() {
+                User user = User.createLocal("member@example.com", "member", "Member", "encoded");
+                UUID userId = UUID.randomUUID();
+                ReflectionTestUtils.setField(user, "id", userId);
+                when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+
+                assertThat(localAuthService.getMe(CustomUserPrincipal.from(user)).profileImageUrl()).isNull();
         }
 
         @Test

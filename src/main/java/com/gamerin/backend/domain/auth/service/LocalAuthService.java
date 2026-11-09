@@ -327,7 +327,8 @@ public class LocalAuthService {
                 membershipService.isActive(principal.getUserId()),
                 user != null ? user.getTheme() : null,
                 profile != null ? profile.getRepresentativeGame() : null,
-                RepresentativeTierResponse.from(profile));
+                RepresentativeTierResponse.from(profile),
+                profile != null ? profile.getProfileImageUrl() : null);
     }
 
     private void validatePasswordConfirmation(String password, String passwordConfirm) {

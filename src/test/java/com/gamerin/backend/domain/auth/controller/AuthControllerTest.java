@@ -186,7 +186,7 @@ class AuthControllerTest {
         );
         ReflectionTestUtils.setField(user, "id", userId);
         CustomUserPrincipal principal = CustomUserPrincipal.from(user);
-        MeResponse meResponse = new MeResponse(userId, "tester", "Tester", "ROLE_USER", "ACTIVE", true, false, null, null, null);
+        MeResponse meResponse = new MeResponse(userId, "tester", "Tester", "ROLE_USER", "ACTIVE", true, false, null, null, null, "/uploads/profile.jpg");
 
         when(localAuthService.getMe(principal)).thenReturn(meResponse);
 
@@ -195,6 +195,7 @@ class AuthControllerTest {
         assertThat(response.data()).isEqualTo(meResponse);
         assertThat(response.data().hasPassword()).isTrue();
         assertThat(response.data().membershipBadge()).isFalse();
+        assertThat(response.data().profileImageUrl()).isEqualTo("/uploads/profile.jpg");
     }
 
     private TokenService.AuthResult authResult(UUID userId, String handle, String nickname) {
