@@ -1,5 +1,8 @@
 package com.gamerin.backend.domain.post.service;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.util.function.Consumer;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -20,6 +23,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.post.entity.VideoQualityTier;
 import com.gamerin.backend.domain.hashtag.service.HashtagService;
 import com.gamerin.backend.domain.membership.service.MembershipService;
 import com.gamerin.backend.domain.mention.service.MentionService;
@@ -288,6 +292,81 @@ public class PostService {
         return MultipartCreateResult.ofPost(postResponseAssembler.toPostDetail(savedPost, user.getId()));
     }
 
+    /** 접수 시에는 외부 검열·영상 길이 검사·재인코딩을 실행하지 않는다. */
+    @Transactional(propagation = Propagation.SUPPORTS)
+    public void validateUploadAdmission(CustomUserPrincipal principal, CreateMultipartPostRequest request) {
+        transactionTemplate.executeWithoutResult(status -> requireActiveUploadAuthor(principal));
+        List<MultipartFile> files = normalizeMultipartFiles(request.getMediaFiles());
+        if (files.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Async upload requires media files.");
+        }
+        validateMultipartCreateRequest(normalizeContent(request.getContent()), files,
+                normalizeMultipartFile(request.getThumbnailFile()), false);
+        textSecurityService.assertTextSafe(request.getContent());
+    }
+
+    /** 검열·변환은 트랜잭션 밖에서, 게시물과 작업 완료 기록은 짧은 쓰기 트랜잭션에서 처리한다. */
+    @Transactional(propagation = Propagation.SUPPORTS)
+    public PostDetailResponse createProcessedUpload(CustomUserPrincipal principal, CreateMultipartPostRequest request,
+            Consumer<UUID> completed) {
+        User author = transactionTemplate.execute(status -> requireActiveUploadAuthor(principal));
+        String content = normalizeContent(request.getContent());
+        List<MultipartFile> files = normalizeMultipartFiles(request.getMediaFiles());
+        MultipartFile thumbnail = normalizeMultipartFile(request.getThumbnailFile());
+        validateMultipartCreateRequest(content, files, thumbnail);
+        textSecurityService.assertTextSafe(content);
+        List<MultipartFile> moderated = new ArrayList<>(files);
+        if (thumbnail != null) moderated.add(thumbnail);
+        contentModerationService.assertPostAllowed(content, moderated);
+        boolean video = resolveMediaType(files.getFirst()) == PostMediaType.VIDEO;
+        List<MediaStorageService.PreparedMediaFile> images = video ? List.of()
+                : files.stream().map(mediaUploadSecurityService::prepareImage).toList();
+        MediaStorageService.PreparedMediaFile preparedThumbnail = thumbnail == null ? null
+                : mediaUploadSecurityService.prepareImage(thumbnail);
+        VideoQualityTier tier = membershipService.isActive(author.getId())
+                ? VideoQualityTier.FHD
+                : VideoQualityTier.HD;
+        MediaStorageService.PreparedMediaPath preparedVideo = video
+                ? postVideoJobService.prepareUploadVideo(files.getFirst(), tier) : null;
+        List<MediaStorageService.StoredFile> stored = new ArrayList<>();
+        try {
+            return transactionTemplate.execute(status -> {
+                deleteFilesOnRollback(stored);
+                User user = requireActiveUploadAuthor(principal);
+                Post post = postRepository.save(Post.create(user, content));
+                hashtagService.attachToPost(post);
+                mentionService.attachToPost(post);
+                if (preparedVideo != null) {
+                    try {
+                        MediaStorageService.StoredFile media = mediaStorageService.storePostMedia(preparedVideo);
+                        stored.add(media);
+                        MediaStorageService.StoredFile cover = preparedThumbnail == null ? null
+                                : mediaStorageService.storePostMedia(preparedThumbnail);
+                        if (cover != null) stored.add(cover);
+                        postMediaRepository.save(PostMedia.create(post, PostMediaType.VIDEO, media.publicUrl(),
+                                cover == null ? null : cover.publicUrl(), 0));
+                    } catch (IOException ex) {
+                        throw new UncheckedIOException(ex);
+                    }
+                } else {
+                    saveUploadedImages(post, images);
+                }
+                completed.accept(post.getId());
+                return postResponseAssembler.toPostDetail(post, user.getId());
+            });
+        } finally {
+            mediaStorageService.deleteQuietly(preparedVideo);
+        }
+    }
+
+    private User requireActiveUploadAuthor(CustomUserPrincipal principal) {
+        User user = lockCurrentUser(principal);
+        if (!user.isActive()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "User is not active.");
+        }
+        return user;
+    }
+
     public PostVideoJobResponse getVideoJob(CustomUserPrincipal principal, UUID jobId) {
         User user = getCurrentUser(principal);
         return postVideoJobService.getJob(user.getId(), jobId);
@@ -520,6 +599,11 @@ public class PostService {
             String content,
             List<MultipartFile> mediaFiles,
             MultipartFile thumbnailFile) {
+        validateMultipartCreateRequest(content, mediaFiles, thumbnailFile, true);
+    }
+
+    private void validateMultipartCreateRequest(String content, List<MultipartFile> mediaFiles,
+            MultipartFile thumbnailFile, boolean inspectDuration) {
         if (content == null && mediaFiles.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Content or media is required.");
         }
@@ -562,7 +646,7 @@ public class PostService {
                 mediaUploadSecurityService.assertImageFileSafe(thumbnailFile);
                 lightweightSecurityScanService.assertFileClean(thumbnailFile);
             }
-            validateVideoConstraints(mediaFiles.getFirst());
+            validateVideoConstraints(mediaFiles.getFirst(), inspectDuration);
         } else {
             if (thumbnailFile != null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -571,7 +655,7 @@ public class PostService {
         }
     }
 
-    private void validateVideoConstraints(MultipartFile videoFile) {
+    private void validateVideoConstraints(MultipartFile videoFile, boolean inspectDuration) {
         if (videoFile.getSize() > maxVideoFileSizeBytes) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video file exceeds the configured size limit.");
         }
@@ -579,6 +663,7 @@ public class PostService {
         mediaUploadSecurityService.assertVideoFileSafe(videoFile);
         lightweightSecurityScanService.assertFileClean(videoFile);
 
+        if (!inspectDuration) return;
         double videoLengthSeconds = videoMetadataService.readDurationSeconds(videoFile);
         if (videoLengthSeconds > MAX_VIDEO_DURATION_SECONDS) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Video duration must be 2 minutes or shorter.");

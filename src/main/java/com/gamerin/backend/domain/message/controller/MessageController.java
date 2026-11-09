@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import com.gamerin.backend.domain.upload.service.UploadJobService;
 import com.gamerin.backend.domain.message.dto.request.CreateConversationRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMultipartMessageRequest;
@@ -51,10 +52,13 @@ import jakarta.validation.Valid;
 public class MessageController {
 
     private final MessageService messageService;
+    private final UploadJobService uploadJobService;
     private final SseStreamTokenService sseStreamTokenService;
 
-    public MessageController(MessageService messageService, SseStreamTokenService sseStreamTokenService) {
+    public MessageController(MessageService messageService, SseStreamTokenService sseStreamTokenService,
+            UploadJobService uploadJobService) {
         this.messageService = messageService;
+        this.uploadJobService = uploadJobService;
         this.sseStreamTokenService = sseStreamTokenService;
     }
 
@@ -135,12 +139,15 @@ public class MessageController {
             value = "/conversations/{conversationId}/messages",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE
     )
-    public ApiResponse<MessageResponse> sendMultipartMessage(
+    public ResponseEntity<ApiResponse<?>> sendMultipartMessage(
             @AuthenticationPrincipal CustomUserPrincipal principal,
             @PathVariable UUID conversationId,
             @Valid @ModelAttribute SendMultipartMessageRequest request
     ) {
-        return ApiResponse.ok(messageService.sendMultipartMessage(principal, conversationId, request));
+        if (request.isAsyncUpload()) {
+            return ResponseEntity.accepted().body(ApiResponse.ok(uploadJobService.enqueueMessage(principal, conversationId, request)));
+        }
+        return ResponseEntity.ok(ApiResponse.ok(messageService.sendMultipartMessage(principal, conversationId, request)));
     }
 
     @DeleteMapping("/conversations/{conversationId}/messages/{messageId}")

@@ -126,10 +126,15 @@ class MessageServiceTest {
     @Mock
     private PlatformTransactionManager transactionManager;
 
+    @Mock
+    private com.gamerin.backend.domain.upload.repository.UploadJobRepository uploadJobRepository;
+
     private MessageService messageService;
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(userRepository.findActiveByIdForUpdate(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(invocation -> userRepository.findByIdAndDeletedAtIsNull(invocation.getArgument(0)));
         messageService = new MessageService(
                 userRepository,
                 postRepository,
@@ -149,7 +154,8 @@ class MessageServiceTest {
                 sseStreamTokenService,
                 notificationCommandService,
                 membershipService,
-                new TransactionTemplate(transactionManager)
+                new TransactionTemplate(transactionManager),
+                uploadJobRepository
         );
     }
 

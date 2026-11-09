@@ -31,11 +31,14 @@ class MessageControllerTest {
     @Mock
     private SseStreamTokenService sseStreamTokenService;
 
+    @Mock
+    private com.gamerin.backend.domain.upload.service.UploadJobService uploadJobService;
+
     private MessageController messageController;
 
     @BeforeEach
     void setUp() {
-        messageController = new MessageController(messageService, sseStreamTokenService);
+        messageController = new MessageController(messageService, sseStreamTokenService, uploadJobService);
     }
 
     @Test
