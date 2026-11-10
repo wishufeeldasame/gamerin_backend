@@ -26,6 +26,23 @@ server:
   port: 8080
 
 app:
+  weekly-report:
+    # 사용자 사이 수집 간격. HenrikDev 분당 한도를 나눠 쓴다.
+    user-interval: ${WEEKLY_REPORT_USER_INTERVAL:30s}
+    ai:
+      # 모델은 기본값이 없다. 선택한 공급자의 키나 모델이 비면 규칙 기반 문장으로 대체한다.
+      # factchat(학교 Mindlogic 게이트웨이) 또는 nvidia(NVIDIA Build). 둘 다 OpenAI Chat Completions 호환이다.
+      provider: ${WEEKLY_REPORT_AI_PROVIDER:factchat}
+      connect-timeout: ${WEEKLY_REPORT_AI_CONNECT_TIMEOUT:3s}
+      read-timeout: ${WEEKLY_REPORT_AI_READ_TIMEOUT:60s}
+      factchat:
+        url: ${FACTCHAT_API_URL:https://factchat-cloud.mindlogic.ai/v1/gateway/chat/completions/}
+        key: ${FACTCHAT_SECRET_KEY:}
+        model: ${FACTCHAT_MODEL:}
+      nvidia:
+        url: ${NVIDIA_API_URL:https://integrate.api.nvidia.com/v1/chat/completions}
+        key: ${NVIDIA_SECRET_KEY:}
+        model: ${NVIDIA_MODEL:}
   legal:
     terms-version: "1.0"
     privacy-version: "1.1"

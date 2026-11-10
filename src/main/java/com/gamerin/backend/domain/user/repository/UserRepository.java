@@ -119,6 +119,13 @@ public interface UserRepository extends JpaRepository<User, UUID> {
         @Param("puuid") String puuid);
 
     @Query(value = """
+        SELECT up.user_id
+        FROM user_profiles up
+        WHERE COALESCE((up.game_stats -> 'VALORANT' ->> 'connected')::boolean, false) = true
+        """, nativeQuery = true)
+    List<UUID> findConnectedValorantUserIds();
+
+    @Query(value = """
         SELECT EXISTS (
             SELECT 1
             FROM user_profiles up

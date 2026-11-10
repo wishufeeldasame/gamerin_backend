@@ -1,11 +1,21 @@
 package com.gamerin.backend.domain.valorant.client;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.LongConsumer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.gamerin.backend.domain.valorant.model.ValorantAccount;
+import com.gamerin.backend.domain.valorant.model.ValorantMatchDetail;
+import com.gamerin.backend.domain.valorant.model.ValorantMatchReference;
 import com.gamerin.backend.domain.valorant.model.ValorantMatchStats;
 import com.gamerin.backend.domain.valorant.model.ValorantRank;
 import com.gamerin.backend.domain.valorant.model.ValorantRegion;
@@ -27,10 +37,16 @@ public class HenrikValorantClient {
     private static final String COMPETITIVE = "competitive";
     // v4 matches는 10을 넘는 size를 10으로 자른다.
     private static final int MATCH_COUNT = 10;
+    // 실측(2026-11): 분당 30회 한도에서 10경기 페이지 1회가 최대 10을 소모한다.
+    private static final int MAX_RATE_LIMIT_RETRIES = 2;
+    private static final long DEFAULT_RETRY_AFTER_SECONDS = 60;
+    private static final long MAX_RETRY_AFTER_SECONDS = 65;
     private static final String CONFIGURATION_ERROR_MESSAGE = "발로란트 전적 API가 설정되지 않았습니다.";
 
     private final RestClient restClient;
     private final boolean configured;
+    // 테스트에서 대기를 건너뛰기 위해 바꾼다.
+    LongConsumer pause = HenrikValorantClient::sleep;
 
     public HenrikValorantClient(
             @Value("${henrik.api.key:}") String apiKey,
@@ -120,6 +136,139 @@ public class HenrikValorantClient {
         return matches;
     }
 
+    /**
+     * since 이후에 시작한 경쟁전 경기를 기간 경계까지 최신순 페이지(start)를 넘기며 읽는다.
+     * 429는 Retry-After만큼 기다린 뒤 같은 페이지를 다시 요청한다.
+     */
+    public List<ValorantMatchDetail> getCompetitiveMatchesSince(ValorantRegion region, String puuid, Instant since) {
+        Map<String, ValorantMatchDetail> matches = new LinkedHashMap<>();
+        Set<String> seenMatchIds = new HashSet<>();
+        for (int page = 0; ; page++) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "발로란트 전적 조회가 중단되었습니다.");
+            }
+            JsonNode response = fetchPage(region, puuid, page * MATCH_COUNT);
+            if (response == null) {
+                break;
+            }
+            JsonNode data = response.path("data");
+            if (!data.isArray()) {
+                throw unexpectedResponse();
+            }
+            boolean reachedSince = false;
+            boolean advanced = false;
+            for (JsonNode match : data) {
+                String matchId = trimToNull(match.path("metadata").path("match_id").asText(null));
+                Instant startedAt = parseInstant(match.path("metadata").path("started_at").asText(null));
+                if (matchId == null || startedAt == null) {
+                    throw unexpectedResponse();
+                }
+                advanced |= seenMatchIds.add(matchId);
+                if (startedAt.isBefore(since)) {
+                    reachedSince = true;
+                    continue;
+                }
+                ValorantMatchDetail detail = toMatchDetail(match, puuid, startedAt);
+                if (detail != null) {
+                    matches.putIfAbsent(detail.matchId(), detail);
+                }
+            }
+            if (reachedSince || data.size() < MATCH_COUNT) {
+                break;
+            }
+            // start를 무시하거나 조회 상한에서 마지막 페이지를 반복하면 불완전한 통계를 저장하지 않는다.
+            if (!advanced) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "발로란트 경기 기록의 수집 범위를 확인할 수 없습니다.");
+            }
+        }
+        return new ArrayList<>(matches.values());
+    }
+
+    /** 최근 최대 20건의 랭크 이력으로 대조한다. 기간 전체의 완전성을 보장하는 목록은 아니다. */
+    public List<ValorantMatchReference> getCompetitiveMatchHistory(ValorantRegion region, String puuid) {
+        JsonNode response = fetchWithRetry("/valorant/v2/by-puuid/mmr-history/{affinity}/{platform}/{puuid}",
+                region.affinity(), PLATFORM, puuid);
+        if (response == null) {
+            return List.of();
+        }
+        JsonNode history = response.path("data").path("history");
+        if (!history.isArray()) {
+            throw unexpectedResponse();
+        }
+        Map<String, ValorantMatchReference> references = new LinkedHashMap<>();
+        for (JsonNode item : history) {
+            String matchId = trimToNull(item.path("match_id").asText(null));
+            Instant startedAt = parseInstant(item.path("date").asText(null));
+            if (matchId == null || startedAt == null) {
+                throw unexpectedResponse();
+            }
+            references.putIfAbsent(matchId, new ValorantMatchReference(matchId, startedAt,
+                    trimToNull(item.path("map").path("name").asText(null))));
+        }
+        return new ArrayList<>(references.values());
+    }
+
+    /** 목록에서 빠진 경기의 상세를 직접 확인한다. 404면 상세 미제공이다. */
+    public Optional<ValorantMatchDetail> getMatchDetail(ValorantRegion region, String puuid, String matchId) {
+        JsonNode response = fetchWithRetry("/valorant/v4/match/{affinity}/{matchId}", region.affinity(), matchId);
+        if (response == null) {
+            return Optional.empty();
+        }
+        JsonNode data = response.path("data");
+        Instant startedAt = parseInstant(data.path("metadata").path("started_at").asText(null));
+        ValorantMatchDetail detail = startedAt == null ? null : toMatchDetail(data, puuid, startedAt);
+        if (detail == null || !matchId.equals(detail.matchId())) {
+            throw unexpectedResponse();
+        }
+        return Optional.of(detail);
+    }
+
+    private JsonNode fetchPage(ValorantRegion region, String puuid, int start) {
+        return fetchWithRetry(
+                "/valorant/v4/by-puuid/matches/{affinity}/{platform}/{puuid}?mode={mode}&size={size}&start={start}",
+                region.affinity(), PLATFORM, puuid, COMPETITIVE, MATCH_COUNT, start);
+    }
+
+    private JsonNode fetchWithRetry(String uri, Object... uriVariables) {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return fetch(false, uri, uriVariables);
+            } catch (RateLimitedException e) {
+                if (attempt >= MAX_RATE_LIMIT_RETRIES) {
+                    throw e;
+                }
+                pause.accept(e.retryAfterSeconds * 1000);
+            }
+        }
+    }
+
+    private ValorantMatchDetail toMatchDetail(JsonNode match, String puuid, Instant startedAt) {
+        String matchId = trimToNull(match.path("metadata").path("match_id").asText(null));
+        ValorantMatchStats stats = toMatchStats(match, puuid);
+        if (matchId == null || stats == null) {
+            return null;
+        }
+        JsonNode player = findBy(match.path("players"), "puuid", puuid);
+        JsonNode tier = player.path("tier");
+        return new ValorantMatchDetail(
+                matchId,
+                startedAt,
+                trimToNull(match.path("metadata").path("map").path("name").asText(null)),
+                trimToNull(player.path("agent").path("name").asText(null)),
+                tier.path("id").isInt() ? tier.path("id").asInt() : null,
+                trimToNull(tier.path("name").asText(null)),
+                stats
+        );
+    }
+
+    private Instant parseInstant(String value) {
+        try {
+            return value == null ? null : Instant.parse(value);
+        } catch (DateTimeParseException e) {
+            return null;
+        }
+    }
+
     private ValorantMatchStats toMatchStats(JsonNode match, String puuid) {
         JsonNode metadata = match.path("metadata");
         // mode 필터를 믿지 않고 경쟁전·완료 경기만 다시 거른다.
@@ -179,13 +328,41 @@ public class HenrikValorantClient {
             }
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "존재하지 않는 Riot ID 또는 태그입니다.");
         } catch (HttpClientErrorException.TooManyRequests e) {
-            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "발로란트 전적 API 호출 제한을 초과했습니다. 잠시 후 다시 시도해 주세요.");
+            throw new RateLimitedException(retryAfterSeconds(e));
         } catch (HttpClientErrorException.Unauthorized | HttpClientErrorException.Forbidden e) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, CONFIGURATION_ERROR_MESSAGE);
         } catch (ResponseStatusException e) {
             throw e;
         } catch (RestClientException e) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "발로란트 전적 조회 중 오류가 발생했습니다.");
+        }
+    }
+
+    private long retryAfterSeconds(HttpClientErrorException e) {
+        String value = e.getResponseHeaders() == null ? null : e.getResponseHeaders().getFirst("Retry-After");
+        try {
+            long seconds = value == null ? DEFAULT_RETRY_AFTER_SECONDS : Long.parseLong(value.strip());
+            return Math.max(1, Math.min(seconds, MAX_RETRY_AFTER_SECONDS));
+        } catch (NumberFormatException invalid) {
+            return DEFAULT_RETRY_AFTER_SECONDS;
+        }
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "발로란트 전적 조회가 중단되었습니다.");
+        }
+    }
+
+    private static final class RateLimitedException extends ResponseStatusException {
+        private final long retryAfterSeconds;
+
+        private RateLimitedException(long retryAfterSeconds) {
+            super(HttpStatus.TOO_MANY_REQUESTS, "발로란트 전적 API 호출 제한을 초과했습니다. 잠시 후 다시 시도해 주세요.");
+            this.retryAfterSeconds = retryAfterSeconds;
         }
     }
 

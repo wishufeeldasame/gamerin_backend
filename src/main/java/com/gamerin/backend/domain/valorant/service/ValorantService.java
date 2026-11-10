@@ -180,7 +180,7 @@ public class ValorantService {
         }
     }
 
-    private String[] parseRiotId(String value) {
+    public static String[] parseRiotId(String value) {
         String[] parts = value == null ? new String[0] : value.strip().split("#", 2);
         if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Riot ID 형식은 '닉네임#태그'여야 합니다.");

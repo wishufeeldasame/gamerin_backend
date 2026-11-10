@@ -8,7 +8,10 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 
 import com.gamerin.backend.domain.valorant.model.ValorantMatchStats;
@@ -32,6 +35,8 @@ class HenrikValorantClientTest {
     private long delayMillis;
     private final List<String> uris = new ArrayList<>();
     private final List<String> authorizations = new ArrayList<>();
+    // 요청 순서대로 쓸 {status, body, Retry-After}. 비면 status/body 필드를 쓴다.
+    private final Deque<String[]> responses = new ArrayDeque<>();
 
     @BeforeEach
     void setUp() throws IOException {
@@ -137,6 +142,167 @@ class HenrikValorantClientTest {
         assertThat(uris.get(0)).isEqualTo("/valorant/v4/by-puuid/matches/kr/pc/ME?mode=competitive&size=10");
     }
 
+    @Test
+    void matchesSincePagesUntilAnOlderMatchAndReadsDetails() {
+        Instant since = Instant.parse("2026-10-26T15:00:00Z");
+        responses.add(new String[] {"200", page(10, "a", "2026-11-05T10:00:00Z"), null});
+        // 두 번째 페이지: 앞 페이지와 겹친 1경기, 새 1경기, since 이전 8경기.
+        responses.add(new String[] {"200", """
+                {"status":200,"data":[%s,%s,%s]}
+                """.formatted(detailedMatch("a0", "2026-11-05T10:00:00Z"), detailedMatch("b0", "2026-10-27T00:00:00Z"),
+                detailedMatches(8, "old", "2026-10-26T14:59:59Z")), null});
+
+        var matches = client().getCompetitiveMatchesSince(ValorantRegion.KR, "me", since);
+
+        assertThat(matches).hasSize(11);
+        assertThat(matches.get(0)).satisfies(match -> {
+            assertThat(match.matchId()).isEqualTo("a0");
+            assertThat(match.startedAt()).isEqualTo(Instant.parse("2026-11-05T10:00:00Z"));
+            assertThat(match.map()).isEqualTo("Bind");
+            assertThat(match.agent()).isEqualTo("Reyna");
+            assertThat(match.tierId()).isEqualTo(12);
+            assertThat(match.tierLabel()).isEqualTo("Gold 1");
+            assertThat(match.stats().kills()).isEqualTo(20);
+            assertThat(match.stats().won()).isTrue();
+        });
+        assertThat(matches.get(10).matchId()).isEqualTo("b0");
+        assertThat(uris).containsExactly(
+                "/valorant/v4/by-puuid/matches/kr/pc/me?mode=competitive&size=10&start=0",
+                "/valorant/v4/by-puuid/matches/kr/pc/me?mode=competitive&size=10&start=10");
+    }
+
+    @Test
+    void matchesSinceStopsAtShortPage() {
+        responses.add(new String[] {"200", page(3, "a", "2026-11-05T10:00:00Z"), null});
+        assertThat(client().getCompetitiveMatchesSince(ValorantRegion.KR, "me", Instant.EPOCH)).hasSize(3);
+        assertThat(uris).hasSize(1);
+
+    }
+
+    @Test
+    void matchesSinceCollectsBeyondOneHundredMatchesBeforeReachingBoundary() {
+        for (int page = 0; page < 11; page++) {
+            responses.add(new String[] {"200", page(10, "page" + page + "-", "2026-11-05T10:00:00Z"), null});
+        }
+        responses.add(new String[] {"200", page(10, "old", "2026-10-25T10:00:00Z"), null});
+
+        var matches = client().getCompetitiveMatchesSince(
+                ValorantRegion.KR, "me", Instant.parse("2026-10-26T00:00:00Z"));
+
+        assertThat(matches).hasSize(110);
+        assertThat(matches.get(109).matchId()).isEqualTo("page10-9");
+        assertThat(uris).hasSize(12);
+        assertThat(uris.get(11)).endsWith("&start=110");
+    }
+
+    @Test
+    void matchesSinceFailsOnRepeatedFullPageInsteadOfReturningPartialHistory() {
+        body = page(10, "same", "2026-11-05T10:00:00Z");
+
+        assertStatus(() -> client().getCompetitiveMatchesSince(ValorantRegion.KR, "me", Instant.EPOCH),
+                HttpStatus.BAD_GATEWAY);
+        assertThat(uris).hasSize(2);
+    }
+
+    @Test
+    void matchesSinceFailsWhenTimeCannotBeChecked() {
+        body = page(1, "a", "invalid-time");
+
+        assertStatus(() -> client().getCompetitiveMatchesSince(ValorantRegion.KR, "me", Instant.EPOCH),
+                HttpStatus.BAD_GATEWAY);
+    }
+
+    @Test
+    void matchesSinceIncludesExactlyOneHundredMatchesAndChecksTheNextPage() {
+        for (int page = 0; page < 10; page++) {
+            responses.add(new String[] {"200", page(10, "page" + page + "-", "2026-11-05T10:00:00Z"), null});
+        }
+        responses.add(new String[] {"200", page(0, "end", "2026-11-05T10:00:00Z"), null});
+
+        assertThat(client().getCompetitiveMatchesSince(ValorantRegion.KR, "me", Instant.EPOCH)).hasSize(100);
+        assertThat(uris).hasSize(11);
+    }
+
+    @Test
+    void matchesSinceWaitsRetryAfterOn429ThenGivesUp() {
+        List<Long> pauses = new ArrayList<>();
+        HenrikValorantClient client = client();
+        client.pause = pauses::add;
+        responses.add(new String[] {"429", "{}", "7"});
+        responses.add(new String[] {"200", page(1, "a", "2026-11-05T10:00:00Z"), null});
+
+        assertThat(client.getCompetitiveMatchesSince(ValorantRegion.KR, "me", Instant.EPOCH)).hasSize(1);
+        assertThat(pauses).containsExactly(7000L);
+
+        pauses.clear();
+        status = 429;
+        assertStatus(() -> client.getCompetitiveMatchesSince(ValorantRegion.KR, "me", Instant.EPOCH),
+                HttpStatus.TOO_MANY_REQUESTS);
+        // Retry-After가 없으면 60초, 두 번 다시 시도한 뒤 포기한다.
+        assertThat(pauses).containsExactly(60000L, 60000L);
+    }
+
+    private String page(int count, String idPrefix, String startedAt) {
+        return "{\"status\":200,\"data\":[" + detailedMatches(count, idPrefix, startedAt) + "]}";
+    }
+
+    @Test
+    void competitiveHistoryReadsMatchIdsTimesAndMapsAndDeduplicates() {
+        body = """
+                {"status":200,"data":{"history":[
+                  {"match_id":"missing","date":"2026-11-02T15:27:02.659Z","map":{"name":"Lotus"}},
+                  {"match_id":"missing","date":"2026-11-02T15:27:02.659Z","map":{"name":"Lotus"}}
+                ]}}
+                """;
+
+        var history = client().getCompetitiveMatchHistory(ValorantRegion.AP, "me");
+
+        assertThat(history).hasSize(1);
+        assertThat(history.get(0).matchId()).isEqualTo("missing");
+        assertThat(history.get(0).startedAt()).isEqualTo(Instant.parse("2026-11-02T15:27:02.659Z"));
+        assertThat(history.get(0).map()).isEqualTo("Lotus");
+        assertThat(uris).containsExactly("/valorant/v2/by-puuid/mmr-history/ap/pc/me");
+    }
+
+    @Test
+    void matchDetailDistinguishesMissingMatchFromAvailableDetail() {
+        responses.add(new String[] {"404", "{\"errors\":[{\"code\":26,\"message\":\"Match not found\"}]}", null});
+        responses.add(new String[] {"200", "{\"data\":" + detailedMatch("m1", "2026-11-03T00:00:00Z") + "}", null});
+        HenrikValorantClient client = client();
+
+        assertThat(client.getMatchDetail(ValorantRegion.AP, "me", "missing")).isEmpty();
+        assertThat(client.getMatchDetail(ValorantRegion.AP, "me", "m1")).get()
+                .satisfies(match -> assertThat(match.stats().kills()).isEqualTo(20));
+        assertThat(uris).containsExactly("/valorant/v4/match/ap/missing", "/valorant/v4/match/ap/m1");
+    }
+
+    @Test
+    void historyRejectsUnusableDatesAndDetailRejectsAnotherMatch() {
+        body = "{\"data\":{\"history\":[{\"match_id\":\"m1\",\"date\":\"invalid\"}]}}";
+        assertStatus(() -> client().getCompetitiveMatchHistory(ValorantRegion.AP, "me"), HttpStatus.BAD_GATEWAY);
+        body = "{\"data\":" + detailedMatch("different", "2026-11-03T00:00:00Z") + "}";
+        assertStatus(() -> client().getMatchDetail(ValorantRegion.AP, "me", "m1"), HttpStatus.BAD_GATEWAY);
+    }
+
+    private String detailedMatches(int count, String idPrefix, String startedAt) {
+        List<String> matches = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            matches.add(detailedMatch(idPrefix + i, startedAt));
+        }
+        return String.join(",", matches);
+    }
+
+    private String detailedMatch(String matchId, String startedAt) {
+        return """
+                {"metadata":{"match_id":"%s","started_at":"%s","map":{"name":"Bind"},
+                   "queue":{"id":"competitive"},"is_completed":true},
+                 "players":[{"puuid":"me","team_id":"Red","agent":{"name":"Reyna"},"tier":{"id":12,"name":"Gold 1"},
+                   "stats":{"kills":20,"deaths":10,"assists":5,"score":4800,
+                   "headshots":8,"bodyshots":20,"legshots":2}}],
+                 "teams":[{"team_id":"Red","won":true,"rounds":{"won":13,"lost":11}}]}
+                """.formatted(matchId, startedAt);
+    }
+
     private String match(String queue, boolean completed, String puuid) {
         return """
                 {"metadata":{"queue":{"id":"%s"},"is_completed":%s},
@@ -170,9 +336,13 @@ class HenrikValorantClientTest {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        String[] queued = responses.poll();
+        byte[] bytes = (queued == null ? body : queued[1]).getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
-        exchange.sendResponseHeaders(status, bytes.length);
+        if (queued != null && queued[2] != null) {
+            exchange.getResponseHeaders().add("Retry-After", queued[2]);
+        }
+        exchange.sendResponseHeaders(queued == null ? status : Integer.parseInt(queued[0]), bytes.length);
         try (OutputStream output = exchange.getResponseBody()) {
             output.write(bytes);
         } catch (IOException ignored) {
