@@ -54,6 +54,8 @@ public class WeeklyGameReport {
     }
 
     public WeeklyStats getStats() { return stats; }
+    public UUID getId() { return id; }
+    public String getPuuid() { return puuid; }
     public WeeklyAnalysis getAnalysis() { return analysis; }
     public WeeklyReportStatus getStatus() { return status; }
     public String getAiModel() { return aiModel; }

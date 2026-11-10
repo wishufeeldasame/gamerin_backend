@@ -17,7 +17,8 @@ public enum NotificationType {
     MENTORING_COMPLETED,
     MENTORING_REFUNDED,
     MENTORING_REVIEW,
-    MENTION;
+    MENTION,
+    WEEKLY_REPORT_READY;
 
     public String apiValue() {
         return name().toLowerCase(Locale.ROOT);

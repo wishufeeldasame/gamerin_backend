@@ -18,6 +18,20 @@ import jakarta.persistence.LockModeType;
 
 public interface NotificationRepository extends JpaRepository<Notification, UUID> {
 
+    /** 같은 리포트의 재생성·동시 완료가 읽음 상태나 알림 수를 바꾸지 않게 한다. */
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            INSERT INTO notifications (id, recipient_id, type, weekly_report_id, created_at, event_at)
+            VALUES (:id, :recipientId, 'WEEKLY_REPORT_READY', :reportId, :now, :now)
+            ON CONFLICT (recipient_id, weekly_report_id) DO NOTHING
+            """, nativeQuery = true)
+    int insertWeeklyReportReady(
+            @Param("id") UUID id,
+            @Param("recipientId") UUID recipientId,
+            @Param("reportId") UUID reportId,
+            @Param("now") OffsetDateTime now
+    );
+
     @Query(value = """
             SELECT CAST(n.id AS VARCHAR)
             FROM notifications n

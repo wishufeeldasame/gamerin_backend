@@ -32,7 +32,7 @@ public class AdminWeeklyReportController {
 
     @PostMapping("/valorant")
     @Operation(summary = "발로란트 주간 리포트 수동 생성",
-            description = "Riot ID(이름#태그)와 지역으로 직전 완료 주 리포트를 즉시 수집·집계·분석해 반환합니다. 외부 API 호출 한도에 따라 수 분 이상 걸릴 수 있으며, nginx의 이 경로 전용 대기 시간은 1시간입니다.")
+            description = "Riot ID(이름#태그)와 지역으로 직전 완료 주 리포트를 즉시 수집·집계·분석해 반환합니다. 리포트가 완성되면 해당 계정을 연동한 활성 멤버십 회원에게 완료 알림을 한 번 보냅니다. 경기 기록 없음·실패에는 알리지 않습니다. 외부 API 호출 한도에 따라 수 분 이상 걸릴 수 있으며, nginx의 이 경로 전용 대기 시간은 1시간입니다.")
     public ApiResponse<WeeklyGameReportResponse> generateValorantReport(
             @Valid @RequestBody ValorantConnectRequest request) {
         return ApiResponse.ok(weeklyReportService.generateForRiotId(request.riotId(), request.region()));

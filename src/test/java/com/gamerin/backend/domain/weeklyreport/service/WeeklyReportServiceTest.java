@@ -63,7 +63,8 @@ class WeeklyReportServiceTest {
     private final UserRepository users = mock(UserRepository.class);
     private final MembershipService memberships = mock(MembershipService.class);
     private final WeeklyReportService service = new WeeklyReportService(henrik, ai, matchRecords, reports, users,
-            memberships, Duration.ZERO, CLOCK);
+            memberships, Duration.ZERO, CLOCK,
+            new WeeklyReportPersistenceService(reports, mock(WeeklyReportNotificationService.class)));
 
     @BeforeEach
     void setUp() {
