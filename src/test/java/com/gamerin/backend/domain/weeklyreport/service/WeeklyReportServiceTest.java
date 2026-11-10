@@ -37,7 +37,9 @@ import com.gamerin.backend.domain.weeklyreport.entity.ValorantMatchRecord;
 import com.gamerin.backend.domain.weeklyreport.entity.WeeklyGameReport;
 import com.gamerin.backend.domain.weeklyreport.entity.WeeklyReportStatus;
 import com.gamerin.backend.domain.weeklyreport.model.WeeklyAnalysis;
+import com.gamerin.backend.domain.weeklyreport.model.WeeklyReportCollectionIssue;
 import com.gamerin.backend.domain.weeklyreport.model.WeeklyReportPeriod;
+import com.gamerin.backend.domain.weeklyreport.model.WeeklyStats;
 import com.gamerin.backend.domain.weeklyreport.repository.ValorantMatchRecordRepository;
 import com.gamerin.backend.domain.weeklyreport.repository.WeeklyGameReportRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -293,6 +295,48 @@ class WeeklyReportServiceTest {
         ArgumentCaptor<List<ValorantMatchRecord>> saved = ArgumentCaptor.forClass(List.class);
         verify(matchRecords).saveAll(saved.capture());
         assertThat(saved.getValue()).extracting(ValorantMatchRecord::getMatchId).containsExactly("recovered");
+    }
+
+    @Test
+    void regenerationKeepsUnresolvedIssuesThatLeftRecentHistoryAndDropsRecoveredOnes() {
+        WeeklyGameReport existing = WeeklyGameReport.create(PUUID, "VALORANT", WEEK_START);
+        existing.update(WeeklyReportStatus.READY, new WeeklyStats(null, null, null, List.of(
+                new WeeklyReportCollectionIssue("still-missing", Instant.parse("2026-11-02T14:00:00Z"), "Bind", 404, "없음"),
+                new WeeklyReportCollectionIssue("recovered", Instant.parse("2026-11-02T15:00:00Z"), "Lotus", 404, "없음"))),
+                null, null);
+        when(reports.findByPuuidAndGameAndWeekStart(PUUID, "VALORANT", WEEK_START)).thenReturn(Optional.of(existing));
+        when(henrik.getCompetitiveMatchesSince(any(), any(), any())).thenReturn(List.of());
+        when(henrik.getCompetitiveMatchHistory(ValorantRegion.KR, PUUID)).thenReturn(List.of());
+        when(henrik.getMatchDetail(ValorantRegion.KR, PUUID, "still-missing")).thenReturn(Optional.empty());
+        ValorantMatchDetail recovered = detail("recovered", "2026-11-02T15:00:00Z");
+        when(henrik.getMatchDetail(ValorantRegion.KR, PUUID, "recovered")).thenReturn(Optional.of(recovered));
+        stubStoredMatches(List.of(recovered));
+
+        WeeklyGameReport report = service.generate(PUUID, ValorantRegion.KR, PERIOD);
+
+        assertThat(report.getStats().collectionIssues()).extracting(WeeklyReportCollectionIssue::matchId)
+                .containsExactly("still-missing");
+    }
+
+    @Test
+    void batchFailureDoesNotOverwriteReportCompletedMeanwhile() {
+        UUID userId = UUID.randomUUID();
+        when(users.findConnectedValorantUserIds()).thenReturn(List.of(userId));
+        when(memberships.findActiveUserIds(List.of(userId))).thenReturn(Set.of(userId));
+        User user = connectedUser(userId);
+        when(users.findWithProfileById(userId)).thenReturn(Optional.of(user));
+        WeeklyGameReport completed = WeeklyGameReport.create(PUUID, "VALORANT", WEEK_START);
+        completed.update(WeeklyReportStatus.READY, null, null, null);
+        // 배치 시작 때는 없고, 외부 API 실패 뒤 다시 보면 다른 생성이 끝나 있다.
+        when(reports.findByPuuidAndGameAndWeekStart(PUUID, "VALORANT", WEEK_START))
+                .thenReturn(Optional.empty(), Optional.of(completed));
+        when(henrik.getCompetitiveMatchesSince(any(), eq(PUUID), any()))
+                .thenThrow(new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS));
+
+        service.generateForActiveMembers();
+
+        verify(reports, never()).save(any());
+        assertThat(completed.getStatus()).isEqualTo(WeeklyReportStatus.READY);
     }
 
     @Test

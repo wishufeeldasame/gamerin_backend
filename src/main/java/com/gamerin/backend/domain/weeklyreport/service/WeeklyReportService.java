@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import com.gamerin.backend.domain.game.model.GameType;
 import com.gamerin.backend.domain.membership.service.MembershipService;
@@ -126,7 +127,7 @@ public class WeeklyReportService {
             } catch (RuntimeException e) {
                 // 한 사용자의 실패가 나머지 대상을 막지 않게 한다.
                 log.warn("Weekly report generation failed. userId={} error={}", userId, e.getMessage());
-                save(puuid, period, WeeklyReportStatus.FAILED, null, null, null);
+                saveFailure(puuid, period);
             }
         }
         log.info("Weekly report batch finished. weekStart={}", period.weekStart());
@@ -173,6 +174,14 @@ public class WeeklyReportService {
     private List<WeeklyReportCollectionIssue> checkMissingMatches(String puuid, ValorantRegion region,
             WeeklyReportPeriod period, List<ValorantMatchDetail> matches) {
         List<WeeklyReportCollectionIssue> issues = new ArrayList<>();
+        // 이전 생성에서 못 찾은 경기. 최근 이력 20건 밖으로 밀려도 복구를 확인하기 전에는 진단을 유지한다.
+        List<WeeklyReportCollectionIssue> unresolved = reportRepository
+                .findByPuuidAndGameAndWeekStart(puuid, GAME, period.weekStart())
+                .map(WeeklyGameReport::getStats)
+                .map(WeeklyStats::collectionIssues)
+                .orElse(List.of()).stream()
+                .filter(issue -> issue.matchId() != null)
+                .toList();
         List<ValorantMatchReference> history;
         try {
             history = henrikValorantClient.getCompetitiveMatchHistory(region, puuid).stream()
@@ -182,15 +191,22 @@ public class WeeklyReportService {
         } catch (ResponseStatusException e) {
             issues.add(new WeeklyReportCollectionIssue(null, null, null, e.getStatusCode().value(),
                     "HenrikDev 랭크 이력을 조회하지 못해 누락 여부를 대조하지 못했습니다. " + e.getReason()));
+            issues.addAll(unresolved);
             return issues;
         }
-        if (history.isEmpty()) {
+        List<ValorantMatchReference> references = new ArrayList<>(history);
+        Set<String> inHistory = history.stream().map(ValorantMatchReference::matchId).collect(Collectors.toSet());
+        unresolved.stream()
+                .filter(issue -> !inHistory.contains(issue.matchId()))
+                .forEach(issue -> references.add(
+                        new ValorantMatchReference(issue.matchId(), issue.startedAt(), issue.map())));
+        if (references.isEmpty()) {
             return issues;
         }
         Set<String> known = new HashSet<>(matchRecordRepository.findExistingMatchIds(
-                puuid, history.stream().map(ValorantMatchReference::matchId).toList()));
+                puuid, references.stream().map(ValorantMatchReference::matchId).toList()));
         matches.forEach(match -> known.add(match.matchId()));
-        for (ValorantMatchReference reference : history) {
+        for (ValorantMatchReference reference : references) {
             if (known.contains(reference.matchId())) {
                 continue;
             }
@@ -198,6 +214,7 @@ public class WeeklyReportService {
                 Optional<ValorantMatchDetail> detail = henrikValorantClient.getMatchDetail(region, puuid, reference.matchId());
                 if (detail.isPresent()) {
                     matches.add(detail.get());
+                    known.add(reference.matchId());
                 } else {
                     issues.add(new WeeklyReportCollectionIssue(reference.matchId(), reference.startedAt(), reference.map(),
                             404, "랭크 이력에는 있지만 HenrikDev 경기 상세 API에서 경기 정보를 찾을 수 없습니다."));
@@ -208,7 +225,23 @@ public class WeeklyReportService {
                 break;
             }
         }
+        // 조회가 중단돼 다시 확인하지 못한 이전 누락은 그대로 남긴다.
+        Set<String> reported = issues.stream().map(WeeklyReportCollectionIssue::matchId).collect(Collectors.toSet());
+        unresolved.stream()
+                .filter(issue -> !known.contains(issue.matchId()) && !reported.contains(issue.matchId()))
+                .forEach(issues::add);
         return issues;
+    }
+
+    // 배치가 외부 API를 기다리는 사이 관리자 생성이 끝낸 리포트를 실패 기록으로 지우지 않는다.
+    // shortcut: 재확인과 저장 사이의 짧은 틈은 남는다. 생성 경로가 늘면 조건부 UPDATE로 바꾼다.
+    private void saveFailure(String puuid, WeeklyReportPeriod period) {
+        boolean completed = reportRepository.findByPuuidAndGameAndWeekStart(puuid, GAME, period.weekStart())
+                .filter(report -> report.getStatus() != WeeklyReportStatus.FAILED)
+                .isPresent();
+        if (!completed) {
+            save(puuid, period, WeeklyReportStatus.FAILED, null, null, null);
+        }
     }
 
     private WeeklyGameReport save(String puuid, WeeklyReportPeriod period, WeeklyReportStatus status,
