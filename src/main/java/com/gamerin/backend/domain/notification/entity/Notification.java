@@ -48,7 +48,9 @@ import jakarta.persistence.UniqueConstraint;
                         columnNames = {"recipient_id", "type", "mentoring_application_id"}
                 ),
                 @UniqueConstraint(name = "uq_notifications_mentoring_review", columnNames = "mentoring_review_id"),
-                @UniqueConstraint(name = "uq_notifications_mention", columnNames = "mention_id")
+                @UniqueConstraint(name = "uq_notifications_mention", columnNames = "mention_id"),
+                @UniqueConstraint(name = "uq_notifications_recipient_weekly_report",
+                        columnNames = {"recipient_id", "weekly_report_id"})
         }
 )
 public class Notification {
@@ -108,6 +110,9 @@ public class Notification {
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "mention_id")
     private UserMention mention;
+
+    @Column(name = "weekly_report_id")
+    private UUID weeklyReportId;
 
     @Column(name = "read_at")
     private OffsetDateTime readAt;

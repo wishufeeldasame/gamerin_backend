@@ -126,6 +126,15 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     List<UUID> findConnectedValorantUserIds();
 
     @Query(value = """
+        SELECT u.id FROM users u
+        JOIN user_profiles up ON up.user_id = u.id
+        WHERE u.deleted_at IS NULL AND u.status = 'ACTIVE'
+          AND COALESCE((up.game_stats -> 'VALORANT' ->> 'connected')::boolean, false) = true
+          AND up.game_stats -> 'VALORANT' ->> 'puuid' = :puuid
+        """, nativeQuery = true)
+    List<UUID> findActiveUserIdsByConnectedValorantPuuid(@Param("puuid") String puuid);
+
+    @Query(value = """
         SELECT EXISTS (
             SELECT 1
             FROM user_profiles up

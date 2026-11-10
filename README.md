@@ -164,6 +164,8 @@ GET 전체 피드(`tab=all` 또는 생략), 게시물 상세·댓글, 타인 프
 
 주간 전적 리포트(`domain/weeklyreport`, 공통 설정에서 읽음): 매주 월요일 04:00 KST에 발로란트를 연동한 활성 멤버의 직전 주(KST 월~일) 경쟁전을 HenrikDev에서 수집해 `valorant_match_records`에 누적하고 `weekly_game_reports`를 만든다. 조회는 `GET /api/v1/memberships/weekly-report`(활성 멤버만), 관리자 수동 생성은 `POST /api/v1/admin/weekly-reports/valorant`다. 분석 문장은 OpenAI Chat Completions 호환 API로 만들고, 키·모델이 없거나 실패하면 규칙 기반 문장으로 대체한다.
 
+리포트가 `READY`로 완성되면 현재 해당 계정을 연동한 활성 멤버십 회원에게 `weekly_report_ready` 시스템 알림을 생성한다. 자동 배치·관리자 수동 생성에 공통 적용하며, 같은 회원·리포트의 재생성은 기존 알림과 읽음 상태를 유지한다. `NO_DATA`·`FAILED`에는 완료 알림을 보내지 않는다. 리포트와 알림은 같은 트랜잭션에서 저장하며, 알림을 누르면 `/membership/content`로 이동한다. DB 변경은 `V73__add_weekly_report_ready_notifications.sql`을 적용한다.
+
 배치는 전용 단일 스레드(`weekly-report-worker`)에서 실행하며 실행 중 중복 배치를 건너뛴다. 경기 목록 수집은 100경기 상한 없이 기간 경계·짧은 응답·404까지 페이지를 넘긴다. 짧은 응답만으로 전체 이력의 완전성을 보장하지는 않는다. 전체 페이지 반복이나 경기 ID·시각 누락은 502로 실패하며 목록의 부분 기록을 저장하지 않는다. 관리자 수동 생성은 동기 응답을 유지하고, `../docker/nginx/default.conf`에서 이 경로만 read/send timeout을 `1h`로 둔다. 클라이언트도 긴 응답 시간을 허용해야 하며, 1시간을 넘는 요청은 여전히 프록시에서 끊길 수 있다.
 
 경기 목록이 성공했어도 특정 상세가 누락될 수 있다. 최근 최대 20건의 MMR 이력과 저장·수집된 경기 ID를 대조하고, 빠진 ID는 상세 API로 직접 확인한다. 상세를 받으면 저장하고, 404 등이 계속되면 가능한 경기의 통계·분석을 유지하면서 수집 진단을 기존 `stats` JSON의 `collectionIssues`에 보관한다(스키마 변경 없음). 사용자 GET 응답은 쉬운 `notice`만 제공하며 진단 목록은 관리자 생성 응답에만 포함한다. 전부 누락돼 `games: []`인 경우에도 안내를 유지한다. 경기 ID·날짜·진단은 AI 입력에서 제거한다. 기존 리포트에는 재생성 후 안내가 반영된다. 최근 이력 밖의 누락은 탐지하지 못할 수 있다.

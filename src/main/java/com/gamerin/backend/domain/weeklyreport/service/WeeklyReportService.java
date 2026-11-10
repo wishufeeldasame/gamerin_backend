@@ -56,19 +56,22 @@ public class WeeklyReportService {
     private final MembershipService membershipService;
     private final Duration userInterval;
     private final Clock clock;
+    private final WeeklyReportPersistenceService persistenceService;
 
     @Autowired
     public WeeklyReportService(HenrikValorantClient henrikValorantClient, WeeklyReportAiClient aiClient,
             ValorantMatchRecordRepository matchRecordRepository, WeeklyGameReportRepository reportRepository,
             UserRepository userRepository, MembershipService membershipService,
-            @Value("${app.weekly-report.user-interval:30s}") Duration userInterval) {
+            @Value("${app.weekly-report.user-interval:30s}") Duration userInterval,
+            WeeklyReportPersistenceService persistenceService) {
         this(henrikValorantClient, aiClient, matchRecordRepository, reportRepository, userRepository,
-                membershipService, userInterval, Clock.systemUTC());
+                membershipService, userInterval, Clock.systemUTC(), persistenceService);
     }
 
     WeeklyReportService(HenrikValorantClient henrikValorantClient, WeeklyReportAiClient aiClient,
             ValorantMatchRecordRepository matchRecordRepository, WeeklyGameReportRepository reportRepository,
-            UserRepository userRepository, MembershipService membershipService, Duration userInterval, Clock clock) {
+            UserRepository userRepository, MembershipService membershipService, Duration userInterval, Clock clock,
+            WeeklyReportPersistenceService persistenceService) {
         this.henrikValorantClient = henrikValorantClient;
         this.aiClient = aiClient;
         this.matchRecordRepository = matchRecordRepository;
@@ -77,6 +80,7 @@ public class WeeklyReportService {
         this.membershipService = membershipService;
         this.userInterval = userInterval;
         this.clock = clock;
+        this.persistenceService = persistenceService;
     }
 
     /** 활성 멤버 본인의 직전 완료 주 리포트. 조회 시점에 생성하지 않는다. */
@@ -246,10 +250,7 @@ public class WeeklyReportService {
 
     private WeeklyGameReport save(String puuid, WeeklyReportPeriod period, WeeklyReportStatus status,
             WeeklyStats stats, WeeklyAnalysis analysis, String aiModel) {
-        WeeklyGameReport report = reportRepository.findByPuuidAndGameAndWeekStart(puuid, GAME, period.weekStart())
-                .orElseGet(() -> WeeklyGameReport.create(puuid, GAME, period.weekStart()));
-        report.update(status, stats, analysis, aiModel);
-        return reportRepository.save(report);
+        return persistenceService.save(puuid, GAME, period, status, stats, analysis, aiModel);
     }
 
     private WeeklyGameReportResponse toResponse(WeeklyReportPeriod period, WeeklyGameReport report, boolean admin) {
