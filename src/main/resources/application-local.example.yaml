@@ -47,6 +47,22 @@ spring:
             enable: true
 
 app:
+  weekly-report:
+    ai:
+      # 주간 전적 리포트 분석 문장. factchat(학교 Mindlogic 게이트웨이) 또는 nvidia(NVIDIA Build).
+      # 키가 없으면 규칙 기반 문장으로 대체한다. 실제 키는 커밋하지 않는다.
+      # 모델 예: factchat은 deepseek-v4.1-flash, nvidia는 deepseek-ai/deepseek-v4.1-flash
+      provider: factchat
+      connect-timeout: 3s
+      read-timeout: 60s
+      factchat:
+        url: "https://factchat-cloud.mindlogic.ai/v1/gateway/chat/completions/"
+        key: your-factchat-api-key
+        model: your-factchat-model
+      nvidia:
+        url: "https://integrate.api.nvidia.com/v1/chat/completions"
+        key: your-nvidia-api-key
+        model: your-nvidia-model
   media:
     upload-dir: uploads
     video:

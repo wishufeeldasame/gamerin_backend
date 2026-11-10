@@ -21,7 +21,7 @@ GamerIN 서비스의 백엔드 API 서버다. 피드·게시물, 팔로우·북�
 | API 문서 | springdoc-openapi 2.8.17 (Swagger UI) |
 | 테스트 | JUnit Platform, Spring Boot Test, Spring Security Test, H2 (테스트 전용) |
 | 미디어 | FFmpeg (동영상 최적화·검열용 프레임 추출) |
-| 외부 연동 | OpenAI Moderation, PUBG, R6Data, Riot, KakaoPay, SMTP 메일 |
+| 외부 연동 | OpenAI Moderation, PUBG, R6Data, Riot, HenrikDev(발로란트), 주간 리포트 AI(Mindlogic 게이트웨이·NVIDIA Build), KakaoPay, SMTP 메일 |
 
 ## 도메인 구조
 
@@ -160,6 +160,21 @@ GET 전체 피드(`tab=all` 또는 생략), 게시물 상세·댓글, 타인 프
 | `OPENAI_MODERATION_ENABLED` / `_MODEL` / `_FFMPEG_PATH` | `true` / `omni-moderation-latest` / `ffmpeg` |
 | `PUBG_API_KEY`, `RIOT_API_KEY` | 빈 값 |
 | `R6DATA_API_KEY` / `_BASE_URL` / `_CONNECT_TIMEOUT` / `_READ_TIMEOUT` | 빈 값 / `https://api.r6data.com` / `3s` / `10s` |
+| `HENRIK_API_KEY` / `_BASE_URL` / `_CONNECT_TIMEOUT` / `_READ_TIMEOUT` | 빈 값 / `https://api.henrikdev.xyz` / `3s` / `10s` |
+
+주간 전적 리포트(`domain/weeklyreport`, 공통 설정에서 읽음): 매주 월요일 04:00 KST에 발로란트를 연동한 활성 멤버의 직전 주(KST 월~일) 경쟁전을 HenrikDev에서 수집해 `valorant_match_records`에 누적하고 `weekly_game_reports`를 만든다. 조회는 `GET /api/v1/memberships/weekly-report`(활성 멤버만), 관리자 수동 생성은 `POST /api/v1/admin/weekly-reports/valorant`다. 분석 문장은 OpenAI Chat Completions 호환 API로 만들고, 키·모델이 없거나 실패하면 규칙 기반 문장으로 대체한다.
+
+배치는 전용 단일 스레드(`weekly-report-worker`)에서 실행하며 실행 중 중복 배치를 건너뛴다. 경기 목록 수집은 100경기 상한 없이 기간 경계·짧은 응답·404까지 페이지를 넘긴다. 짧은 응답만으로 전체 이력의 완전성을 보장하지는 않는다. 전체 페이지 반복이나 경기 ID·시각 누락은 502로 실패하며 목록의 부분 기록을 저장하지 않는다. 관리자 수동 생성은 동기 응답을 유지하고, `../docker/nginx/default.conf`에서 이 경로만 read/send timeout을 `1h`로 둔다. 클라이언트도 긴 응답 시간을 허용해야 하며, 1시간을 넘는 요청은 여전히 프록시에서 끊길 수 있다.
+
+경기 목록이 성공했어도 특정 상세가 누락될 수 있다. 최근 최대 20건의 MMR 이력과 저장·수집된 경기 ID를 대조하고, 빠진 ID는 상세 API로 직접 확인한다. 상세를 받으면 저장하고, 404 등이 계속되면 가능한 경기의 통계·분석을 유지하면서 수집 진단을 기존 `stats` JSON의 `collectionIssues`에 보관한다(스키마 변경 없음). 사용자 GET 응답은 쉬운 `notice`만 제공하며 진단 목록은 관리자 생성 응답에만 포함한다. 전부 누락돼 `games: []`인 경우에도 안내를 유지한다. 경기 ID·날짜·진단은 AI 입력에서 제거한다. 기존 리포트에는 재생성 후 안내가 반영된다. 최근 이력 밖의 누락은 탐지하지 못할 수 있다.
+
+| 환경변수 | 기본값 |
+|---|---|
+| `WEEKLY_REPORT_AI_PROVIDER` | `factchat` (학교 Mindlogic 게이트웨이) 또는 `nvidia` (NVIDIA Build) |
+| `FACTCHAT_SECRET_KEY` / `FACTCHAT_MODEL` / `FACTCHAT_API_URL` | 빈 값 / 빈 값(예: `deepseek-v4.1-flash`) / `https://factchat-cloud.mindlogic.ai/v1/gateway/chat/completions/` |
+| `NVIDIA_SECRET_KEY` / `NVIDIA_MODEL` / `NVIDIA_API_URL` | 빈 값 / 빈 값(예: `deepseek-ai/deepseek-v4.1-flash`) / `https://integrate.api.nvidia.com/v1/chat/completions` |
+| `WEEKLY_REPORT_AI_CONNECT_TIMEOUT` / `_READ_TIMEOUT` | `3s` / `60s` (NVIDIA Build는 응답이 2분을 넘은 적이 있어 늘려야 한다) |
+| `WEEKLY_REPORT_USER_INTERVAL` | `30s` (배치에서 사용자 사이 대기. HenrikDev Basic 키는 분당 30회) |
 
 공통 설정(`application.yaml`)에서 읽는 변수: `SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE`(기본 `500MB`), `SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE`(기본 `530MB`), `APP_HASHTAG_BACKFILL_ENABLED`(`false`), `APP_HASHTAG_BACKFILL_BATCH_SIZE`(`200`), `KAKAOPAY_SECRET_KEY`, `KAKAOPAY_CID`(비어 있으면 결제 준비 거부), `KAKAOPAY_CANCEL_ENABLED`(`false`), `OPENAI_MODERATION_FFMPEG_TIMEOUT_MS`(`15000`). 환경변수 없이 공통 설정에 고정된 값: `app.auth.refresh-token.reuse-grace-seconds`(`30`).
 
