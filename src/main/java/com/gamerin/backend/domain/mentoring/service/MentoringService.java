@@ -4,19 +4,27 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.gamerin.backend.domain.game.model.GameType;
 import com.gamerin.backend.domain.membership.service.MembershipService;
+import com.gamerin.backend.domain.post.service.MediaStorageService;
 import com.gamerin.backend.domain.mentoring.dto.request.MentorRegistrationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringApplicationRequest;
 import com.gamerin.backend.domain.mentoring.dto.request.MentoringProgramRequest;
@@ -58,6 +66,7 @@ public class MentoringService {
             ApplicationStatus.ACCEPTED,
             ApplicationStatus.ONGOING,
             ApplicationStatus.FINISHED);
+    private static final Pattern PROGRAM_IMAGE_URL_PATTERN = Pattern.compile("!\\[[^\\]]*\\]\\((/uploads/mentoring-program-images/[^\\s)]+)\\)");
 
     private final MentorProfileRepository mentorProfileRepository;
     private final UserRepository userRepository;
@@ -69,6 +78,7 @@ public class MentoringService {
     private final NotificationCommandService notificationCommandService;
     private final MembershipService membershipService;
     private final UserProfileRepository userProfileRepository;
+    private final MediaStorageService mediaStorageService;
 
     public MentoringService(
             MentorProfileRepository mentorProfileRepository,
@@ -81,6 +91,33 @@ public class MentoringService {
             NotificationCommandService notificationCommandService,
             MembershipService membershipService,
             UserProfileRepository userProfileRepository) {
+        this(
+                mentorProfileRepository,
+                userRepository,
+                mentoringProgramRepository,
+                mentoringApplicationRepository,
+                mentoringReviewRepository,
+                mileageService,
+                settlementProcessor,
+                notificationCommandService,
+                membershipService,
+                userProfileRepository,
+                null);
+    }
+
+    @Autowired
+    public MentoringService(
+            MentorProfileRepository mentorProfileRepository,
+            UserRepository userRepository,
+            MentoringProgramRepository mentoringProgramRepository,
+            MentoringApplicationRepository mentoringApplicationRepository,
+            MentoringReviewRepository mentoringReviewRepository,
+            MileageService mileageService,
+            SettlementProcessor settlementProcessor,
+            NotificationCommandService notificationCommandService,
+            MembershipService membershipService,
+            UserProfileRepository userProfileRepository,
+            MediaStorageService mediaStorageService) {
         this.mentorProfileRepository = mentorProfileRepository;
         this.userRepository = userRepository;
         this.mentoringProgramRepository = mentoringProgramRepository;
@@ -91,6 +128,7 @@ public class MentoringService {
         this.notificationCommandService = notificationCommandService;
         this.membershipService = membershipService;
         this.userProfileRepository = userProfileRepository;
+        this.mediaStorageService = mediaStorageService;
     }
 
     @Transactional
@@ -156,6 +194,8 @@ public class MentoringService {
         program.setPrice(request.price());
         program.setTags(request.tags());
 
+        touchProgramImagesImmediately(extractProgramImageUrls(request.content()));
+
         MentoringProgram savedProgram = mentoringProgramRepository.save(program);
         return MentoringProgramResponse.from(savedProgram,
                 membershipService.isActive(savedProgram.getMentor().getId()));
@@ -177,9 +217,20 @@ public class MentoringService {
     }
 
     @Transactional(readOnly = true)
+    public MentoringProgramDetailResponse getProgramDetailByPublicNo(Long publicNo) {
+        MentoringProgram program = mentoringProgramRepository.findByPublicNoAndDeletedAtIsNull(publicNo)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
+        return toProgramDetail(program);
+    }
+
+    @Transactional(readOnly = true)
     public MentoringProgramDetailResponse getProgramDetail(UUID id) {
         MentoringProgram program = mentoringProgramRepository.findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
+        return toProgramDetail(program);
+    }
+
+    private MentoringProgramDetailResponse toProgramDetail(MentoringProgram program) {
 
         if (program.isAdminSuspended()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다.");
@@ -216,6 +267,8 @@ public class MentoringService {
             throw new IllegalArgumentException("가격은 0원 이상이어야 합니다.");
         }
 
+        String previousContent = program.getContent();
+
         // 필드 업데이트
         program.setTitle(request.title());
         program.setContent(request.content());
@@ -223,6 +276,17 @@ public class MentoringService {
         program.setPrice(request.price());
         program.setStatus(request.status());
         program.setTags(request.tags());
+
+        Set<String> previousImageUrls = extractProgramImageUrls(previousContent);
+        Set<String> currentImageUrls = extractProgramImageUrls(request.content());
+
+        Set<String> addedImageUrls = new HashSet<>(currentImageUrls);
+        addedImageUrls.removeAll(previousImageUrls);
+        touchProgramImagesImmediately(addedImageUrls);
+
+        Set<String> removedImageUrls = new HashSet<>(previousImageUrls);
+        removedImageUrls.removeAll(currentImageUrls);
+        touchProgramImagesAfterCommit(removedImageUrls);
 
         return MentoringProgramResponse.from(program, membershipService.isActive(program.getMentor().getId()));
     }
@@ -252,6 +316,62 @@ public class MentoringService {
         // 완료·정산된 신청, 리뷰, 마일리지 원장은 DB에 그대로 보존됨
         // @Transactional 범위 안에서 Dirty Checking이 UPDATE 쿼리를 자동 발행한다
         program.softDelete();
+        touchProgramImagesAfterCommit(extractProgramImageUrls(program.getContent()));
+    }
+
+    @Transactional(readOnly = true)
+    public int cleanupUnreferencedProgramImages() {
+        if (mediaStorageService == null) {
+            return 0;
+        }
+        Set<String> referencedUrls = new HashSet<>();
+        for (String content : mentoringProgramRepository.findActiveContents()) {
+            referencedUrls.addAll(extractProgramImageUrls(content));
+        }
+        // 작성 중인 화면에서 방금 업로드했거나 최근 본문에서 분리된 파일이 경합 중 지워지지 않도록 6시간 유예 기간 이후 파일만 정리한다.
+        Instant modifiedBefore = Instant.now().minus(6, ChronoUnit.HOURS);
+        return mediaStorageService.deleteUnreferencedMentoringProgramImages(referencedUrls, modifiedBefore);
+    }
+
+    static Set<String> extractProgramImageUrls(String content) {
+        if (content == null || content.isBlank()) {
+            return Set.of();
+        }
+        Set<String> urls = new HashSet<>();
+        Matcher matcher = PROGRAM_IMAGE_URL_PATTERN.matcher(content);
+        while (matcher.find()) {
+            urls.add(matcher.group(1));
+        }
+        return urls;
+    }
+
+    // 즉시 삭제 시 동시 수정 트랜잭션과의 경합으로 참조 중인 이미지가 삭제될 수 있으므로,
+    // 참조 추가·해제 시점에는 파일 수정 시각만 갱신해 유예 기간(6시간)을 부여하고 실제 삭제는 스케줄러 정리 작업으로 일원화한다.
+    private void touchProgramImagesImmediately(Set<String> candidateUrls) {
+        if (mediaStorageService == null || candidateUrls == null || candidateUrls.isEmpty()) {
+            return;
+        }
+        for (String url : candidateUrls) {
+            mediaStorageService.touchMentoringProgramImageUrlQuietly(url);
+        }
+    }
+
+    private void touchProgramImagesAfterCommit(Set<String> candidateUrls) {
+        if (mediaStorageService == null || candidateUrls == null || candidateUrls.isEmpty()) {
+            return;
+        }
+        Set<String> urlsToTouch = Set.copyOf(candidateUrls);
+        Runnable touchTask = () -> touchProgramImagesImmediately(urlsToTouch);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    touchTask.run();
+                }
+            });
+        } else {
+            touchTask.run();
+        }
     }
 
     // 신청

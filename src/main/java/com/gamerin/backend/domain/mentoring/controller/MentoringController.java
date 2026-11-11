@@ -98,6 +98,12 @@ public class MentoringController {
         return ApiResponse.ok(mentoringService.getPrograms(gameName, mentorId, pageable));
     }
 
+    @Operation(summary = "멘토링 프로그램 상세 조회 (짧은 번호)", description = "URL용 숫자 번호(publicNo)로 멘토링 프로그램 상세 정보를 조회")
+    @GetMapping("/programs/no/{publicNo}")
+    public ApiResponse<MentoringProgramDetailResponse> getProgramDetailByPublicNo(@PathVariable Long publicNo) {
+        return ApiResponse.ok(mentoringService.getProgramDetailByPublicNo(publicNo));
+    }
+
     @Operation(summary = "멘토링 프로그램 상세 조회", description = "특정 멘토링 프로그램의 상세 정보를 조회")
     @GetMapping("/programs/{id}")
     public ApiResponse<MentoringProgramDetailResponse> getProgramDetail(@PathVariable UUID id) {

@@ -34,7 +34,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
             "/api/v1/auth/refresh",
             "/api/v1/auth/availability/handle",
             "/api/v1/auth/email-verifications",
-            "/api/v1/auth/email-verifications/confirm"
+            "/api/v1/auth/email-verifications/confirm",
+            "/api/v1/mentoring/program-images"
     );
 
     // 요청 제한 기간(초) 및 허용 횟수

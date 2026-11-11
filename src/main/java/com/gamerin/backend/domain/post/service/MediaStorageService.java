@@ -21,6 +21,7 @@ public class MediaStorageService {
 
     private static final String POST_MEDIA_DIRECTORY = "post-media";
     private static final String PROFILE_IMAGE_DIRECTORY = "profile-images";
+    private static final String MENTORING_PROGRAM_IMAGE_DIRECTORY = "mentoring-program-images";
     private static final String UPLOADS_PUBLIC_PATH = "/uploads/";
 
     private final Path uploadRoot;
@@ -96,6 +97,68 @@ public class MediaStorageService {
         return new StoredFile(storedPath, publicProfileImageUrl(ownerId, directorySegment, storedName));
     }
 
+    public StoredFile storeMentoringProgramImage(PreparedMediaFile file) throws IOException {
+        Path targetDirectory = uploadRoot.resolve(MENTORING_PROGRAM_IMAGE_DIRECTORY).normalize();
+        if (!targetDirectory.startsWith(uploadRoot)) {
+            throw new IOException("Invalid mentoring program image directory.");
+        }
+        Files.createDirectories(targetDirectory);
+
+        String storedName = UUID.randomUUID() + file.extension();
+        Path storedPath = targetDirectory.resolve(storedName).normalize();
+        if (!storedPath.startsWith(targetDirectory)) {
+            throw new IOException("Invalid stored mentoring program image path.");
+        }
+
+        Files.write(storedPath, file.bytes(), StandardOpenOption.CREATE_NEW);
+
+        return new StoredFile(storedPath, publicMentoringProgramImageUrl(storedName));
+    }
+
+    public void touchMentoringProgramImageUrlQuietly(String publicUrl) {
+        String requiredPrefix = MENTORING_PROGRAM_IMAGE_DIRECTORY + "/";
+        resolvePublicUrl(publicUrl, requiredPrefix).ifPresent(path -> {
+            try {
+                if (Files.isRegularFile(path)) {
+                    Files.setLastModifiedTime(path, java.nio.file.attribute.FileTime.from(java.time.Instant.now()));
+                }
+            } catch (IOException ignored) {
+                // Best-effort timestamp update to start the cleanup grace period.
+            }
+        });
+    }
+
+    public int deleteUnreferencedMentoringProgramImages( java.util.Set<String> referencedPublicUrls, java.time.Instant modifiedBefore) {
+        Path targetDirectory = uploadRoot.resolve(MENTORING_PROGRAM_IMAGE_DIRECTORY).normalize();
+        if (!Files.isDirectory(targetDirectory)) {
+            return 0;
+        }
+        int deletedCount = 0;
+        try (var stream = Files.list(targetDirectory)) {
+            for (Path filePath : stream.toList()) {
+                if (!Files.isRegularFile(filePath)) {
+                    continue;
+                }
+                String publicUrl = publicMentoringProgramImageUrl(filePath.getFileName().toString());
+                if (referencedPublicUrls.contains(publicUrl)) {
+                    continue;
+                }
+                try {
+                    if (Files.getLastModifiedTime(filePath).toInstant().isBefore(modifiedBefore)) {
+                        if (Files.deleteIfExists(filePath)) {
+                            deletedCount++;
+                        }
+                    }
+                } catch (IOException ignored) {
+                    // Ignore individual file errors during batch cleanup.
+                }
+            }
+        } catch (IOException ignored) {
+            // Ignore directory listing errors during batch cleanup.
+        }
+        return deletedCount;
+    }
+
     public void deleteQuietly(StoredFile storedFile) {
         if (storedFile == null) {
             return;
@@ -164,6 +227,10 @@ public class MediaStorageService {
 
     private String publicProfileImageUrl(UUID ownerId, String directorySegment, String storedName) {
         return UPLOADS_PUBLIC_PATH + PROFILE_IMAGE_DIRECTORY + "/" + ownerId + "/" + directorySegment + "/" + storedName;
+    }
+
+    private String publicMentoringProgramImageUrl(String storedName) {
+        return UPLOADS_PUBLIC_PATH + MENTORING_PROGRAM_IMAGE_DIRECTORY + "/" + storedName;
     }
 
     private Optional<Path> resolvePublicUrl(String publicUrl) {

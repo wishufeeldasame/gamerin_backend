@@ -42,6 +42,21 @@ class PostUploadConcurrencyFilterTest {
     }
 
     @Test
+    void mentoringProgramImageMultipartUploadAcquiresAndReleasesUploadSlot() throws Exception {
+        PostUploadConcurrencyFilter filter = new PostUploadConcurrencyFilter(objectMapper, 1, 0);
+        Semaphore uploadSlots = uploadSlots(filter);
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/mentoring/program-images");
+        request.setContentType(MediaType.MULTIPART_FORM_DATA_VALUE + "; boundary=test");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        FilterChain filterChain = (req, res) -> assertThat(uploadSlots.availablePermits()).isZero();
+
+        filter.doFilter(request, response, filterChain);
+
+        assertThat(uploadSlots.availablePermits()).isEqualTo(1);
+        assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @Test
     void saturatedUploadLimitReturnsTooManyRequestsWithoutCallingChain() throws Exception {
         PostUploadConcurrencyFilter filter = new PostUploadConcurrencyFilter(objectMapper, 1, 0);
         Semaphore uploadSlots = uploadSlots(filter);
