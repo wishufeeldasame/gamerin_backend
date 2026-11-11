@@ -1,6 +1,7 @@
 package com.gamerin.backend.domain.mentoring.controller;
 
 import java.io.IOException;
+import java.util.List;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.post.moderation.ContentModerationService;
 import com.gamerin.backend.domain.post.service.LightweightSecurityScanService;
 import com.gamerin.backend.domain.post.service.MediaStorageService;
 import com.gamerin.backend.domain.post.service.MediaUploadSecurityService;
@@ -29,15 +31,18 @@ public class MentoringProgramImageController {
 
     private static final long MAX_UPLOAD_BYTES = 10L * 1024L * 1024L;
 
+    private final ContentModerationService contentModerationService;
     private final MediaUploadSecurityService mediaUploadSecurityService;
     private final LightweightSecurityScanService lightweightSecurityScanService;
     private final MediaStorageService mediaStorageService;
 
     public MentoringProgramImageController(
+            ContentModerationService contentModerationService,
             MediaUploadSecurityService mediaUploadSecurityService,
             LightweightSecurityScanService lightweightSecurityScanService,
             MediaStorageService mediaStorageService
     ) {
+        this.contentModerationService = contentModerationService;
         this.mediaUploadSecurityService = mediaUploadSecurityService;
         this.lightweightSecurityScanService = lightweightSecurityScanService;
         this.mediaStorageService = mediaStorageService;
@@ -59,7 +64,9 @@ public class MentoringProgramImageController {
         if (file.getSize() > MAX_UPLOAD_BYTES) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "이미지는 10MB 이하로 업로드해주세요.");
         }
+        mediaUploadSecurityService.assertImageFileSafe(file);
         lightweightSecurityScanService.assertFileClean(file);
+        contentModerationService.assertPostAllowed(null, List.of(file));
         MediaStorageService.PreparedMediaFile prepared = mediaUploadSecurityService.prepareImage(file);
         try {
             MediaStorageService.StoredFile stored = mediaStorageService.storePostMedia(prepared);

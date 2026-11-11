@@ -47,11 +47,16 @@ public class PostUploadConcurrencyFilter extends OncePerRequestFilter {
         this.acquireTimeoutMillis = acquireTimeoutMillis;
     }
 
+    private static final String POST_UPLOAD_URI = "/api/v1/posts";
+    private static final String MENTORING_PROGRAM_IMAGE_UPLOAD_URI = "/api/v1/mentoring/program-images";
+
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String contentType = request.getContentType();
+        String uri = request.getRequestURI();
+        boolean uploadEndpoint = POST_UPLOAD_URI.equals(uri) || MENTORING_PROGRAM_IMAGE_UPLOAD_URI.equals(uri);
         return !"POST".equalsIgnoreCase(request.getMethod())
-                || !"/api/v1/posts".equals(request.getRequestURI())
+                || !uploadEndpoint
                 || contentType == null
                 || !contentType.toLowerCase(Locale.ROOT).startsWith(MediaType.MULTIPART_FORM_DATA_VALUE);
     }
