@@ -44,6 +44,27 @@ class WeeklyAnalysisFallbackTest {
         assertThat(WeeklyAnalysisFallback.write(STATS, null).summary()).contains("9경기");
     }
 
+    @Test
+    void skipsWeekOverWeekWhenPreviousEvidenceIsPartial() {
+        Stats previous = new Stats(20, 0, 0, 0, 0, null, 260.4, null, 1, evidence(173.5, 1, 9));
+        WeeklyInsight insight = new WeeklyInsight(
+                week(stats(9, 237.6, evidence(154.2, 22, 18)), List.of()), week(previous, List.of()));
+
+        WeeklyAnalysis analysis = WeeklyAnalysisFallback.write(STATS, insight);
+
+        assertThat(analysis.headline()).isEqualTo("첫 교전과 주요 조합을 함께 돌아볼 한 주");
+        assertThat(analysis.summary()).contains("첫 교전 40번 중").doesNotContain("전주");
+    }
+
+    @Test
+    void doesNotAskForLossReviewAfterUnbeatenWeek() {
+        WeeklyStats unbeaten = new WeeklyStats(
+                new WeekStats(1, 1, 100.0, 1.0, 30.2, 238, "초월자 2", List.of(), List.of()), null, null);
+
+        assertThat(WeeklyAnalysisFallback.write(unbeaten, null).focus()).doesNotContain("패배");
+        assertThat(WeeklyAnalysisFallback.write(STATS, null).focus()).contains("패배한 경기");
+    }
+
     private static Week week(Stats overall, List<Group> combos) {
         return new Week(overall, List.of(), List.of(), combos, null, null, List.of(), 0);
     }

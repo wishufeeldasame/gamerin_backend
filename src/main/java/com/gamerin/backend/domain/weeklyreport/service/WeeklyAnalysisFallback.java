@@ -26,7 +26,8 @@ final class WeeklyAnalysisFallback {
             return new WeeklyAnalysis("상세 근거가 부족해 해석을 미룬 한 주",
                     "이번 주 경쟁전 %d경기는 경기 상세 근거를 확인하지 못해, 첫 교전이나 맵·요원별 흐름을 해석하지 않았습니다. 상세 근거가 쌓이면 다음 리포트에서 함께 살펴보겠습니다."
                             .formatted(stats.current().matches()),
-                    "이번 주 패배한 경기 하나를 골라 첫 교전이 일어난 장면을 다시 확인해 보세요.");
+                    "이번 주 %s 하나를 골라 첫 교전이 일어난 장면을 다시 확인해 보세요."
+                            .formatted(stats.current().wins() < stats.current().matches() ? "패배한 경기" : "경기"));
         }
         Evidence current = overall.evidence();
         Stats previousOverall = insight.previous() == null ? null : insight.previous().overall();
@@ -38,7 +39,10 @@ final class WeeklyAnalysisFallback {
                     .formatted(overall.matches(), overall.insightMatches()));
         }
         Double rate = firstKillRate(current);
-        Double previousRate = previous == null ? null : firstKillRate(previous);
+        // 한쪽이라도 상세 근거가 일부 경기뿐이면 그 비율을 주 전체 변화로 비교하지 않는다.
+        boolean comparable = previous != null && overall.insightMatches() == overall.matches()
+                && previousOverall.insightMatches() == previousOverall.matches();
+        Double previousRate = comparable ? firstKillRate(previous) : null;
         String headline = "첫 교전과 주요 조합을 함께 돌아볼 한 주";
         if (rate != null && previousRate != null && !rate.equals(previousRate)) {
             boolean up = rate > previousRate;

@@ -99,6 +99,18 @@ class MatchInsightParserTest {
         assertThat(insight.economyEven()).isEqualTo(RoundGroup.EMPTY);
     }
 
+    @Test
+    void missingDetailArraysMeanNoInsight() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        String round = round(0, "Blue", "Attacker", null, "[]");
+
+        assertThat(MatchInsightParser.parse(mapper.readTree("{\"players\":" + PLAYERS + "}"), "A1")).isNull();
+        assertThat(MatchInsightParser.parse(
+                mapper.readTree("{\"players\":" + PLAYERS + ",\"rounds\":[" + round + "]}"), "A1")).isNull();
+        assertThat(parse(PLAYERS, "", "")).isNull();
+        assertThat(parse(PLAYERS, round, "")).isNotNull();
+    }
+
     private static MatchInsight parse(String players, String rounds, String kills) {
         try {
             JsonNode match = new ObjectMapper().readTree(

@@ -17,7 +17,7 @@ final class MatchInsightParser {
     private MatchInsightParser() {
     }
 
-    /** 대상 플레이어나 팀을 찾지 못하거나 응답 형태가 예상과 다르면 null이다. */
+    /** 대상 플레이어나 팀을 찾지 못하거나 rounds·kills 배열이 없거나 응답 형태가 예상과 다르면 null이다. */
     static MatchInsight parse(JsonNode match, String puuid) {
         try {
             return compute(match, puuid);
@@ -41,6 +41,11 @@ final class MatchInsightParser {
         }
         String myTeam = player.path("team_id").asText("");
         if (myTeam.isEmpty()) {
+            return null;
+        }
+
+        // 상세 배열이 없는 응답을 첫 교전·킬 교환 0건으로 세지 않도록 근거 없음(null)으로 둔다.
+        if (!match.path("kills").isArray() || !match.path("rounds").isArray() || match.path("rounds").isEmpty()) {
             return null;
         }
 
