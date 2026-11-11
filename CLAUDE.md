@@ -53,7 +53,7 @@
 
 > 이 절은 현재 구현 기준이다. 작업 시 관련 파일을 다시 확인한다.
 
-- `build.gradle`: Spring Boot 3.5.12, Java 21 toolchain, Spring MVC/Security/Data JPA, OAuth2 Client, Validation, Mail, Flyway, PostgreSQL, JUnit Platform을 사용한다.
+- `build.gradle`: Spring Boot 3.5.16, Java 21 toolchain, Spring MVC/Security/Data JPA, OAuth2 Client, Validation, Mail, Flyway, PostgreSQL, JUnit Platform을 사용한다.
 - Gradle wrapper(`./gradlew`)를 사용한다.
 - `src/main/resources/application.yaml`: 공통 설정. 기본 활성 프로필은 `local`, 서버 포트는 8080이다.
 - `src/main/resources/application-prod.yaml`: 운영 프로필 설정. 환경변수, 기본값, 고정 설정이 혼재한다.
