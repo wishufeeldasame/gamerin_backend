@@ -18,7 +18,8 @@ public record MentoringReviewResponse(
     String content,
     OffsetDateTime createdAt,
     boolean membershipBadge,
-    RepresentativeTierResponse representativeTier
+    RepresentativeTierResponse representativeTier,
+    String menteeHandle
 ) {
     public static MentoringReviewResponse from(MentoringReview review, boolean membershipBadge) {
         return from(review, membershipBadge, true);
@@ -39,7 +40,8 @@ public record MentoringReviewResponse(
             review.getContent(),
             review.getCreatedAt(),
             membershipBadge,
-            RepresentativeTierResponse.from(review.getMentee().getProfile())
+            RepresentativeTierResponse.from(review.getMentee().getProfile()),
+            review.getMentee().getHandle()
         );
     }
 } 
