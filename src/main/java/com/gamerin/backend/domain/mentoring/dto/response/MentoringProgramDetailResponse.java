@@ -23,7 +23,8 @@ public record MentoringProgramDetailResponse(
     List<String> tags,
     OffsetDateTime createdAt,
     boolean membershipBadge,
-    RepresentativeTierResponse representativeTier
+    RepresentativeTierResponse representativeTier,
+    String mentorHandle
 ) {
     public static MentoringProgramDetailResponse from(MentoringProgram program, boolean membershipBadge) {
         return new MentoringProgramDetailResponse(
@@ -41,7 +42,8 @@ public record MentoringProgramDetailResponse(
             program.getTags(),
             program.getCreatedAt(),
             membershipBadge,
-            RepresentativeTierResponse.from(program.getMentor().getUser().getProfile())
+            RepresentativeTierResponse.from(program.getMentor().getUser().getProfile()),
+            program.getMentor().getUser().getHandle()
         );
     }
 }
