@@ -83,9 +83,7 @@ public class MentoringProgramImageController {
         contentModerationService.assertPostAllowed(null, List.of(file));
         MediaStorageService.PreparedMediaFile prepared = mediaUploadSecurityService.prepareImage(file);
         try {
-            // TODO: 멘토링 프로그램 설명 이미지는 본문 마크다운 URL로만 참조되며 별도 미디어 테이블이 없다.
-            // 작성 취소로 미사용된 고아 파일이나 삭제된 프로그램의 이미지 파일을 정리하는 배치/참조 추적은 추후 이슈로 분리한다.
-            MediaStorageService.StoredFile stored = mediaStorageService.storePostMedia(prepared);
+            MediaStorageService.StoredFile stored = mediaStorageService.storeMentoringProgramImage(prepared);
             return ApiResponse.ok(new ProgramImageUploadResponse(stored.publicUrl()));
         } catch (IOException ex) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "이미지를 저장하지 못했습니다.", ex);

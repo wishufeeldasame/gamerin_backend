@@ -42,6 +42,9 @@ public interface MentoringProgramRepository extends JpaRepository<MentoringProgr
         @Query("select p from MentoringProgram p where p.publicNo = :publicNo and p.deletedAt IS NULL")
         Optional<MentoringProgram> findByPublicNoAndDeletedAtIsNull(@Param("publicNo") Long publicNo);
 
+        @Query("select p.content from MentoringProgram p where p.deletedAt IS NULL and p.content is not null")
+        java.util.List<String> findActiveContents();
+
         long countByStatusAndDeletedAtIsNull(ProgramStatus status);
 
         // :keyword = '' 비교가 있어야 Hibernate가 파라미터를 문자열로 추론한다 (없으면 PostgreSQL에서 null이 bytea로 바인딩되어 lower(bytea) 오류)

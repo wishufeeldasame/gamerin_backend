@@ -45,6 +45,7 @@ import com.gamerin.backend.domain.mentoring.repository.MentoringApplicationRepos
 import com.gamerin.backend.domain.mentoring.repository.MentoringProgramRepository;
 import com.gamerin.backend.domain.mentoring.repository.MentoringReviewRepository;
 import com.gamerin.backend.domain.notification.service.NotificationCommandService;
+import com.gamerin.backend.domain.post.service.MediaStorageService;
 import com.gamerin.backend.domain.user.entity.TransactionType;
 import com.gamerin.backend.domain.user.entity.User;
 import com.gamerin.backend.domain.user.repository.UserProfileRepository;
@@ -89,6 +90,9 @@ class MentoringServiceTest {
         @Mock
         private UserProfileRepository userProfileRepository;
 
+        @Mock
+        private MediaStorageService mediaStorageService;
+
         private MentoringService mentoringService;
 
         @BeforeEach
@@ -103,7 +107,8 @@ class MentoringServiceTest {
                                 settlementProcessor,
                                 notificationCommandService,
                                 membershipService,
-                                userProfileRepository);
+                                userProfileRepository,
+                                mediaStorageService);
         }
 
         @Test
@@ -775,5 +780,74 @@ class MentoringServiceTest {
                 assertThat(app.getPaymentStatus()).isEqualTo(PaymentStatus.ESCROW_HELD);
                 verify(mileageService, never()).addMileage(any(), any(), any(), any(), any());
                 verify(mentorProfileRepository, never()).incrementMenteeCount(any());
+        }
+
+        @Test
+        @DisplayName("프로그램 수정 시 본문에서 변경된 설명 이미지의 유예 기간 타임스탬프를 갱신한다")
+        void updateProgramTouchesChangedProgramImagesForGracePeriodCleanup() {
+                UUID mentorId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication application = application(mentorId, UUID.randomUUID(), programId, UUID.randomUUID());
+                MentoringProgram program = application.getProgram();
+                program.getMentor().setStatus(MentorStatus.ACTIVE);
+                String keptUrl = "/uploads/mentoring-program-images/11111111-1111-1111-1111-111111111111.png";
+                String removedUrl = "/uploads/mentoring-program-images/22222222-2222-2222-2222-222222222222.jpg";
+                program.setContent("기존 설명\n![유지](" + keptUrl + ")\n![제거](" + removedUrl + ")");
+
+                when(mentoringProgramRepository.findByIdAndDeletedAtIsNull(programId)).thenReturn(Optional.of(program));
+
+                MentoringProgramUpdateRequest request = new MentoringProgramUpdateRequest(
+                                "수정 제목",
+                                "새 설명\n![유지](" + keptUrl + ")",
+                                "시간 협의",
+                                10000L,
+                                ProgramStatus.ACTIVE,
+                                List.of("태그"));
+
+                mentoringService.updateProgram(
+                                CustomUserPrincipal.from(program.getMentor().getUser()),
+                                programId,
+                                request);
+
+                verify(mediaStorageService, times(1)).touchMentoringProgramImageUrlQuietly(removedUrl);
+                verify(mediaStorageService, never()).touchMentoringProgramImageUrlQuietly(keptUrl);
+        }
+
+        @Test
+        @DisplayName("프로그램 소프트 삭제 시 본문에 포함된 설명 이미지의 유예 기간 타임스탬프를 갱신한다")
+        void deleteProgramTouchesProgramImagesForGracePeriodCleanup() {
+                UUID mentorId = UUID.randomUUID();
+                UUID programId = UUID.randomUUID();
+                MentoringApplication application = application(mentorId, UUID.randomUUID(), programId, UUID.randomUUID());
+                MentoringProgram program = application.getProgram();
+                String imageUrl = "/uploads/mentoring-program-images/33333333-3333-3333-3333-333333333333.webp";
+                program.setContent("설명\n![이미지](" + imageUrl + ")");
+
+                when(mentoringProgramRepository.findByIdForUpdate(programId)).thenReturn(Optional.of(program));
+                when(mentoringApplicationRepository.existsByProgramIdAndPaymentStatus(programId, PaymentStatus.ESCROW_HELD))
+                                .thenReturn(false);
+
+                mentoringService.deleteProgram(
+                                CustomUserPrincipal.from(program.getMentor().getUser()),
+                                programId);
+
+                assertThat(program.isDeleted()).isTrue();
+                verify(mediaStorageService, times(1)).touchMentoringProgramImageUrlQuietly(imageUrl);
+        }
+
+        @Test
+        @DisplayName("고아 프로그램 이미지 정리 작업은 활성 프로그램 본문에서 참조 중인 URL 집합을 전달한다")
+        void cleanupUnreferencedProgramImagesCollectsActiveReferencedUrls() {
+                String activeUrl = "/uploads/mentoring-program-images/44444444-4444-4444-4444-444444444444.png";
+                when(mentoringProgramRepository.findActiveContents())
+                                .thenReturn(List.of("본문\n![설명](" + activeUrl + ")"));
+                when(mediaStorageService.deleteUnreferencedMentoringProgramImages(eq(java.util.Set.of(activeUrl)), any()))
+                                .thenReturn(2);
+
+                int deleted = mentoringService.cleanupUnreferencedProgramImages();
+
+                assertThat(deleted).isEqualTo(2);
+                verify(mediaStorageService, times(1))
+                                .deleteUnreferencedMentoringProgramImages(eq(java.util.Set.of(activeUrl)), any());
         }
 }

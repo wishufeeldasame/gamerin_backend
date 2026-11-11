@@ -16,6 +16,7 @@ public class MentoringScheduler {
     public void autoSettlementJob() {
         System.out.println("자동 정산 스케줄러 시작...");
         mentoringService.processAutoSettlement();
+        mentoringService.cleanupUnreferencedProgramImages();
         System.out.println("자동 정산 스케줄러 종료.");
     }
 }
