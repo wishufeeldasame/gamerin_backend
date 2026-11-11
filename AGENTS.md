@@ -125,7 +125,7 @@
 - 업로드 변경은 `domain/post/service/`의 미디어 저장·검증·FFmpeg 처리와 `domain/post/moderation/`, `domain/post/filter/`를 함께 확인한다.
 - 메시지 첨부는 `domain/message/service/MessageAttachmentStorageService.java`도 확인한다.
 - 업로드 파일은 서버 로컬의 `app.media.upload-dir`(컨테이너 `/app/uploads`)에 저장한다. 게시물 미디어는 DB에 `/uploads/...` 상대경로를 저장한다.
-- 메시지 첨부는 `MessageAttachmentStorageService.publicAttachmentUrl()`에서 절대 URL을 만들어 저장하지만, `domain/message/service/MessageResponseAssembler.java`가 응답을 `/api/v1/messages/attachments/{id}` 인증 다운로드 경로로 변환한다. 게시물 미디어와 같은 공개 URL 정책으로 취급하지 않는다.
+- 메시지 첨부는 `MessageAttachmentStorageService`에서 `/uploads/message-attachments/...` 상대 경로를 저장하며 기존 절대 URL도 읽을 수 있다. `domain/message/service/MessageResponseAssembler.java`는 응답에 `/api/v1/messages/attachments/{id}` 인증 다운로드 경로를 사용한다. 게시물 미디어와 같은 공개 URL 정책으로 취급하지 않는다.
 - 이미지의 magic header, 실행파일 헤더/EICAR 등 기존 보안 검사를 임의로 완화하지 않는다.
 - 파일 크기, 형식 검사, 임시 저장 공간, 동시 처리 제한, timeout, 실패 시 임시 파일 정리와 검열 정책을 확인한다.
 - 정적 이미지는 검증 후 JPEG로 재인코딩하며 GIF는 `AnimatedGifProcessor`로 별도 처리한다.
