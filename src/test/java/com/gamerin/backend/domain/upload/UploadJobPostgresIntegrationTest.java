@@ -27,6 +27,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
@@ -70,6 +71,7 @@ class UploadJobPostgresIntegrationTest {
     @Autowired TransactionTemplate transactions;
     @Autowired ObjectMapper json;
     @Autowired MockMvc mvc;
+    @Autowired JdbcTemplate jdbc;
     @MockitoBean ContentModerationService moderation;
     @MockitoBean VideoMetadataService metadata;
     @MockitoBean MessageRealtimeService realtime;
@@ -342,8 +344,23 @@ class UploadJobPostgresIntegrationTest {
         doAnswer(invocation -> {
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse(); return null;
         }).when(moderation).assertMessageAllowed(any(), anyList());
-        uploads.processNextJob();
-        assertThat(uploads.get(sender, UploadJob.Kind.MESSAGE, accepted.jobId(), false).status()).isEqualTo("COMPLETED");
+        try (ExecutorService worker = Executors.newSingleThreadExecutor()) {
+            assertThat(worker.submit(uploads::processNextJob).get(10, TimeUnit.SECONDS)).isTrue();
+        }
+        UploadJobResponse done = uploads.get(sender, UploadJob.Kind.MESSAGE, accepted.jobId(), false);
+        assertThat(done.status()).isEqualTo("COMPLETED");
+        assertThat(done.message().attachments()).hasSize(1);
+        var attachment = done.message().attachments().getFirst();
+        byte[] expectedVideo = request.getAttachments().getFirst().getBytes();
+        mvc.perform(get(attachment.url()).with(user(recipient)))
+                .andExpect(status().isOk())
+                .andExpect(content().bytes(expectedVideo));
+
+        jdbc.update("UPDATE direct_message_attachments SET file_url = 'https://example.com' || file_url WHERE id = ?",
+                attachment.id());
+        mvc.perform(get(attachment.url()).with(user(recipient)))
+                .andExpect(status().isOk())
+                .andExpect(content().bytes(expectedVideo));
     }
 
     @Test void rollbackRemovesPostOrMessageAndFilesAndDoesNotPublishEvents() throws Exception {

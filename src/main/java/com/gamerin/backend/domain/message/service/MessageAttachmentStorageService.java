@@ -13,7 +13,6 @@ import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import com.gamerin.backend.domain.post.service.MediaStorageService;
 
@@ -21,6 +20,7 @@ import com.gamerin.backend.domain.post.service.MediaStorageService;
 public class MessageAttachmentStorageService {
 
     private static final String MESSAGE_ATTACHMENT_DIRECTORY = "message-attachments";
+    private static final String MESSAGE_ATTACHMENT_URL_PREFIX = "/uploads/" + MESSAGE_ATTACHMENT_DIRECTORY + "/";
 
     private final Path uploadRoot;
 
@@ -100,8 +100,7 @@ public class MessageAttachmentStorageService {
         }
 
         String path = extractPath(publicUrl.trim());
-        String requiredPrefix = "/uploads/" + MESSAGE_ATTACHMENT_DIRECTORY + "/";
-        if (!path.startsWith(requiredPrefix)) {
+        if (!path.startsWith(MESSAGE_ATTACHMENT_URL_PREFIX)) {
             return Optional.empty();
         }
 
@@ -138,12 +137,7 @@ public class MessageAttachmentStorageService {
     }
 
     private String publicAttachmentUrl(String storedName) {
-        return ServletUriComponentsBuilder.fromCurrentContextPath()
-                .path("/uploads/")
-                .path(MESSAGE_ATTACHMENT_DIRECTORY)
-                .path("/")
-                .path(storedName)
-                .toUriString();
+        return MESSAGE_ATTACHMENT_URL_PREFIX + storedName;
     }
 
     public record StoredFile(Path path, String publicUrl) {
