@@ -43,6 +43,7 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
             LEFT JOIN user_mentions um ON um.id = n.mention_id
             LEFT JOIN post_comments mention_comment ON mention_comment.id = um.comment_id
             WHERE n.recipient_id = :recipientId
+              AND n.type <> 'DIRECT_MESSAGE'
               AND (n.actor_id IS NULL OR actor.deleted_at IS NULL)
               AND (n.post_id IS NULL OR p.deleted_at IS NULL)
               AND (n.comment_id IS NULL OR c.deleted_at IS NULL)
@@ -68,6 +69,7 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
             LEFT JOIN user_mentions um ON um.id = n.mention_id
             LEFT JOIN post_comments mention_comment ON mention_comment.id = um.comment_id
             WHERE n.recipient_id = :recipientId
+              AND n.type <> 'DIRECT_MESSAGE'
               AND (n.actor_id IS NULL OR actor.deleted_at IS NULL)
               AND (n.post_id IS NULL OR p.deleted_at IS NULL)
               AND (n.comment_id IS NULL OR c.deleted_at IS NULL)
@@ -146,6 +148,7 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
             LEFT JOIN mention.comment mentionComment
             WHERE n.recipient.id = :recipientId
               AND n.readAt IS NULL
+              AND n.type <> com.gamerin.backend.domain.notification.entity.NotificationType.DIRECT_MESSAGE
               AND (n.actor IS NULL OR actor.deletedAt IS NULL)
               AND (n.post IS NULL OR post.deletedAt IS NULL)
               AND (n.comment IS NULL OR comment.deletedAt IS NULL)

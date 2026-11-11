@@ -189,16 +189,20 @@ class ExtendedNotificationIntegrationTest {
                 recipient.getId(),
                 conversation.getId()
         )).isNull();
+        // 메시지 알림은 알림 목록·알림 수에서 빠지고 메시지 미읽음 수로만 센다.
         mockMvc.perform(get("/api/v1/notifications")
                         .header(HttpHeaders.AUTHORIZATION, bearerToken(recipient)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.items", hasSize(1)))
-                .andExpect(jsonPath("$.data.items[0].type").value("direct_message"))
-                .andExpect(jsonPath("$.data.items[0].conversationId")
-                        .value(conversation.getId().toString()))
-                .andExpect(jsonPath("$.data.items[0].messageId").value(secondMessageId.toString()));
+                .andExpect(jsonPath("$.data.items", hasSize(0)));
+        mockMvc.perform(get("/api/v1/notifications/unread-count")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken(recipient)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.unreadCount").value(0));
+        expectUnreadMessageCount(recipient, 2);
+        expectUnreadMessageCount(sender, 0);
 
         messageService.markRead(principal(recipient), conversation.getId());
+        expectUnreadMessageCount(recipient, 0);
         assertThat(singleTimestamp(
                 "select read_at from notifications where recipient_id = ? and conversation_id = ?",
                 recipient.getId(),
@@ -210,6 +214,7 @@ class ExtendedNotificationIntegrationTest {
                 conversation.getId(),
                 new SendMessageRequest("third", null)
         );
+        expectUnreadMessageCount(recipient, 1);
         assertThat(singleTimestamp(
                 "select read_at from notifications where recipient_id = ? and conversation_id = ?",
                 recipient.getId(),
@@ -420,6 +425,13 @@ class ExtendedNotificationIntegrationTest {
                 actor.getId(),
                 application.getId()
         )).isEqualTo(1);
+    }
+
+    private void expectUnreadMessageCount(User user, int expected) throws Exception {
+        mockMvc.perform(get("/api/v1/messages/unread-count")
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken(user)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.unreadCount").value(expected));
     }
 
     private long countDirectMessageNotifications(User recipient, MessageConversation conversation) {

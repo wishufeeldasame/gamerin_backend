@@ -37,6 +37,7 @@ import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMultipartMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SharePostMessageRequest;
 import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
+import com.gamerin.backend.domain.message.dto.response.UnreadMessageCountResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageRecipientResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageRealtimeEvent;
 import com.gamerin.backend.domain.message.dto.response.MessageResponse;
@@ -155,6 +156,12 @@ public class MessageService {
                 .map(participant -> toConversationResponse(participant.getConversation(), viewer.getId(), participant))
                 .toList();
         return withMembershipBadges(responses);
+    }
+
+    @Transactional(readOnly = true)
+    public UnreadMessageCountResponse getUnreadCount(CustomUserPrincipal principal) {
+        User viewer = getCurrentUser(principal);
+        return new UnreadMessageCountResponse(directMessageRepository.countAllUnreadMessages(viewer.getId()));
     }
 
     public ConversationResponse createConversation(

@@ -32,6 +32,7 @@ import com.gamerin.backend.domain.message.dto.request.SendMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SendMultipartMessageRequest;
 import com.gamerin.backend.domain.message.dto.request.SharePostMessageRequest;
 import com.gamerin.backend.domain.message.dto.response.ConversationResponse;
+import com.gamerin.backend.domain.message.dto.response.UnreadMessageCountResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageRecipientResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageResponse;
 import com.gamerin.backend.domain.message.dto.response.MessageStreamTokenResponse;
@@ -67,6 +68,13 @@ public class MessageController {
             @AuthenticationPrincipal CustomUserPrincipal principal
     ) {
         return ApiResponse.ok(messageService.getConversations(principal));
+    }
+
+    @GetMapping("/unread-count")
+    public ApiResponse<UnreadMessageCountResponse> getUnreadCount(
+            @AuthenticationPrincipal CustomUserPrincipal principal
+    ) {
+        return ApiResponse.ok(messageService.getUnreadCount(principal));
     }
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

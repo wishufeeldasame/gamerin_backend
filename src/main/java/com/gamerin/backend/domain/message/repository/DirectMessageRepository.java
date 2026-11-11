@@ -171,4 +171,19 @@ public interface DirectMessageRepository extends JpaRepository<DirectMessage, UU
             @Param("conversationId") UUID conversationId,
             @Param("viewerId") UUID viewerId
     );
+
+    // 대화 목록에 보이는 대화(나가지 않았고 삭제되지 않은 대화)의 읽지 않은 메시지 합계.
+    @Query("""
+        select count(dm.id)
+        from DirectMessage dm, MessageParticipant mp
+        where mp.user.id = :viewerId
+          and mp.deletedAt is null
+          and mp.conversation = dm.conversation
+          and mp.conversation.deletedAt is null
+          and dm.sender.id <> :viewerId
+          and dm.deletedAt is null
+          and (mp.lastReadAt is null or dm.createdAt > mp.lastReadAt)
+          and (mp.clearedAt is null or dm.createdAt > mp.clearedAt)
+        """)
+    long countAllUnreadMessages(@Param("viewerId") UUID viewerId);
 }
