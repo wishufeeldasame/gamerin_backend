@@ -183,6 +183,7 @@ public class MentoringService {
         return toProgramDetail(program);
     }
 
+    @Transactional(readOnly = true)
     public MentoringProgramDetailResponse getProgramDetail(UUID id) {
         MentoringProgram program = mentoringProgramRepository.findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));

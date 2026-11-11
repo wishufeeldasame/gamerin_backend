@@ -13,6 +13,9 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.gamerin.backend.domain.mentoring.entity.MentorProfile;
+import com.gamerin.backend.domain.mentoring.entity.MentorStatus;
+import com.gamerin.backend.domain.mentoring.repository.MentorProfileRepository;
 import com.gamerin.backend.domain.post.moderation.ContentModerationService;
 import com.gamerin.backend.domain.post.service.LightweightSecurityScanService;
 import com.gamerin.backend.domain.post.service.MediaStorageService;
@@ -31,17 +34,20 @@ public class MentoringProgramImageController {
 
     private static final long MAX_UPLOAD_BYTES = 10L * 1024L * 1024L;
 
+    private final MentorProfileRepository mentorProfileRepository;
     private final ContentModerationService contentModerationService;
     private final MediaUploadSecurityService mediaUploadSecurityService;
     private final LightweightSecurityScanService lightweightSecurityScanService;
     private final MediaStorageService mediaStorageService;
 
     public MentoringProgramImageController(
+            MentorProfileRepository mentorProfileRepository,
             ContentModerationService contentModerationService,
             MediaUploadSecurityService mediaUploadSecurityService,
             LightweightSecurityScanService lightweightSecurityScanService,
             MediaStorageService mediaStorageService
     ) {
+        this.mentorProfileRepository = mentorProfileRepository;
         this.contentModerationService = contentModerationService;
         this.mediaUploadSecurityService = mediaUploadSecurityService;
         this.lightweightSecurityScanService = lightweightSecurityScanService;
@@ -58,6 +64,14 @@ public class MentoringProgramImageController {
             @AuthenticationPrincipal CustomUserPrincipal principal,
             @RequestParam MultipartFile file
     ) {
+        if (principal == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+        }
+        MentorProfile mentor = mentorProfileRepository.findById(principal.getUserId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "멘토로 등록되지 않은 사용자입니다."));
+        if (mentor.getStatus() != MentorStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 승인이 완료된 멘토만 이미지를 업로드할 수 있습니다.");
+        }
         if (file == null || file.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "업로드할 이미지 파일을 선택해주세요.");
         }
@@ -69,6 +83,8 @@ public class MentoringProgramImageController {
         contentModerationService.assertPostAllowed(null, List.of(file));
         MediaStorageService.PreparedMediaFile prepared = mediaUploadSecurityService.prepareImage(file);
         try {
+            // TODO: 멘토링 프로그램 설명 이미지는 본문 마크다운 URL로만 참조되며 별도 미디어 테이블이 없다.
+            // 작성 취소로 미사용된 고아 파일이나 삭제된 프로그램의 이미지 파일을 정리하는 배치/참조 추적은 추후 이슈로 분리한다.
             MediaStorageService.StoredFile stored = mediaStorageService.storePostMedia(prepared);
             return ApiResponse.ok(new ProgramImageUploadResponse(stored.publicUrl()));
         } catch (IOException ex) {

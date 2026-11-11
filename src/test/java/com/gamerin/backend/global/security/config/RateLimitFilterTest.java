@@ -54,7 +54,8 @@ class RateLimitFilterTest {
                 "/api/v1/auth/refresh",
                 "/api/v1/auth/availability/handle",
                 "/api/v1/auth/email-verifications",
-                "/api/v1/auth/email-verifications/confirm"
+                "/api/v1/auth/email-verifications/confirm",
+                "/api/v1/mentoring/program-images"
         };
         for (String path : paths) {
             for (int i = 0; i < 10; i++) {
