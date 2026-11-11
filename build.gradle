@@ -1,8 +1,12 @@
 plugins {
 	id 'java'
-	id 'org.springframework.boot' version '3.5.12'
+	id 'org.springframework.boot' version '3.5.16'
 	id 'io.spring.dependency-management' version '1.1.7'
 }
+
+// Boot 3.5.16 관리 버전(Tomcat 10.1.55, Jackson 2.21.4) 이후의 보안 수정분. Boot가 이 이상을 관리하면 지운다.
+ext['tomcat.version'] = '10.1.61'
+ext['jackson-bom.version'] = '2.21.8'
 
 group = 'com.gamerin'
 version = '0.0.1-SNAPSHOT'
