@@ -1,68 +1,91 @@
 package com.gamerin.backend.domain.weeklyreport.service;
 
-import com.gamerin.backend.domain.weeklyreport.model.WeekStats;
+import java.util.Comparator;
+
 import com.gamerin.backend.domain.weeklyreport.model.WeeklyAnalysis;
+import com.gamerin.backend.domain.weeklyreport.model.WeeklyInsight;
+import com.gamerin.backend.domain.weeklyreport.model.WeeklyInsight.Evidence;
+import com.gamerin.backend.domain.weeklyreport.model.WeeklyInsight.Group;
+import com.gamerin.backend.domain.weeklyreport.model.WeeklyInsight.Stats;
 import com.gamerin.backend.domain.weeklyreport.model.WeeklyStats;
 
-/** AI를 쓸 수 없을 때 집계 숫자만으로 만드는 규칙 기반 문장. */
+/**
+ * AI를 쓸 수 없을 때 쓰는 규칙 기반 문장. 화면 수치는 다시 나열하지 않고,
+ * 상세 근거(첫 교전·맵 × 요원)로 관찰 1~2개와 복기 행동 하나만 쓴다. 근거가 없으면 판단을 미룬다.
+ */
 final class WeeklyAnalysisFallback {
 
-    private static final int SMALL_SAMPLE = 5;
+    private static final int SMALL_SAMPLE = 2;
 
     private WeeklyAnalysisFallback() {
     }
 
-    static WeeklyAnalysis write(WeeklyStats stats) {
-        WeekStats current = stats.current();
-        WeekStats previous = stats.previous();
-        return new WeeklyAnalysis(headline(current, previous), summary(current, previous), focus(current));
+    static WeeklyAnalysis write(WeeklyStats stats, WeeklyInsight insight) {
+        Stats overall = insight == null || insight.current() == null ? null : insight.current().overall();
+        if (overall == null || overall.evidence() == null) {
+            return new WeeklyAnalysis("상세 근거가 부족해 해석을 미룬 한 주",
+                    "이번 주 경쟁전 %d경기는 경기 상세 근거를 확인하지 못해, 첫 교전이나 맵·요원별 흐름을 해석하지 않았습니다. 상세 근거가 쌓이면 다음 리포트에서 함께 살펴보겠습니다."
+                            .formatted(stats.current().matches()),
+                    "이번 주 패배한 경기 하나를 골라 첫 교전이 일어난 장면을 다시 확인해 보세요.");
+        }
+        Evidence current = overall.evidence();
+        Stats previousOverall = insight.previous() == null ? null : insight.previous().overall();
+        Evidence previous = previousOverall == null ? null : previousOverall.evidence();
+
+        StringBuilder summary = new StringBuilder();
+        if (overall.insightMatches() < overall.matches()) {
+            summary.append("상세 근거는 %d경기 중 %d경기에서만 확인되어 그 범위 안에서 살펴봤습니다. "
+                    .formatted(overall.matches(), overall.insightMatches()));
+        }
+        Double rate = firstKillRate(current);
+        Double previousRate = previous == null ? null : firstKillRate(previous);
+        String headline = "첫 교전과 주요 조합을 함께 돌아볼 한 주";
+        if (rate != null && previousRate != null && !rate.equals(previousRate)) {
+            boolean up = rate > previousRate;
+            headline = up ? "첫 교전에서 먼저 처치한 비율이 오른 한 주" : "첫 교전에서 먼저 처치한 비율이 내려간 한 주";
+            summary.append("첫 교전에서 먼저 처치한 비율은 전주 %s%%에서 이번 주 %s%%로 %s습니다. "
+                    .formatted(number(previousRate), number(rate), up ? "올랐" : "내려갔"));
+        } else if (rate != null) {
+            summary.append("첫 교전 %d번 중 먼저 처치한 경우는 %d번이었습니다. "
+                    .formatted(current.firstKills() + current.firstDeaths(), current.firstKills()));
+        }
+
+        Group top = insight.current().byMapAgent().stream()
+                .max(Comparator.comparingInt((Group g) -> g.stats().matches()))
+                .orElse(null);
+        String combo = top == null ? null : comboSentence(top, overall);
+        if (combo != null) {
+            summary.append(combo);
+        }
+        summary.append("이 수치만으로 원인을 단정하기는 어려우므로 경기 장면과 함께 확인하는 것이 좋겠습니다.");
+
+        String focus = top == null
+                ? "이번 주 경기에서 첫 데스가 나온 라운드를 골라, 첫 교전에서 먼저 처치한 라운드와 이후 선택을 비교해 보세요."
+                : "%s 경기에서 첫 데스가 나온 라운드를 골라, 첫 교전에서 먼저 처치한 라운드와 이후 선택을 비교해 보세요."
+                        .formatted(top.label());
+        return new WeeklyAnalysis(headline, summary.toString().strip(), focus);
     }
 
-    private static String headline(WeekStats current, WeekStats previous) {
-        if (previous == null) {
-            return "경쟁전 %d경기, 승률 %s%%를 기록한 한 주".formatted(current.matches(), number(current.winRate()));
+    private static String comboSentence(Group top, Stats overall) {
+        Stats stats = top.stats();
+        Double adr = stats.evidence() == null ? null : stats.evidence().adr();
+        Double overallAdr = overall.evidence().adr();
+        if (stats.acs() == null || overall.acs() == null || adr == null || overallAdr == null) {
+            return null;
         }
-        int diff = Double.compare(current.winRate(), previous.winRate());
-        if (diff == 0) {
-            return "승률 %s%%를 유지한 한 주".formatted(number(current.winRate()));
+        String text = "경기 수가 가장 많은 %s 조합(%d경기)은 ACS %s, ADR %s로 주 전체(ACS %s, ADR %s)와 비교됩니다. "
+                .formatted(top.label(), stats.matches(), number(stats.acs()), number(adr),
+                        number(overall.acs()), number(overallAdr));
+        if (stats.matches() <= SMALL_SAMPLE) {
+            text += "다만 %d경기뿐이라 반복되는 경향인지는 더 지켜봐야 합니다. ".formatted(stats.matches());
         }
-        return "승률이 %s%%에서 %s%%로 %s 한 주".formatted(number(previous.winRate()), number(current.winRate()),
-                diff > 0 ? "오른" : "내려간");
+        return text;
     }
 
-    private static String summary(WeekStats current, WeekStats previous) {
-        StringBuilder text = new StringBuilder("확인된 경쟁전 %d경기에서 승률 %s%%".formatted(
-                current.matches(), number(current.winRate())));
-        if (current.kd() != null) {
-            text.append(", K/D ").append(number(current.kd()));
-        }
-        if (current.headshotRate() != null) {
-            text.append(", HS% ").append(number(current.headshotRate())).append('%');
-        }
-        text.append("를 기록했습니다.");
-        if (current.tierLabel() != null) {
-            text.append(" 주말 기준 티어는 ").append(current.tierLabel()).append("입니다.");
-        }
-        if (previous == null) {
-            text.append(" 전주에 확인된 경쟁전 기록이 없어 변화는 비교하지 않았습니다.");
-        } else {
-            text.append(" 전주에는 %d경기에서 승률 %s%%였습니다.".formatted(
-                    previous.matches(), number(previous.winRate())));
-        }
-        if (current.matches() < SMALL_SAMPLE || (previous != null && previous.matches() < SMALL_SAMPLE)) {
-            text.append(" 경기 수가 적어 이 수치만으로 추세를 단정하기는 어렵습니다.");
-        }
-        return text.toString();
-    }
-
-    private static String focus(WeekStats current) {
-        if (current.kd() != null && current.kd() < 1.0) {
-            return "데스가 킬보다 많았습니다. 첫 교전에서 팀원의 지원을 받을 수 있는 위치인지 확인해 보세요.";
-        }
-        if (current.headshotRate() != null && current.headshotRate() < 20.0) {
-            return "교전에 들어가기 전에 조준선을 머리 높이에 맞춰 두는 습관을 점검해 보세요.";
-        }
-        return "패배한 경기를 다시 보며 같은 상황에서 반복된 선택이 있는지 확인해 보세요.";
+    // 첫 교전 중 먼저 처치한 비율(%, 소수 1자리). 첫 교전이 없으면 null.
+    private static Double firstKillRate(Evidence evidence) {
+        int total = evidence.firstKills() + evidence.firstDeaths();
+        return total == 0 ? null : Math.round(evidence.firstKills() * 1000.0 / total) / 10.0;
     }
 
     // 12.0 → "12", 12.5 → "12.5"

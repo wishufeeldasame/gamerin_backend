@@ -112,7 +112,7 @@ class WeeklyReportServiceTest {
         when(matchRecords.findExistingMatchIds(eq(PUUID), anyCollection())).thenReturn(List.of("known"));
         stubStoredMatches(fetched);
         WeeklyAnalysis analysis = new WeeklyAnalysis("제목", "요약", "점검");
-        when(ai.analyze(any())).thenReturn(Optional.of(analysis));
+        when(ai.analyze(any(), any())).thenReturn(Optional.of(analysis));
         when(ai.model()).thenReturn("model-x");
 
         WeeklyGameReport report = service.generate(PUUID, ValorantRegion.KR, PERIOD);
@@ -147,16 +147,16 @@ class WeeklyReportServiceTest {
         when(henrik.getCompetitiveMatchesSince(any(), any(), any())).thenReturn(fetched);
         when(matchRecords.findExistingMatchIds(eq(PUUID), anyCollection())).thenReturn(List.of());
         stubStoredMatches(fetched);
-        when(ai.analyze(any())).thenReturn(Optional.empty());
+        when(ai.analyze(any(), any())).thenReturn(Optional.empty());
         when(ai.model()).thenReturn("model-x");
 
         WeeklyGameReport report = service.generate(PUUID, ValorantRegion.KR, PERIOD);
 
         assertThat(report.getStatus()).isEqualTo(WeeklyReportStatus.READY);
         assertThat(report.getAiModel()).isNull();
-        assertThat(report.getAnalysis().headline()).isEqualTo("경쟁전 1경기, 승률 100%를 기록한 한 주");
-        assertThat(report.getAnalysis().summary())
-                .contains("K/D 2", "HS% 26.7%", "골드 1", "전주에 확인된 경쟁전 기록이 없어", "단정하기는 어렵습니다");
+        // 상세 근거(insight)가 없는 경기뿐이면 화면 수치를 나열하지 않고 해석을 미룬다.
+        assertThat(report.getAnalysis().headline()).isEqualTo("상세 근거가 부족해 해석을 미룬 한 주");
+        assertThat(report.getAnalysis().summary()).contains("1경기", "해석하지 않았습니다").doesNotContain("승률", "K/D");
         assertThat(report.getAnalysis().focus()).isNotBlank();
     }
 
@@ -180,7 +180,7 @@ class WeeklyReportServiceTest {
         when(henrik.getCompetitiveMatchesSince(any(), any(), any())).thenReturn(fetched);
         when(matchRecords.findExistingMatchIds(eq(PUUID), anyCollection())).thenReturn(List.of());
         stubStoredMatches(fetched);
-        when(ai.analyze(any())).thenReturn(Optional.empty());
+        when(ai.analyze(any(), any())).thenReturn(Optional.empty());
 
         WeeklyGameReportResponse response = service.generateForRiotId(" 이름#KR1 ", ValorantRegion.KR);
 
@@ -359,7 +359,7 @@ class WeeklyReportServiceTest {
 
     private ValorantMatchDetail detail(String matchId, String startedAt) {
         return new ValorantMatchDetail(matchId, Instant.parse(startedAt), "Bind", "Jett", 12, "Gold 1",
-                new ValorantMatchStats(20, 10, 5, 4800, 24, 8, 20, 2, true));
+                new ValorantMatchStats(20, 10, 5, 4800, 24, 8, 20, 2, true), null);
     }
 
     private User connectedUser(UUID userId) {

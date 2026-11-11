@@ -28,6 +28,7 @@ import com.gamerin.backend.domain.weeklyreport.entity.ValorantMatchRecord;
 import com.gamerin.backend.domain.weeklyreport.entity.WeeklyGameReport;
 import com.gamerin.backend.domain.weeklyreport.entity.WeeklyReportStatus;
 import com.gamerin.backend.domain.weeklyreport.model.WeeklyAnalysis;
+import com.gamerin.backend.domain.weeklyreport.model.WeeklyInsight;
 import com.gamerin.backend.domain.weeklyreport.model.WeeklyReportPeriod;
 import com.gamerin.backend.domain.weeklyreport.model.WeeklyReportCollectionIssue;
 import com.gamerin.backend.domain.weeklyreport.model.WeeklyStats;
@@ -139,17 +140,19 @@ public class WeeklyReportService {
 
     WeeklyGameReport generate(String puuid, ValorantRegion region, WeeklyReportPeriod period) {
         List<WeeklyReportCollectionIssue> issues = collect(puuid, region, period);
-        WeeklyStats calculated = WeeklyStatsCalculator.calculate(
+        List<ValorantMatchRecord> records =
                 matchRecordRepository.findByPuuidAndStartedAtGreaterThanEqualAndStartedAtLessThanOrderByStartedAtAsc(
-                        puuid, period.previousStartInstant(), period.endExclusive()),
-                period);
+                        puuid, period.previousStartInstant(), period.endExclusive());
+        WeeklyStats calculated = WeeklyStatsCalculator.calculate(records, period);
         WeeklyStats stats = new WeeklyStats(calculated.current(), calculated.previous(), calculated.tierChange(), issues);
         if (stats.current() == null) {
             return save(puuid, period, WeeklyReportStatus.NO_DATA, stats, null, null);
         }
-        Optional<WeeklyAnalysis> aiAnalysis = aiClient.analyze(stats);
+        // insight 는 AI·대체 문구 입력으로만 쓰고 저장·응답에 넣지 않는다.
+        WeeklyInsight insight = WeeklyInsightCalculator.calculate(records, period);
+        Optional<WeeklyAnalysis> aiAnalysis = aiClient.analyze(stats, insight);
         return save(puuid, period, WeeklyReportStatus.READY, stats,
-                aiAnalysis.orElseGet(() -> WeeklyAnalysisFallback.write(stats)),
+                aiAnalysis.orElseGet(() -> WeeklyAnalysisFallback.write(stats, insight)),
                 aiAnalysis.isPresent() ? aiClient.model() : null);
     }
 
