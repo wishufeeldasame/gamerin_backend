@@ -76,6 +76,7 @@ public class SecurityConfig {
             "/api/v1/users/{handle}/media",
             "/api/v1/mentoring/programs",
             "/api/v1/mentoring/programs/{id}",
+            "/api/v1/mentoring/programs/no/{publicNo}",
             "/api/v1/mentoring/mentors/{mentorId}",
             "/api/v1/mentoring/mentors/{mentorId}/reviews",
             "/api/v1/games"

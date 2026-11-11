@@ -4,6 +4,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+import org.hibernate.annotations.Generated;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -28,6 +29,11 @@ public class MentoringProgram {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
+
+    // URL용 짧은 번호. DB 시퀀스가 INSERT 시 채우고 Hibernate가 읽어 온다.
+    @Generated
+    @Column(name = "public_no", insertable = false, updatable = false)
+    private Long publicNo;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "mentor_id")
@@ -68,6 +74,10 @@ public class MentoringProgram {
     // 관리자 일시정지 시각. NULL = 정상 운영 또는 멘토 자율 마감, NOT NULL = 관리자가 일시정지(CLOSED) 처리한 시각
     @Column(name = "admin_suspended_at")
     private OffsetDateTime adminSuspendedAt;
+
+    public Long getPublicNo() {
+        return publicNo;
+    }
 
     public OffsetDateTime getAdminSuspendedAt() {
         return adminSuspendedAt;

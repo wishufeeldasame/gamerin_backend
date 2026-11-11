@@ -10,6 +10,7 @@ import com.gamerin.backend.domain.user.dto.response.RepresentativeTierResponse;
 
 public record MentoringProgramResponse(
     UUID id,
+    Long publicNo,
     UUID mentorId,
     String mentorNickName,
     String gameName,
@@ -26,6 +27,7 @@ public record MentoringProgramResponse(
     public static MentoringProgramResponse from(MentoringProgram program, boolean membershipBadge) {
         return new MentoringProgramResponse(
             program.getId(),
+            program.getPublicNo(),
             program.getMentor().getId(),
             program.getMentor().getUser().getNickname(),
             program.getGameName(),

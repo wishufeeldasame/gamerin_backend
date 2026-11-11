@@ -177,9 +177,19 @@ public class MentoringService {
     }
 
     @Transactional(readOnly = true)
+    public MentoringProgramDetailResponse getProgramDetailByPublicNo(Long publicNo) {
+        MentoringProgram program = mentoringProgramRepository.findByPublicNoAndDeletedAtIsNull(publicNo)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
+        return toProgramDetail(program);
+    }
+
     public MentoringProgramDetailResponse getProgramDetail(UUID id) {
         MentoringProgram program = mentoringProgramRepository.findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다."));
+        return toProgramDetail(program);
+    }
+
+    private MentoringProgramDetailResponse toProgramDetail(MentoringProgram program) {
 
         if (program.isAdminSuspended()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "프로그램을 찾을 수 없습니다.");
