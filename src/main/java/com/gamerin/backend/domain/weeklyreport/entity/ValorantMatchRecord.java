@@ -3,6 +3,10 @@ package com.gamerin.backend.domain.weeklyreport.entity;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
+import com.gamerin.backend.domain.valorant.model.MatchInsight;
 import com.gamerin.backend.domain.valorant.model.ValorantMatchDetail;
 import com.gamerin.backend.domain.valorant.model.ValorantMatchStats;
 
@@ -35,6 +39,8 @@ public class ValorantMatchRecord {
     @Column(nullable = false) private int bodyshots;
     @Column(nullable = false) private int legshots;
     @Column(nullable = false) private boolean won;
+    // V75 이전에 저장된 행은 null이다.
+    @JdbcTypeCode(SqlTypes.JSON) @Column(columnDefinition = "jsonb") private MatchInsight insight;
     @Column(name = "created_at", nullable = false) private OffsetDateTime createdAt;
 
     protected ValorantMatchRecord() {}
@@ -59,6 +65,7 @@ public class ValorantMatchRecord {
         record.bodyshots = stats.bodyshots();
         record.legshots = stats.legshots();
         record.won = stats.won();
+        record.insight = match.insight();
         record.createdAt = OffsetDateTime.now();
         return record;
     }
@@ -77,4 +84,5 @@ public class ValorantMatchRecord {
     public int getBodyshots() { return bodyshots; }
     public int getLegshots() { return legshots; }
     public boolean isWon() { return won; }
+    public MatchInsight getInsight() { return insight; }
 }

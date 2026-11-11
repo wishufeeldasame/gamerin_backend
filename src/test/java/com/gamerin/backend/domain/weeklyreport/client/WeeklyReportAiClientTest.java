@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamerin.backend.domain.weeklyreport.model.WeekStats;
 import com.gamerin.backend.domain.weeklyreport.model.WeeklyAnalysis;
+import com.gamerin.backend.domain.weeklyreport.model.WeeklyInsight;
 import com.gamerin.backend.domain.weeklyreport.model.WeeklyStats;
 import com.gamerin.backend.domain.weeklyreport.model.WeeklyReportCollectionIssue;
 import com.sun.net.httpserver.HttpExchange;
@@ -29,6 +30,9 @@ class WeeklyReportAiClientTest {
 
     private static final WeeklyStats STATS = new WeeklyStats(
             new WeekStats(12, 6, 50.0, 1.1, 24.6, 210, "골드 1", List.of(), List.of()), null, null);
+    private static final WeeklyInsight INSIGHT = new WeeklyInsight(new WeeklyInsight.Week(
+            new WeeklyInsight.Stats(12, 6, 300, 200, 180, 1.1, 210.0, 24.6, 12, null),
+            List.of(), List.of(), List.of(), null, null, List.of(), 0), null);
     private static final String VALID = "{\"headline\":\"제목\",\"summary\":\"요약입니다.\",\"focus\":\"점검해 보세요.\"}";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -56,16 +60,17 @@ class WeeklyReportAiClientTest {
                 new WeeklyReportCollectionIssue("private-match-id", Instant.parse("2026-11-02T15:27:00Z"),
                         "Lotus", 404, "diagnostic-only-error")));
 
-        assertThat(client("factchat", "key", "model").analyze(stats)).isPresent();
+        assertThat(client("factchat", "key", "model").analyze(stats, null)).isPresent();
 
         assertThat(requests.get(0).path("messages").get(1).path("content").asText())
-                .doesNotContain("private-match-id", "2026-11-02", "404", "diagnostic-only-error");
+                .doesNotContain("private-match-id", "2026-11-02", "404", "diagnostic-only-error")
+                .contains("\"collectionIssues\":1");
     }
 
     @Test
     void missingKeyOrModelSkipsRequest() {
-        assertThat(client("factchat", "", "model").analyze(STATS)).isEmpty();
-        assertThat(client("factchat", "key", " ").analyze(STATS)).isEmpty();
+        assertThat(client("factchat", "", "model").analyze(STATS, INSIGHT)).isEmpty();
+        assertThat(client("factchat", "key", " ").analyze(STATS, INSIGHT)).isEmpty();
         assertThat(client("factchat", "", "model").model()).isNull();
         assertThat(requests).isEmpty();
     }
@@ -76,28 +81,35 @@ class WeeklyReportAiClientTest {
 
         WeeklyReportAiClient client = client("nvidia", "key", "model");
 
-        assertThat(client.analyze(STATS)).contains(new WeeklyAnalysis("제목", "요약입니다.", "점검해 보세요."));
+        assertThat(client.analyze(STATS, INSIGHT)).contains(new WeeklyAnalysis("제목", "요약입니다.", "점검해 보세요."));
         assertThat(client.model()).isEqualTo("nvidia-model");
         assertThat(authorizations).containsExactly("Bearer nvidia-key");
         JsonNode request = requests.get(0);
         assertThat(request.path("model").asText()).isEqualTo("nvidia-model");
         assertThat(request.path("messages").path(0).path("role").asText()).isEqualTo("system");
-        assertThat(request.path("messages").path(1).path("content").asText())
-                .isEqualTo(objectMapper.valueToTree(STATS).toString());
+        JsonNode input = readTree(request.path("messages").path(1).path("content").asText());
+        assertThat(input.path("current").path("matches").asInt()).isEqualTo(12);
+        assertThat(input.path("insight").path("current").path("overall").path("insightMatches").asInt()).isEqualTo(12);
+        assertThat(input.path("collectionIssues").asInt()).isZero();
+        // null 필드는 빠지고 식별정보 필드는 없다.
+        assertThat(input.has("previous")).isFalse();
+        assertThat(input.toString()).doesNotContain("puuid", "matchId", "startedAt", "nickname");
+        assertThat(request.path("max_tokens").asInt()).isEqualTo(32000);
+        assertThat(request.path("reasoning_effort").asText()).isEqualTo("medium");
     }
 
     @Test
     void retriesOnceAfterInvalidResponseThenGivesUp() {
         responses.add(completion(200, "분석 결과입니다."));
         responses.add(completion(200, VALID));
-        assertThat(client("factchat", "key", "model").analyze(STATS)).isPresent();
+        assertThat(client("factchat", "key", "model").analyze(STATS, INSIGHT)).isPresent();
         assertThat(requests).hasSize(2);
 
         requests.clear();
         responses.add(completion(500, ""));
         responses.add(completion(200, "{\"headline\":\"제목\"}"));
         responses.add(completion(200, VALID));
-        assertThat(client("factchat", "key", "model").analyze(STATS)).isEmpty();
+        assertThat(client("factchat", "key", "model").analyze(STATS, INSIGHT)).isEmpty();
         assertThat(requests).hasSize(2);
     }
 
@@ -110,8 +122,22 @@ class WeeklyReportAiClientTest {
         assertThat(WeeklyReportAiClient.parse(
                 "{\"headline\":1,\"summary\":\"a\",\"focus\":\"b\"}", objectMapper)).isEmpty();
         assertThat(WeeklyReportAiClient.parse(
-                "{\"headline\":\"" + "가".repeat(61) + "\",\"summary\":\"a\",\"focus\":\"b\"}", objectMapper)).isEmpty();
+                "{\"headline\":\"" + "가".repeat(81) + "\",\"summary\":\"a\",\"focus\":\"b\"}", objectMapper)).isEmpty();
+        assertThat(WeeklyReportAiClient.parse(
+                "{\"headline\":\"제목\",\"summary\":\"" + "가".repeat(1100) + "\",\"focus\":\"b\"}", objectMapper))
+                .isPresent();
+        assertThat(WeeklyReportAiClient.parse(
+                "{\"headline\":\"제목\",\"summary\":\"첫 문장입니다.\\n\\n둘째 문장입니다.\",\"focus\":\"b\"}",
+                objectMapper)).map(WeeklyAnalysis::summary).contains("첫 문장입니다. 둘째 문장입니다.");
         assertThat(WeeklyReportAiClient.parse("설명 " + VALID + " 끝", objectMapper)).isPresent();
+    }
+
+    private JsonNode readTree(String json) {
+        try {
+            return objectMapper.readTree(json);
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private WeeklyReportAiClient client(String provider, String key, String model) {
@@ -119,7 +145,7 @@ class WeeklyReportAiClientTest {
         return new WeeklyReportAiClient(provider,
                 url, key.isBlank() ? key : "factchat-" + key, model.isBlank() ? model : "factchat-" + model,
                 url, key.isBlank() ? key : "nvidia-" + key, model.isBlank() ? model : "nvidia-" + model,
-                Duration.ofSeconds(1), Duration.ofSeconds(2), objectMapper);
+                Duration.ofSeconds(1), Duration.ofSeconds(2), "medium", objectMapper);
     }
 
     private String[] completion(int status, String content) {

@@ -34,7 +34,9 @@ app:
       # factchat(학교 Mindlogic 게이트웨이) 또는 nvidia(NVIDIA Build). 둘 다 OpenAI Chat Completions 호환이다.
       provider: ${WEEKLY_REPORT_AI_PROVIDER:factchat}
       connect-timeout: ${WEEKLY_REPORT_AI_CONNECT_TIMEOUT:3s}
-      read-timeout: ${WEEKLY_REPORT_AI_READ_TIMEOUT:60s}
+      read-timeout: ${WEEKLY_REPORT_AI_READ_TIMEOUT:300s}
+      # OpenAI 호환 reasoning_effort(low·medium·high 등). 비우면 요청에 넣지 않는다.
+      reasoning-effort: ${WEEKLY_REPORT_AI_REASONING_EFFORT:}
       factchat:
         url: ${FACTCHAT_API_URL:https://factchat-cloud.mindlogic.ai/v1/gateway/chat/completions/}
         key: ${FACTCHAT_SECRET_KEY:}

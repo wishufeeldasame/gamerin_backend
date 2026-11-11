@@ -83,6 +83,6 @@ class WeeklyStatsCalculatorTest {
     static ValorantMatchRecord match(String id, String startedAt, String map, String agent, Integer tierId,
             String tierLabel, int kills, int deaths, boolean won) {
         return ValorantMatchRecord.of("puuid", new ValorantMatchDetail(id, Instant.parse(startedAt), map, agent,
-                tierId, tierLabel, new ValorantMatchStats(kills, deaths, 5, 4800, 24, 8, 20, 2, won)));
+                tierId, tierLabel, new ValorantMatchStats(kills, deaths, 5, 4800, 24, 8, 20, 2, won), null));
     }
 }

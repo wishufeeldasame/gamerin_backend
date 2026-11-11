@@ -242,7 +242,7 @@ public class HenrikValorantClient {
         }
     }
 
-    private ValorantMatchDetail toMatchDetail(JsonNode match, String puuid, Instant startedAt) {
+    ValorantMatchDetail toMatchDetail(JsonNode match, String puuid, Instant startedAt) {
         String matchId = trimToNull(match.path("metadata").path("match_id").asText(null));
         ValorantMatchStats stats = toMatchStats(match, puuid);
         if (matchId == null || stats == null) {
@@ -257,7 +257,8 @@ public class HenrikValorantClient {
                 trimToNull(player.path("agent").path("name").asText(null)),
                 tier.path("id").isInt() ? tier.path("id").asInt() : null,
                 trimToNull(tier.path("name").asText(null)),
-                stats
+                stats,
+                MatchInsightParser.parse(match, puuid)
         );
     }
 
