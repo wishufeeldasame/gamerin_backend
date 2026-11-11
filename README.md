@@ -15,7 +15,7 @@ GamerIN 서비스의 백엔드 API 서버다. 피드·게시물, 팔로우·북�
 | 구분 | 내용 |
 | --- | --- |
 | 언어/런타임 | Java 21 (Gradle toolchain) |
-| 프레임워크 | Spring Boot 3.5.12 (Web MVC, Security, Data JPA, Validation, Mail, OAuth2 Client) |
+| 프레임워크 | Spring Boot 3.5.16 (Web MVC, Security, Data JPA, Validation, Mail, OAuth2 Client) |
 | 인증 | JWT (jjwt 0.12.5), Google OAuth2 |
 | DB | PostgreSQL (런타임), Flyway 마이그레이션 |
 | API 문서 | springdoc-openapi 2.8.17 (Swagger UI) |
