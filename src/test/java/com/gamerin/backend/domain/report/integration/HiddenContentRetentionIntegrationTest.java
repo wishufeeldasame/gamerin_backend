@@ -19,7 +19,10 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.gamerin.backend.domain.post.entity.Post;
 import com.gamerin.backend.domain.post.entity.PostComment;
+import com.gamerin.backend.domain.post.entity.PostMedia;
+import com.gamerin.backend.domain.post.entity.PostMediaType;
 import com.gamerin.backend.domain.post.repository.PostCommentRepository;
+import com.gamerin.backend.domain.post.repository.PostMediaRepository;
 import com.gamerin.backend.domain.post.repository.PostRepository;
 import com.gamerin.backend.domain.post.service.PostCleanupService;
 import com.gamerin.backend.domain.report.dto.request.ReportCreateRequest;
@@ -48,6 +51,8 @@ class HiddenContentRetentionIntegrationTest {
     private PostRepository postRepository;
     @Autowired
     private PostCommentRepository postCommentRepository;
+    @Autowired
+    private PostMediaRepository postMediaRepository;
     @Autowired
     private ReportCountRepository reportCountRepository;
     @Autowired
@@ -109,6 +114,21 @@ class HiddenContentRetentionIntegrationTest {
 
         assertThat(postRepository.findById(post.getId())).isEmpty();
         assertThat(postCommentRepository.findById(comment.getId())).isEmpty();
+    }
+
+    // 미디어 엔티티를 같은 영속성 컨텍스트에 올린 채 글을 지우면 flush 때 TransientObjectException으로 실패하던 회귀 방지
+    @Test
+    void userDeletedPostWithMediaIsPurgedWithMedia() {
+        User author = saveUser("author");
+        Post post = postRepository.saveAndFlush(Post.create(author, "미디어 글"));
+        PostMedia media = postMediaRepository.saveAndFlush(PostMedia.create(
+                post, PostMediaType.IMAGE, "/uploads/post-media/missing.jpg", null, 0));
+        setDeletedAt("posts", post.getId(), OffsetDateTime.now().minusDays(2));
+
+        postCleanupService.purgeExpiredSoftDeletedPosts();
+
+        assertThat(postRepository.findById(post.getId())).isEmpty();
+        assertThat(postMediaRepository.findById(media.getId())).isEmpty();
     }
 
     @Test

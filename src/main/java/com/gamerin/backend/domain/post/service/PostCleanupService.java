@@ -127,6 +127,8 @@ public class PostCleanupService {
             reportCountRepository.deleteByTargets(ReportTargetType.COMMENT, commentIds);
             postCommentRepository.deleteAllByIdInBatch(commentIds);
         }
+        // 조회한 미디어가 managed로 남아 삭제된 글을 참조하면 flush에서 TransientObjectException이 난다.
+        postMediaRepository.deleteAll(mediaList);
         postRepository.delete(post);
 
         List<String> mediaUrls = new ArrayList<>();
